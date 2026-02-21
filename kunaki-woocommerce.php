@@ -101,7 +101,10 @@ function kunaki_wc_decrypt_password( $value ) {
 
 	$decrypted = openssl_decrypt( $encrypted, 'aes-256-cbc', $key, OPENSSL_RAW_DATA, $iv );
 	if ( false === $decrypted ) {
-		return $value;
+		if ( function_exists( 'wc_get_logger' ) ) {
+			wc_get_logger()->error( 'Failed to decrypt Kunaki password. Auth salts may have changed.', array( 'source' => 'kunaki-woocommerce' ) );
+		}
+		return '';
 	}
 	return $decrypted;
 }
@@ -131,6 +134,12 @@ add_action( 'plugins_loaded', function () {
 	require_once KUNAKI_WC_PLUGIN_DIR . 'includes/class-kunaki-woocommerce.php';
 	Kunaki_WooCommerce::instance();
 }, 10 );
+
+// Reschedule cron when sync interval changes.
+add_action( 'update_option_kunaki_wc_sync_interval', function () {
+	wp_clear_scheduled_hook( 'kunaki_wc_sync_order_status' );
+	wp_schedule_event( time(), 'kunaki_every_15_minutes', 'kunaki_wc_sync_order_status' );
+} );
 
 // Activation: schedule cron.
 register_activation_hook( __FILE__, function () {
