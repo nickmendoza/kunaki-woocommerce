@@ -53,7 +53,7 @@ Kunaki supports 48 countries. The plugin converts WooCommerce's ISO country code
 ## Plugin Structure
 
 ```
-kunaki-woocommerce.php              → Plugin bootstrap, constants, cron scheduling
+kunaki-woocommerce.php              → Plugin bootstrap, constants, cron scheduling, password encryption
 includes/
   class-kunaki-woocommerce.php      → Orchestrator, hooks all components together
   class-kunaki-api-client.php       → XML API client (shipping, orders, status)
