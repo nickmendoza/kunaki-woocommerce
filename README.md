@@ -18,7 +18,7 @@ A WooCommerce plugin that integrates with the [Kunaki XML API](https://kunaki.co
 
 ## Setup
 
-1. Upload the `kunaki-woocommerce` folder to `wp-content/plugins/`
+1. Upload the `disc-fulfillment-for-woocommerce` folder to `wp-content/plugins/`
 2. Activate the plugin in WordPress
 3. Go to **WooCommerce > Settings > Kunaki**
 4. Enter your Kunaki publisher email and password
@@ -76,5 +76,4 @@ uninstall.php                       → Cleanup on plugin deletion
 
 ## License
 
-Proprietary. All rights reserved. Copyright MobileCodeMedia.
-# disc-fulfillment-for-woocommerce
+Proprietary. All rights reserved. Copyright Mobile Code Media.
