@@ -33,34 +33,27 @@ class Kunaki_Order_Fulfillment {
 			return;
 		}
 
-		// Acquire an atomic lock to prevent concurrent submissions for the same order.
+		// Acquire an atomic lock to prevent concurrent submissions.
+		// Uses a single row in wp_options with the expiry timestamp as the value.
 		global $wpdb;
-		$lock_key     = 'kunaki_submit_lock_' . $order_id;
-		$lock_timeout = time() + 5 * MINUTE_IN_SECONDS;
+		$lock_option = '_kunaki_lock_' . $order_id;
+		$lock_expiry = time() + 5 * MINUTE_IN_SECONDS;
 
-		// Delete any stale/expired lock before attempting to acquire.
-		$existing_timeout = $wpdb->get_var( $wpdb->prepare(
-			"SELECT option_value FROM {$wpdb->options} WHERE option_name = %s",
-			'_transient_timeout_' . $lock_key
-		) );
-		if ( $existing_timeout && (int) $existing_timeout < time() ) {
-			$wpdb->query( $wpdb->prepare(
-				"DELETE FROM {$wpdb->options} WHERE option_name IN (%s, %s)",
-				'_transient_' . $lock_key,
-				'_transient_timeout_' . $lock_key
-			) );
-		}
-
-		// INSERT IGNORE is atomic — only one process can create the row.
-		$inserted = $wpdb->query( $wpdb->prepare(
-			"INSERT IGNORE INTO {$wpdb->options} (option_name, option_value, autoload) VALUES (%s, %s, 'no'), (%s, %s, 'no')",
-			'_transient_' . $lock_key,
-			'locked',
-			'_transient_timeout_' . $lock_key,
-			$lock_timeout
+		// Atomically delete any expired lock (no SELECT-then-DELETE race).
+		$wpdb->query( $wpdb->prepare(
+			"DELETE FROM {$wpdb->options} WHERE option_name = %s AND option_value < %s",
+			$lock_option,
+			(string) time()
 		) );
 
-		if ( ! $inserted ) {
+		// Atomic acquire — INSERT IGNORE on a single row, only one process wins.
+		$acquired = $wpdb->query( $wpdb->prepare(
+			"INSERT IGNORE INTO {$wpdb->options} (option_name, option_value, autoload) VALUES (%s, %s, 'no')",
+			$lock_option,
+			(string) $lock_expiry
+		) );
+
+		if ( ! $acquired ) {
 			Kunaki_Logger::debug( "Order #{$order_id}: Could not acquire lock, another process is submitting." );
 			return;
 		}
@@ -68,7 +61,7 @@ class Kunaki_Order_Fulfillment {
 		// Re-check after acquiring lock in case another process submitted before we locked.
 		$order = wc_get_order( $order_id );
 		if ( ! $order || 'yes' === $order->get_meta( self::META_KUNAKI_SUBMITTED ) ) {
-			delete_transient( $lock_key );
+			$wpdb->delete( $wpdb->options, array( 'option_name' => $lock_option ) );
 			return;
 		}
 
@@ -95,7 +88,7 @@ class Kunaki_Order_Fulfillment {
 
 		if ( empty( $kunaki_products ) ) {
 			Kunaki_Logger::debug( "Order #{$order_id}: No Kunaki products found, skipping." );
-			delete_transient( $lock_key );
+			$wpdb->delete( $wpdb->options, array( 'option_name' => $lock_option ) );
 			return;
 		}
 
@@ -108,7 +101,7 @@ class Kunaki_Order_Fulfillment {
 				__( 'Kunaki fulfillment failed: No matching Kunaki shipping method found on this order.', 'kunaki-woocommerce' ),
 				false
 			);
-			delete_transient( $lock_key );
+			$wpdb->delete( $wpdb->options, array( 'option_name' => $lock_option ) );
 			return;
 		}
 
@@ -138,7 +131,7 @@ class Kunaki_Order_Fulfillment {
 		$result = $api->submit_order( $address, $shipping_description, array_values( $kunaki_products ) );
 
 		if ( is_wp_error( $result ) ) {
-			delete_transient( $lock_key );
+			$wpdb->delete( $wpdb->options, array( 'option_name' => $lock_option ) );
 			Kunaki_Logger::error( "Order #{$order_id}: Kunaki submission failed: " . $result->get_error_message() );
 			$order->add_order_note(
 				sprintf(
@@ -157,7 +150,7 @@ class Kunaki_Order_Fulfillment {
 		$order->update_meta_data( self::META_KUNAKI_SHIPPING_DESC, $shipping_description );
 		$order->save();
 
-		delete_transient( $lock_key );
+		$wpdb->delete( $wpdb->options, array( 'option_name' => $lock_option ) );
 
 		$order->add_order_note(
 			sprintf(
