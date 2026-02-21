@@ -36,20 +36,6 @@ A WooCommerce plugin that integrates with the [Kunaki XML API](https://kunaki.co
 | Sync Interval | How often to poll Kunaki for status updates (default: 15 min) |
 | Debug Logging | Log API requests/responses to WooCommerce > Status > Logs |
 
-## Open Questions
-
-### Shipping strategy?
-
-Currently the plugin fetches live rates from Kunaki's ShippingOptions API and displays them at checkout. The customer selects a Kunaki shipping method, and that exact description is passed to the Order API. For mixed carts (Kunaki + non-Kunaki products), a separate shipping method must be configured for the non-Kunaki items.
-
-### Multi-product bundling?
-
-Multiple Kunaki products in a single order are submitted together in one Kunaki order request. Quantities are aggregated per Kunaki Product ID. Kunaki handles the bundling and ships them together. Variable/bundle WooCommerce products are not yet supported — the Kunaki Product ID is set on the parent product only.
-
-### International handling?
-
-Kunaki supports 48 countries. The plugin converts WooCommerce's ISO country codes to full country names (which Kunaki requires) using WooCommerce's built-in country list. For US/Canada orders, the two-letter state/province code is passed. For other countries, the state field is left empty per Kunaki's spec.
-
 ## Plugin Structure
 
 ```
