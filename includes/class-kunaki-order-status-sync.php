@@ -32,7 +32,7 @@ class Kunaki_Order_Status_Sync {
 		foreach ( $orders as $order ) {
 			try {
 				$this->sync_single_order( $order, $api );
-			} catch ( \Exception $e ) {
+			} catch ( \Throwable $e ) {
 				Kunaki_Logger::error(
 					'Order #' . $order->get_id() . ': Sync failed with exception: ' . $e->getMessage()
 				);
@@ -75,6 +75,10 @@ class Kunaki_Order_Status_Sync {
 		}
 
 		$order->update_meta_data( '_kunaki_order_status', $kunaki_status );
+
+		// Persist status meta before sending notifications — prevents duplicate
+		// customer emails if the later save() fails and the cron retries.
+		$order->save();
 
 		Kunaki_Logger::info( "Order #{$order_id}: Kunaki status changed from '{$previous_status}' to '{$kunaki_status}'." );
 
