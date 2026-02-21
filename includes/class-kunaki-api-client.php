@@ -184,8 +184,9 @@ class Kunaki_API_Client {
 		);
 		$body = trim( $body );
 
-		libxml_use_internal_errors( true );
-		$parsed = simplexml_load_string( $body );
+		$prev_libxml = libxml_use_internal_errors( true );
+		$parsed      = simplexml_load_string( $body );
+		libxml_use_internal_errors( $prev_libxml );
 
 		if ( false === $parsed ) {
 			Kunaki_Logger::error( 'XML parse error for body: ' . $body );

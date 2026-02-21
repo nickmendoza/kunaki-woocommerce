@@ -33,16 +33,32 @@ class Kunaki_Order_Fulfillment {
 			return;
 		}
 
-		// Acquire a lock to prevent concurrent submissions for the same order.
-		$lock_key = 'kunaki_submit_lock_' . $order_id;
-		if ( false === set_transient( $lock_key, true, 5 * MINUTE_IN_SECONDS ) ) {
+		// Acquire an atomic lock to prevent concurrent submissions for the same order.
+		global $wpdb;
+		$lock_key    = 'kunaki_submit_lock_' . $order_id;
+		$lock_value  = wp_generate_uuid4();
+		$lock_expiry = gmdate( 'Y-m-d H:i:s', time() + 5 * MINUTE_IN_SECONDS );
+
+		// INSERT IGNORE is atomic — only one process can create the row.
+		$inserted = $wpdb->query( $wpdb->prepare(
+			"INSERT IGNORE INTO {$wpdb->options} (option_name, option_value, autoload) VALUES (%s, %s, 'no')",
+			'_transient_' . $lock_key,
+			$lock_value
+		) );
+
+		if ( ! $inserted ) {
+			Kunaki_Logger::debug( "Order #{$order_id}: Could not acquire lock, another process is submitting." );
 			return;
 		}
 
-		// Re-check after acquiring lock in case another process submitted while we waited.
+		// Schedule lock expiry.
+		set_transient( $lock_key . '_timeout', $lock_expiry, 5 * MINUTE_IN_SECONDS );
+
+		// Re-check after acquiring lock in case another process submitted before we locked.
 		$order = wc_get_order( $order_id );
 		if ( ! $order || 'yes' === $order->get_meta( self::META_KUNAKI_SUBMITTED ) ) {
-			delete_transient( $lock_key );
+			delete_option( '_transient_' . $lock_key );
+			delete_transient( $lock_key . '_timeout' );
 			return;
 		}
 
@@ -69,6 +85,8 @@ class Kunaki_Order_Fulfillment {
 
 		if ( empty( $kunaki_products ) ) {
 			Kunaki_Logger::debug( "Order #{$order_id}: No Kunaki products found, skipping." );
+			delete_option( '_transient_' . $lock_key );
+			delete_transient( $lock_key . '_timeout' );
 			return;
 		}
 
@@ -81,6 +99,8 @@ class Kunaki_Order_Fulfillment {
 				__( 'Kunaki fulfillment failed: No matching Kunaki shipping method found on this order.', 'kunaki-woocommerce' ),
 				false
 			);
+			delete_option( '_transient_' . $lock_key );
+			delete_transient( $lock_key . '_timeout' );
 			return;
 		}
 
@@ -89,13 +109,18 @@ class Kunaki_Order_Fulfillment {
 		$country_code = $order->get_shipping_country();
 		$country_name = isset( $countries[ $country_code ] ) ? $countries[ $country_code ] : $country_code;
 
+		// Kunaki only accepts state/province for US and CA.
+		$state = in_array( $country_code, array( 'US', 'CA' ), true )
+			? $order->get_shipping_state()
+			: '';
+
 		$address = array(
 			'name'      => trim( $order->get_shipping_first_name() . ' ' . $order->get_shipping_last_name() ),
 			'company'   => $order->get_shipping_company(),
 			'address_1' => $order->get_shipping_address_1(),
 			'address_2' => $order->get_shipping_address_2(),
 			'city'      => $order->get_shipping_city(),
-			'state'     => $order->get_shipping_state(),
+			'state'     => $state,
 			'postcode'  => $order->get_shipping_postcode(),
 			'country'   => $country_name,
 		);
@@ -105,7 +130,8 @@ class Kunaki_Order_Fulfillment {
 		$result = $api->submit_order( $address, $shipping_description, array_values( $kunaki_products ) );
 
 		if ( is_wp_error( $result ) ) {
-			delete_transient( $lock_key );
+			delete_option( '_transient_' . $lock_key );
+			delete_transient( $lock_key . '_timeout' );
 			Kunaki_Logger::error( "Order #{$order_id}: Kunaki submission failed: " . $result->get_error_message() );
 			$order->add_order_note(
 				sprintf(
@@ -124,7 +150,8 @@ class Kunaki_Order_Fulfillment {
 		$order->update_meta_data( self::META_KUNAKI_SHIPPING_DESC, $shipping_description );
 		$order->save();
 
-		delete_transient( $lock_key );
+		delete_option( '_transient_' . $lock_key );
+		delete_transient( $lock_key . '_timeout' );
 
 		$order->add_order_note(
 			sprintf(
