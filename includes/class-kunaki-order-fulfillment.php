@@ -165,11 +165,19 @@ class Kunaki_Order_Fulfillment {
 		try {
 			$order->save();
 		} catch ( \Exception $e ) {
-			// Order exists at Kunaki but meta failed to persist — keep the lock
-			// so the TTL prevents immediate resubmission while an admin investigates.
+			// Order exists at Kunaki but meta failed to persist — mark submitted
+			// directly so the hook never resubmits a duplicate.
+			$order->update_meta_data( self::META_KUNAKI_ORDER_ID, $result );
+			$order->update_meta_data( self::META_KUNAKI_SUBMITTED, 'yes' );
+			try {
+				$order->save_meta_data();
+			} catch ( \Exception $_ ) { // phpcs:ignore Generic.CodeAnalysis.EmptyStatement.DetectedCatch
+				// Last resort: if even meta-only save fails, the lock TTL still
+				// prevents resubmission for 5 minutes while an admin investigates.
+			}
 			Kunaki_Logger::error(
 				"Order #{$order_id}: CRITICAL — Kunaki order {$result} was created but order save failed: "
-				. $e->getMessage() . '. Manual reconciliation required. Lock retained until expiry.'
+				. $e->getMessage() . '. Submitted flag written directly. Manual reconciliation required.'
 			);
 			return;
 		}
