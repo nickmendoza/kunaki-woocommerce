@@ -30,7 +30,13 @@ class Kunaki_Order_Status_Sync {
 		$api = new Kunaki_API_Client();
 
 		foreach ( $orders as $order ) {
-			$this->sync_single_order( $order, $api );
+			try {
+				$this->sync_single_order( $order, $api );
+			} catch ( \Exception $e ) {
+				Kunaki_Logger::error(
+					'Order #' . $order->get_id() . ': Sync failed with exception: ' . $e->getMessage()
+				);
+			}
 		}
 
 		Kunaki_Logger::info( 'Kunaki order status sync complete. Checked ' . count( $orders ) . ' orders.' );
@@ -125,10 +131,19 @@ class Kunaki_Order_Status_Sync {
 	/**
 	 * Check if all line items in the order are Kunaki products.
 	 *
+	 * Uses a snapshot stored at fulfillment time so that deleting or
+	 * modifying products after order placement doesn't break auto-complete.
+	 *
 	 * @param WC_Order $order WooCommerce order.
 	 * @return bool
 	 */
 	private function all_items_are_kunaki( $order ) {
+		$stored = $order->get_meta( '_kunaki_all_items' );
+		if ( '' !== $stored ) {
+			return 'yes' === $stored;
+		}
+
+		// Fallback for orders submitted before the snapshot was stored.
 		foreach ( $order->get_items() as $item ) {
 			if ( ! Kunaki_Product_Meta::is_kunaki_product( $item->get_product_id() ) ) {
 				return false;

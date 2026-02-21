@@ -177,11 +177,10 @@ class Kunaki_API_Client {
 			);
 		}
 
-		// Kunaki sometimes wraps responses in HTML.
-		$body = strip_tags(
-			$body,
-			'<Response><ErrorCode><ErrorText><Option><Description><DeliveryTime><Price><OrderId><OrderStatus><TrackingType><TrackingId>'
-		);
+		// Kunaki sometimes wraps responses in HTML — extract the XML Response block.
+		if ( preg_match( '/<Response\b[^>]*>.*<\/Response>/s', $body, $matches ) ) {
+			$body = $matches[0];
+		}
 		$body = trim( $body );
 
 		$prev_libxml = libxml_use_internal_errors( true );
