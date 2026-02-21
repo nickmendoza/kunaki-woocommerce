@@ -61,6 +61,51 @@ if ( ! function_exists( 'esc_xml' ) ) {
 	}
 }
 
+// Register password encrypt/decrypt filters early so they're active in all contexts.
+// Cannot call Kunaki_Settings directly here because it extends WC_Settings_Page
+// which isn't loaded yet. Use inline closures that delegate to the class once available.
+add_filter( 'pre_update_option_kunaki_wc_password', 'kunaki_wc_encrypt_password', 10, 1 );
+add_filter( 'option_kunaki_wc_password', 'kunaki_wc_decrypt_password', 10, 1 );
+
+function kunaki_wc_encrypt_password( $value ) {
+	if ( '' === $value || ! function_exists( 'openssl_encrypt' ) ) {
+		return $value;
+	}
+	$key = hash( 'sha256', wp_salt( 'auth' ), true );
+	$iv  = openssl_random_pseudo_bytes( openssl_cipher_iv_length( 'aes-256-cbc' ) );
+
+	$encrypted = openssl_encrypt( $value, 'aes-256-cbc', $key, OPENSSL_RAW_DATA, $iv );
+	if ( false === $encrypted ) {
+		return $value;
+	}
+	// phpcs:ignore WordPress.PHP.DiscouragedPHPFunctions.obfuscation_base64_encode
+	return base64_encode( $iv . $encrypted );
+}
+
+function kunaki_wc_decrypt_password( $value ) {
+	if ( '' === $value || ! function_exists( 'openssl_decrypt' ) ) {
+		return $value;
+	}
+	// phpcs:ignore WordPress.PHP.DiscouragedPHPFunctions.obfuscation_base64_decode
+	$data = base64_decode( $value, true );
+	if ( false === $data ) {
+		return $value;
+	}
+	$iv_length = openssl_cipher_iv_length( 'aes-256-cbc' );
+	if ( strlen( $data ) <= $iv_length ) {
+		return $value;
+	}
+	$iv        = substr( $data, 0, $iv_length );
+	$encrypted = substr( $data, $iv_length );
+	$key       = hash( 'sha256', wp_salt( 'auth' ), true );
+
+	$decrypted = openssl_decrypt( $encrypted, 'aes-256-cbc', $key, OPENSSL_RAW_DATA, $iv );
+	if ( false === $decrypted ) {
+		return $value;
+	}
+	return $decrypted;
+}
+
 // Register custom cron schedule early so it exists during activation.
 add_filter( 'cron_schedules', function ( $schedules ) {
 	$interval = absint( get_option( 'kunaki_wc_sync_interval', 15 ) );
