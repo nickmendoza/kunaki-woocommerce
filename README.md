@@ -76,4 +76,4 @@ uninstall.php                       → Cleanup on plugin deletion
 
 ## License
 
-Proprietary. All rights reserved. Copyright Mobile Code Media.
+Proprietary. All rights reserved. Copyright &copy; 2026 Mobile Code Media.
