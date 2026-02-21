@@ -67,12 +67,14 @@ class Kunaki_Order_Fulfillment {
 
 		// Collect Kunaki products from the order.
 		$kunaki_products = array();
+		$has_non_kunaki  = false;
 
 		foreach ( $order->get_items() as $item ) {
 			$product_id = $item->get_product_id();
 			$kunaki_id  = Kunaki_Product_Meta::get_kunaki_product_id( $product_id );
 
 			if ( empty( $kunaki_id ) ) {
+				$has_non_kunaki = true;
 				continue;
 			}
 
@@ -144,11 +146,33 @@ class Kunaki_Order_Fulfillment {
 			return;
 		}
 
+		if ( '' === $result ) {
+			$wpdb->delete( $wpdb->options, array( 'option_name' => $lock_option ) );
+			Kunaki_Logger::error( "Order #{$order_id}: Kunaki returned success but no Order ID." );
+			$order->add_order_note(
+				__( 'Kunaki fulfillment failed: API returned success but no Order ID.', 'kunaki-woocommerce' ),
+				false
+			);
+			return;
+		}
+
 		// Store Kunaki order ID and mark as submitted.
 		$order->update_meta_data( self::META_KUNAKI_ORDER_ID, $result );
 		$order->update_meta_data( self::META_KUNAKI_SUBMITTED, 'yes' );
 		$order->update_meta_data( self::META_KUNAKI_SHIPPING_DESC, $shipping_description );
-		$order->save();
+		$order->update_meta_data( '_kunaki_all_items', $has_non_kunaki ? 'no' : 'yes' );
+
+		try {
+			$order->save();
+		} catch ( \Exception $e ) {
+			// Order exists at Kunaki but meta failed to persist — keep the lock
+			// so the TTL prevents immediate resubmission while an admin investigates.
+			Kunaki_Logger::error(
+				"Order #{$order_id}: CRITICAL — Kunaki order {$result} was created but order save failed: "
+				. $e->getMessage() . '. Manual reconciliation required. Lock retained until expiry.'
+			);
+			return;
+		}
 
 		$wpdb->delete( $wpdb->options, array( 'option_name' => $lock_option ) );
 
