@@ -70,9 +70,13 @@ class WC_Shipping_Kunaki extends WC_Shipping_Method {
 			return;
 		}
 
-		$country     = $this->get_kunaki_country_name( $package['destination']['country'] );
-		$state       = $package['destination']['state'];
-		$postal_code = $package['destination']['postcode'];
+		$country_code = $package['destination']['country'];
+		$country      = $this->get_kunaki_country_name( $country_code );
+		// Kunaki only accepts state/province for US and CA.
+		$state        = in_array( $country_code, array( 'US', 'CA' ), true )
+			? $package['destination']['state']
+			: '';
+		$postal_code  = $package['destination']['postcode'];
 
 		if ( empty( $country ) || empty( $postal_code ) ) {
 			return;
