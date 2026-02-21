@@ -1,0 +1,28 @@
+.kunaki-product-options {
+	border-top: 1px solid #eee;
+}
+
+.kunaki-product-preview img {
+	border: 1px solid #ddd;
+	border-radius: 4px;
+	padding: 2px;
+	background: #fff;
+}
+
+.kunaki-order-info {
+	margin-top: 12px;
+	padding: 12px;
+	background: #f8f9fa;
+	border: 1px solid #e2e4e7;
+	border-radius: 4px;
+}
+
+.kunaki-order-info h3 {
+	margin: 0 0 8px;
+	font-size: 13px;
+}
+
+.kunaki-order-info p {
+	margin: 4px 0;
+	font-size: 13px;
+}
