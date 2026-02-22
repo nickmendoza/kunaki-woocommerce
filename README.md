@@ -20,11 +20,17 @@ A WooCommerce plugin that integrates with the [Kunaki XML API](https://kunaki.co
 
 1. Download the ZIP from GitHub and upload it via **Plugins > Add New > Upload Plugin** in WordPress
 2. Activate the plugin in WordPress
-3. Go to **WooCommerce > Settings > Kunaki**
-4. Enter your Kunaki publisher email and password
-5. Set mode to **Test** for development or **Live** for production
-6. Go to **WooCommerce > Settings > Shipping > Shipping Zones** and add "Kunaki Shipping" to your zones
-7. Edit any WooCommerce product and enter its 10-character Kunaki Product ID in the General tab
+3. Go to **WooCommerce > Settings > Kunaki** and enter your Kunaki publisher email and password. Set mode to **Test** for development or **Live** for production.
+
+![Kunaki API Settings](assets/screenshots/settings.png)
+
+4. Go to **WooCommerce > Settings > Shipping > Shipping Zones**, create a zone, and add "Kunaki Shipping" as a shipping method.
+
+![Shipping Zone Setup](assets/screenshots/shipping.png)
+
+5. Edit any WooCommerce product and enter its Kunaki Product ID in the General tab.
+
+![Product Kunaki ID](assets/screenshots/simple-product.png)
 
 ## Settings
 
