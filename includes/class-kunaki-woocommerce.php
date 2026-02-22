@@ -20,7 +20,6 @@ class Kunaki_WooCommerce {
 	private function includes() {
 		require_once KUNAKI_WC_PLUGIN_DIR . 'includes/class-kunaki-logger.php';
 		require_once KUNAKI_WC_PLUGIN_DIR . 'includes/class-kunaki-api-client.php';
-		require_once KUNAKI_WC_PLUGIN_DIR . 'includes/class-kunaki-settings.php';
 		require_once KUNAKI_WC_PLUGIN_DIR . 'includes/class-kunaki-product-meta.php';
 		require_once KUNAKI_WC_PLUGIN_DIR . 'includes/class-kunaki-order-fulfillment.php';
 		require_once KUNAKI_WC_PLUGIN_DIR . 'includes/class-kunaki-order-status-sync.php';
@@ -63,6 +62,7 @@ class Kunaki_WooCommerce {
 	}
 
 	public function add_settings_page( $settings ) {
+		require_once KUNAKI_WC_PLUGIN_DIR . 'includes/class-kunaki-settings.php';
 		$settings[] = new Kunaki_Settings();
 		return $settings;
 	}
