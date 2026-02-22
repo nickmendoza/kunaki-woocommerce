@@ -1,6 +1,6 @@
 <?php
 /**
- * Plugin Name: Disc Fulfillment for WooCommerce
+ * Plugin Name: Kunaki WooCommerce
  * Plugin URI:  https://mobilecodemedia.com/kunaki-woocommerce
  * Description: Integrates Kunaki CD/DVD manufacturing and fulfillment with WooCommerce — live shipping rates, automatic order submission, and order status tracking.
  * Version:     1.0.0
