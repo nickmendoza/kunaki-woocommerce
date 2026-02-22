@@ -1,20 +1,14 @@
-# Disc Fulfillment for WooCommerce
+# Kunaki WooCommerce
 
-A WooCommerce plugin that integrates with the [Kunaki XML API](https://kunaki.com/XMLService.htm) for automated CD/DVD manufacturing and fulfillment.
+A WooCommerce plugin for automatic [Kunaki](https://kunaki.com) CD, DVD, and Blu-ray fulfillment — live shipping rates, automatic order submission, and tracking.
 
-## Goal
+## Features
 
-- Send WooCommerce paid orders to Kunaki XML API
-- Store OrderId
-- Poll for tracking
-- Mark completed
-
-## How It Works
-
-1. **Product Linking** — Add a Kunaki Product ID to any WooCommerce product via the General tab. Only products with a Kunaki ID are fulfilled through Kunaki.
-2. **Live Shipping Rates** — At checkout, the plugin calls Kunaki's ShippingOptions API to display real-time shipping methods and prices.
-3. **Auto-Submit on Payment** — When an order transitions to "processing" (payment received), it's automatically submitted to Kunaki's Order API.
-4. **Status Polling** — A WP-Cron job periodically checks Kunaki for order status updates. When shipped, the tracking number is added as a customer-visible order note and the order is marked completed.
+- **Live Shipping Rates** — Real-time Kunaki shipping options and prices at checkout.
+- **Automatic Order Submission** — Orders are sent to Kunaki automatically when payment is received.
+- **Order Tracking** — Polls Kunaki for status updates and emails the customer their tracking number.
+- **Product Linking** — Link any WooCommerce product to a Kunaki disc via its Product ID.
+- **Mixed Carts** — Works alongside other shipping methods for non-Kunaki products.
 
 ## Setup
 
@@ -69,3 +63,7 @@ uninstall.php                       → Cleanup on plugin deletion
 ## License
 
 Proprietary. All rights reserved. Copyright &copy; 2026 Mobile Code Media.
+
+## Disclaimer
+
+This software is provided "as is" without warranty of any kind, express or implied. Use at your own risk. This project is not affiliated with, endorsed by, or sponsored by Kunaki, WordPress, or WooCommerce.
