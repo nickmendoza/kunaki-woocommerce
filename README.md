@@ -54,6 +54,36 @@ assets/css/
 uninstall.php                       → Cleanup on plugin deletion
 ```
 
+## Development
+
+### Running Tests
+
+```bash
+composer install
+composer test
+```
+
+No WordPress or WooCommerce installation required — all tests run in isolation using Brain Monkey and Mockery.
+
+68 unit tests cover the plugin's core functionality:
+
+| Area | What's tested |
+|------|---------------|
+| API Client | XML request/response parsing, HTTP errors, HTML-wrapped responses, credential injection |
+| Order Fulfillment | Duplicate submission prevention, atomic locking, meta storage, mixed cart handling |
+| Order Status Sync | SHIPPED/DECLINED/PENDING transitions, tracking info, auto-completion logic |
+| Shipping Method | Rate calculation, Kunaki product filtering, transient caching, state/country handling |
+| Product Meta | ID validation (10-char alphanumeric), capability checks, column rendering |
+| Logger | Debug gating, log level routing |
+| Encryption | AES-256-CBC encrypt/decrypt round-trip, invalid input handling |
+
+To run a specific test file or filter by name, pass arguments via `composer test`:
+
+```bash
+composer test -- tests/Unit/APIClientTest.php
+composer test -- --filter "shipped"
+```
+
 ## Requirements
 
 - WordPress 5.8+
