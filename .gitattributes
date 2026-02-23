@@ -1,0 +1,13 @@
+# Exclude dev files from git archive (release zips)
+tests/                 export-ignore
+vendor/                export-ignore
+composer.json          export-ignore
+composer.lock          export-ignore
+phpunit.xml.dist       export-ignore
+.gitattributes         export-ignore
+.gitignore             export-ignore
+.phpunit.cache/        export-ignore
+.phpunit.result.cache  export-ignore
+claude-plugins.md      export-ignore
+marketing.md           export-ignore
+testing.md             export-ignore
