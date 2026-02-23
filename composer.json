@@ -1,0 +1,27 @@
+{
+	"name": "mobilecodemedia/kunaki-woocommerce",
+	"description": "Integrates Kunaki CD/DVD manufacturing and fulfillment with WooCommerce.",
+	"type": "wordpress-plugin",
+	"license": "GPL-2.0-or-later",
+	"require": {
+		"php": ">=7.4"
+	},
+	"require-dev": {
+		"phpunit/phpunit": "^9.6",
+		"brain/monkey": "^2.6",
+		"mockery/mockery": "^1.5",
+		"yoast/phpunit-polyfills": "^1.0"
+	},
+	"autoload-dev": {
+		"psr-4": {
+			"Kunaki\\Tests\\": "tests/"
+		}
+	},
+	"scripts": {
+		"test": "phpunit",
+		"test:unit": "phpunit --testsuite unit"
+	},
+	"config": {
+		"sort-packages": true
+	}
+}
