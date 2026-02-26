@@ -23,6 +23,10 @@ if ( ! function_exists( 'kunaki_wc_encrypt_password' ) ) {
 		if ( false === $encrypted ) {
 			return $value;
 		}
+
+		// Password re-saved successfully — clear any previous decrypt failure flag.
+		delete_option( 'kunaki_wc_decrypt_failed' );
+
 		// phpcs:ignore WordPress.PHP.DiscouragedPHPFunctions.obfuscation_base64_encode
 		return base64_encode( $iv . $encrypted );
 	}
@@ -46,6 +50,9 @@ if ( ! function_exists( 'kunaki_wc_encrypt_password' ) ) {
 
 		$decrypted = openssl_decrypt( $encrypted, 'aes-256-cbc', $key, OPENSSL_RAW_DATA, $iv );
 		if ( false === $decrypted ) {
+			// Flag the failure so an admin notice can be shown.
+			update_option( 'kunaki_wc_decrypt_failed', 'yes', 'no' );
+
 			if ( function_exists( 'wc_get_logger' ) ) {
 				wc_get_logger()->error( 'Failed to decrypt Kunaki password. Auth salts may have changed.', array( 'source' => 'kunaki-woocommerce' ) );
 			}

@@ -23,6 +23,13 @@ class OrderStatusSyncTest extends KunakiTestCase {
 		Functions\when( 'get_option' )->alias( function ( $key, $default = '' ) {
 			return 'kunaki_wc_debug_log' === $key ? 'no' : $default;
 		} );
+
+		$this->mock_wpdb_lock();
+	}
+
+	protected function tear_down() {
+		unset( $GLOBALS['wpdb'] );
+		parent::tear_down();
 	}
 
 	public function test_no_pending_orders() {
@@ -40,10 +47,11 @@ class OrderStatusSyncTest extends KunakiTestCase {
 		$order->shouldReceive( 'update_meta_data' )->with( '_kunaki_order_status', 'SHIPPED' )->once();
 		$order->shouldReceive( 'update_meta_data' )->with( '_kunaki_tracking_type', 'USPS' )->once();
 		$order->shouldReceive( 'update_meta_data' )->with( '_kunaki_tracking_id', '9400111' )->once();
-		$order->shouldReceive( 'add_order_note' )->with( Mockery::pattern( '/USPS.*9400111/' ), true )->once();
 		$order->shouldReceive( 'get_meta' )->with( '_kunaki_all_items' )->andReturn( 'yes' );
 		$order->shouldReceive( 'set_status' )->with( 'completed', Mockery::any() )->once();
-		$order->shouldReceive( 'save' )->twice();
+		// save() must happen before the customer email is sent.
+		$order->shouldReceive( 'save' )->once()->ordered();
+		$order->shouldReceive( 'add_order_note' )->with( Mockery::pattern( '/USPS.*9400111/' ), true )->once()->ordered();
 
 		$this->sync->sync_all_pending_orders();
 	}
@@ -56,10 +64,11 @@ class OrderStatusSyncTest extends KunakiTestCase {
 
 		$order->shouldReceive( 'update_meta_data' )->with( '_kunaki_order_status', 'SHIPPED' )->once();
 		$order->shouldNotReceive( 'update_meta_data' )->with( '_kunaki_tracking_type', Mockery::any() );
-		$order->shouldReceive( 'add_order_note' )->with( Mockery::pattern( '/No tracking/' ), true )->once();
 		$order->shouldReceive( 'get_meta' )->with( '_kunaki_all_items' )->andReturn( 'yes' );
 		$order->shouldReceive( 'set_status' )->once();
-		$order->shouldReceive( 'save' )->twice();
+		// save() must happen before the customer email is sent.
+		$order->shouldReceive( 'save' )->once()->ordered();
+		$order->shouldReceive( 'add_order_note' )->with( Mockery::pattern( '/No tracking/' ), true )->once()->ordered();
 
 		$this->sync->sync_all_pending_orders();
 	}
@@ -71,10 +80,11 @@ class OrderStatusSyncTest extends KunakiTestCase {
 		$this->mock_wc_get_orders( array( $order ) );
 
 		$order->shouldReceive( 'update_meta_data' )->withAnyArgs()->zeroOrMoreTimes();
-		$order->shouldReceive( 'add_order_note' )->with( Mockery::any(), true )->once();
 		$order->shouldReceive( 'get_meta' )->with( '_kunaki_all_items' )->andReturn( 'no' );
 		$order->shouldNotReceive( 'set_status' );
-		$order->shouldReceive( 'save' )->twice();
+		// save() must happen before the customer email is sent.
+		$order->shouldReceive( 'save' )->once()->ordered();
+		$order->shouldReceive( 'add_order_note' )->with( Mockery::any(), true )->once()->ordered();
 
 		$this->sync->sync_all_pending_orders();
 	}
@@ -86,9 +96,10 @@ class OrderStatusSyncTest extends KunakiTestCase {
 		$this->mock_wc_get_orders( array( $order ) );
 
 		$order->shouldReceive( 'update_meta_data' )->with( '_kunaki_order_status', 'DECLINED' )->once();
-		$order->shouldReceive( 'add_order_note' )->with( Mockery::pattern( '/DECLINED/' ), false )->once();
 		$order->shouldReceive( 'set_status' )->with( 'on-hold', Mockery::any() )->once();
-		$order->shouldReceive( 'save' )->twice();
+		// save() must happen before notes are added.
+		$order->shouldReceive( 'save' )->once()->ordered();
+		$order->shouldReceive( 'add_order_note' )->with( Mockery::pattern( '/DECLINED/' ), false )->once()->ordered();
 
 		$this->sync->sync_all_pending_orders();
 	}
@@ -103,9 +114,10 @@ class OrderStatusSyncTest extends KunakiTestCase {
 		$this->mock_wc_get_orders( array( $order ) );
 
 		$order->shouldReceive( 'update_meta_data' )->with( '_kunaki_order_status', $status )->once();
-		$order->shouldReceive( 'add_order_note' )->with( Mockery::pattern( "/{$status}/" ), false )->once();
 		$order->shouldNotReceive( 'set_status' );
-		$order->shouldReceive( 'save' )->twice();
+		// save() must happen before notes are added.
+		$order->shouldReceive( 'save' )->once()->ordered();
+		$order->shouldReceive( 'add_order_note' )->with( Mockery::pattern( "/{$status}/" ), false )->once()->ordered();
 
 		$this->sync->sync_all_pending_orders();
 	}
@@ -175,5 +187,15 @@ class OrderStatusSyncTest extends KunakiTestCase {
 		Functions\expect( 'wp_remote_post' )->once()->andReturn( array( 'body' => $xml ) );
 		Functions\expect( 'wp_remote_retrieve_response_code' )->once()->andReturn( 200 );
 		Functions\expect( 'wp_remote_retrieve_body' )->once()->andReturn( $xml );
+	}
+
+	private function mock_wpdb_lock( $acquired = true ) {
+		$wpdb = Mockery::mock( 'wpdb' );
+		$wpdb->options = 'wp_options';
+		$wpdb->shouldReceive( 'prepare' )->andReturnUsing( function () { return 'prepared_query'; } );
+		$wpdb->shouldReceive( 'query' )->andReturn( $acquired ? 1 : 0 );
+		$wpdb->shouldReceive( 'delete' )->andReturn( true );
+
+		$GLOBALS['wpdb'] = $wpdb;
 	}
 }

@@ -45,6 +45,9 @@ class Kunaki_Order_Status_Sync {
 	/**
 	 * Sync a single order's status with Kunaki.
 	 *
+	 * Uses a per-order lock to prevent concurrent cron executions from
+	 * double-processing the same order (which could send duplicate emails).
+	 *
 	 * @param WC_Order          $order WooCommerce order.
 	 * @param Kunaki_API_Client $api   API client instance.
 	 */
@@ -55,6 +58,50 @@ class Kunaki_Order_Status_Sync {
 		if ( empty( $kunaki_order_id ) ) {
 			return;
 		}
+
+		// Acquire per-order lock to prevent concurrent sync processing.
+		global $wpdb;
+		$lock_option = '_kunaki_sync_lock_' . $order_id;
+		$lock_expiry = time() + 2 * MINUTE_IN_SECONDS;
+
+		$wpdb->query( $wpdb->prepare(
+			"DELETE FROM {$wpdb->options} WHERE option_name = %s AND option_value < %s",
+			$lock_option,
+			(string) time()
+		) );
+
+		$acquired = $wpdb->query( $wpdb->prepare(
+			"INSERT IGNORE INTO {$wpdb->options} (option_name, option_value, autoload) VALUES (%s, %s, 'no')",
+			$lock_option,
+			(string) $lock_expiry
+		) );
+
+		if ( ! $acquired ) {
+			Kunaki_Logger::debug( "Order #{$order_id}: Could not acquire sync lock, another process is syncing." );
+			return;
+		}
+
+		try {
+			$this->process_sync( $order, $api, $kunaki_order_id );
+		} finally {
+			$wpdb->delete( $wpdb->options, array( 'option_name' => $lock_option ) );
+		}
+	}
+
+	/**
+	 * Process the actual status sync for a single order.
+	 *
+	 * Meta and status changes are saved before customer-facing notes are added.
+	 * This ensures that if save() fails, nothing is persisted and the next cron
+	 * run retries from scratch. Customer emails are only sent after a successful
+	 * save, preventing both stuck orders and duplicate notifications.
+	 *
+	 * @param WC_Order          $order            WooCommerce order.
+	 * @param Kunaki_API_Client $api              API client instance.
+	 * @param string            $kunaki_order_id  Kunaki order ID.
+	 */
+	private function process_sync( $order, $api, $kunaki_order_id ) {
+		$order_id = $order->get_id();
 
 		$result = $api->get_order_status( $kunaki_order_id );
 
@@ -76,11 +123,13 @@ class Kunaki_Order_Status_Sync {
 
 		$order->update_meta_data( '_kunaki_order_status', $kunaki_status );
 
-		// Persist status meta before sending notifications — prevents duplicate
-		// customer emails if the later save() fails and the cron retries.
-		$order->save();
-
 		Kunaki_Logger::info( "Order #{$order_id}: Kunaki status changed from '{$previous_status}' to '{$kunaki_status}'." );
+
+		// Defer all order notes until after save() succeeds. If save() fails,
+		// no meta is persisted and the next cron run retries cleanly — without
+		// duplicate notes or duplicate customer emails.
+		$customer_note = '';
+		$admin_note    = '';
 
 		switch ( $kunaki_status ) {
 			case 'SHIPPED':
@@ -88,18 +137,15 @@ class Kunaki_Order_Status_Sync {
 					$order->update_meta_data( '_kunaki_tracking_type', $tracking_type );
 					$order->update_meta_data( '_kunaki_tracking_id', $tracking_id );
 
-					$tracking_note = sprintf(
+					$customer_note = sprintf(
 						/* translators: 1: carrier name, 2: tracking number */
 						__( 'Kunaki order shipped! Carrier: %1$s, Tracking: %2$s', 'kunaki-woocommerce' ),
 						$tracking_type,
 						$tracking_id
 					);
 				} else {
-					$tracking_note = __( 'Kunaki order shipped! (No tracking number available)', 'kunaki-woocommerce' );
+					$customer_note = __( 'Kunaki order shipped! (No tracking number available)', 'kunaki-woocommerce' );
 				}
-
-				// Customer-visible note with tracking.
-				$order->add_order_note( $tracking_note, true );
 
 				// Transition to completed if all items are Kunaki products.
 				if ( $this->all_items_are_kunaki( $order ) ) {
@@ -108,28 +154,31 @@ class Kunaki_Order_Status_Sync {
 				break;
 
 			case 'DECLINED':
-				$order->add_order_note(
-					__( 'Kunaki order was DECLINED. Please check your Kunaki account for details.', 'kunaki-woocommerce' ),
-					false
-				);
+				$admin_note = __( 'Kunaki order was DECLINED. Please check your Kunaki account for details.', 'kunaki-woocommerce' );
 				$order->set_status( 'on-hold', __( 'Kunaki order declined.', 'kunaki-woocommerce' ) );
 				break;
 
 			case 'PROCESSING':
 			case 'APPROVED':
 			case 'PENDING':
-				$order->add_order_note(
-					sprintf(
-						/* translators: %s: Kunaki order status */
-						__( 'Kunaki order status update: %s', 'kunaki-woocommerce' ),
-						$kunaki_status
-					),
-					false
+				$admin_note = sprintf(
+					/* translators: %s: Kunaki order status */
+					__( 'Kunaki order status update: %s', 'kunaki-woocommerce' ),
+					$kunaki_status
 				);
 				break;
 		}
 
+		// Persist all meta and status changes before adding notes.
 		$order->save();
+
+		// Now safe — meta is persisted, so the next cron run won't retry.
+		if ( '' !== $admin_note ) {
+			$order->add_order_note( $admin_note, false );
+		}
+		if ( '' !== $customer_note ) {
+			$order->add_order_note( $customer_note, true );
+		}
 	}
 
 	/**

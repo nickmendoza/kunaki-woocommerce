@@ -9,6 +9,7 @@ class EncryptionTest extends KunakiTestCase {
 
 	public function test_round_trip() {
 		Functions\when( 'wp_salt' )->justReturn( 'test-salt-value-for-unit-tests' );
+		Functions\when( 'delete_option' )->justReturn( true );
 
 		$original  = 'MySecretPassword123!';
 		$encrypted = kunaki_wc_encrypt_password( $original );
@@ -36,8 +37,9 @@ class EncryptionTest extends KunakiTestCase {
 		$this->assertSame( $short, kunaki_wc_decrypt_password( $short ) );
 	}
 
-	public function test_wrong_key_returns_empty() {
+	public function test_wrong_key_returns_empty_and_sets_flag() {
 		Functions\when( 'wp_salt' )->justReturn( 'original-salt' );
+		Functions\when( 'delete_option' )->justReturn( true );
 		$encrypted = kunaki_wc_encrypt_password( 'MyPassword' );
 
 		// Simulate salt rotation.
@@ -47,8 +49,20 @@ class EncryptionTest extends KunakiTestCase {
 		Functions\when( 'wc_get_logger' )->justReturn(
 			\Mockery::mock( 'WC_Logger' )->shouldIgnoreMissing()
 		);
+		Functions\expect( 'update_option' )
+			->once()
+			->with( 'kunaki_wc_decrypt_failed', 'yes', 'no' );
 
 		$this->assertSame( '', kunaki_wc_decrypt_password( $encrypted ) );
+	}
+
+	public function test_successful_encrypt_clears_decrypt_flag() {
+		Functions\when( 'wp_salt' )->justReturn( 'test-salt' );
+		Functions\expect( 'delete_option' )
+			->once()
+			->with( 'kunaki_wc_decrypt_failed' );
+
+		kunaki_wc_encrypt_password( 'NewPassword' );
 	}
 
 }

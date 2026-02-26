@@ -68,6 +68,24 @@ require_once __DIR__ . '/includes/encryption.php';
 add_filter( 'pre_update_option_kunaki_wc_password', 'kunaki_wc_encrypt_password', 10, 1 );
 add_filter( 'option_kunaki_wc_password', 'kunaki_wc_decrypt_password', 10, 1 );
 
+// Show admin notice when password decryption fails (e.g. after salt rotation).
+add_action( 'admin_notices', function () {
+	if ( 'yes' !== get_option( 'kunaki_wc_decrypt_failed' ) ) {
+		return;
+	}
+	if ( ! current_user_can( 'manage_woocommerce' ) ) {
+		return;
+	}
+	$settings_url = admin_url( 'admin.php?page=wc-settings&tab=kunaki' );
+	echo '<div class="error"><p>';
+	echo wp_kses_post( sprintf(
+		/* translators: %s: URL to Kunaki settings page */
+		__( '<strong>Kunaki WooCommerce:</strong> Your stored password could not be decrypted — this usually means your WordPress security salts have changed. Please <a href="%s">re-enter your Kunaki password</a> to restore order fulfillment.', 'kunaki-woocommerce' ),
+		esc_url( $settings_url )
+	) );
+	echo '</p></div>';
+} );
+
 // Register custom cron schedule early so it exists during activation.
 add_filter( 'cron_schedules', function ( $schedules ) {
 	$interval = absint( get_option( 'kunaki_wc_sync_interval', 15 ) );
