@@ -42,9 +42,11 @@ class Kunaki_Product_Meta {
 			return;
 		}
 
-		$kunaki_id = isset( $_POST[ self::META_KEY ] )
-			? sanitize_text_field( wp_unslash( $_POST[ self::META_KEY ] ) )
-			: '';
+		if ( ! isset( $_POST[ self::META_KEY ] ) ) {
+			return;
+		}
+
+		$kunaki_id = sanitize_text_field( wp_unslash( $_POST[ self::META_KEY ] ) );
 
 		if ( '' !== $kunaki_id && ! preg_match( '/^[A-Za-z0-9]{10}$/', $kunaki_id ) ) {
 			set_transient(
