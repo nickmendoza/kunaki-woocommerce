@@ -153,7 +153,7 @@ The test suite runs entirely outside WordPress. No WordPress installation, no da
 
 This isolation strategy means tests execute in seconds, run in CI without infrastructure, and validate plugin logic without conflating it with WordPress behavior.
 
-79 unit tests cover:
+80 unit tests cover:
 
 | Area | What's Validated |
 |------|-----------------|
@@ -161,7 +161,7 @@ This isolation strategy means tests execute in seconds, run in CI without infras
 | Order Fulfillment | Duplicate submission prevention across all four layers, atomic lock acquisition and release, meta storage, mixed cart detection, fallback marker recovery |
 | Order Status Sync | SHIPPED/DECLINED/PENDING transitions, tracking info extraction, auto-completion logic for pure-Kunaki vs. mixed orders, save-before-notify ordering |
 | Shipping Method | Rate calculation, Kunaki product filtering, transient cache hit/miss, state/province handling for US/CA vs. international, country name resolution |
-| Product Meta | 10-character alphanumeric validation, capability checks, admin column rendering |
+| Product Meta | 10-character alphanumeric validation, capability checks, admin column rendering, safe handling of absent POST fields |
 | Logger | Debug gating based on settings, log level routing |
 | Encryption | AES-256-GCM round-trip, AES-256-CBC legacy fallback, invalid/corrupt input handling |
 

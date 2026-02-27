@@ -97,6 +97,15 @@ class ProductMetaTest extends KunakiTestCase {
 		$meta->save_field( 42 );
 	}
 
+	public function test_save_skips_when_field_not_in_post() {
+		Functions\expect( 'current_user_can' )->with( 'edit_product', 42 )->andReturn( true );
+		Functions\expect( 'update_post_meta' )->never();
+
+		unset( $_POST['_kunaki_product_id'] );
+		$meta = new Kunaki_Product_Meta();
+		$meta->save_field( 42 );
+	}
+
 	public function test_save_checks_capability() {
 		Functions\expect( 'current_user_can' )->with( 'edit_product', 42 )->andReturn( false );
 		Functions\expect( 'update_post_meta' )->never();
