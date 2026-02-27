@@ -203,6 +203,22 @@ class ShippingMethodTest extends KunakiTestCase {
 		$this->assertSame( '1 day', $rates[0]['meta_data']['kunaki_delivery_time'] );
 	}
 
+	public function test_api_error_yields_no_rates() {
+		Functions\when( 'get_post_meta' )->justReturn( 'PXZZ111111' );
+		Functions\expect( 'get_transient' )->once()->andReturn( false );
+		$this->mock_wc_countries();
+
+		Functions\expect( 'wp_remote_post' )->once()
+			->andReturn( new \WP_Error( 'timeout', 'Connection timed out' ) );
+
+		$shipping = new WC_Shipping_Kunaki();
+		$shipping->calculate_shipping( $this->build_package( array(
+			array( 'product_id' => 10, 'quantity' => 1 ),
+		) ) );
+
+		$this->assertEmpty( $shipping->get_rates_added() );
+	}
+
 	// --- Helpers ---
 
 	private function build_package( $items, $country = 'US', $state = 'CA', $postcode = '90210' ) {

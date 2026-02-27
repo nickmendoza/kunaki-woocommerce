@@ -66,7 +66,7 @@ composer test
 
 No WordPress or WooCommerce installation required — all tests run in isolation using Brain Monkey and Mockery.
 
-72 unit tests cover the plugin's core functionality:
+79 unit tests cover the plugin's core functionality:
 
 | Area | What's tested |
 |------|---------------|

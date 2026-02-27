@@ -211,6 +211,64 @@ class OrderFulfillmentTest extends KunakiTestCase {
 		$this->assertStringContainsString( '<Quantity>5</Quantity>', $captured_body );
 	}
 
+	public function test_fallback_marker_restores_meta_and_cleans_up() {
+		$wpdb = Mockery::mock( 'wpdb' );
+		$wpdb->options = 'wp_options';
+		$wpdb->shouldReceive( 'prepare' )->andReturnUsing( function () { return 'prepared_query'; } );
+		// Return the stored Kunaki Order ID from the durable marker.
+		$wpdb->shouldReceive( 'get_var' )->once()->andReturn( 'KUN555' );
+		$wpdb->shouldReceive( 'delete' )
+			->once()->with( 'wp_options', array( 'option_name' => '_kunaki_submitted_100' ) )
+			->andReturn( true );
+		$GLOBALS['wpdb'] = $wpdb;
+
+		$order = $this->create_order_mock();
+		$order->shouldReceive( 'get_meta' )->with( '_kunaki_submitted' )->andReturn( '' );
+
+		$order->shouldReceive( 'update_meta_data' )->with( '_kunaki_order_id', 'KUN555' )->once();
+		$order->shouldReceive( 'update_meta_data' )->with( '_kunaki_submitted', 'yes' )->once();
+		$order->shouldReceive( 'save' )->once();
+
+		Functions\expect( 'get_option' )->zeroOrMoreTimes()->andReturn( 'no' );
+
+		$this->fulfillment->handle_order_processing( 100, $order );
+	}
+
+	public function test_fallback_marker_save_failure_leaves_marker() {
+		$wpdb = Mockery::mock( 'wpdb' );
+		$wpdb->options = 'wp_options';
+		$wpdb->shouldReceive( 'prepare' )->andReturnUsing( function () { return 'prepared_query'; } );
+		$wpdb->shouldReceive( 'get_var' )->once()->andReturn( 'KUN555' );
+		// Marker should NOT be deleted when save() fails.
+		$wpdb->shouldNotReceive( 'delete' );
+		$GLOBALS['wpdb'] = $wpdb;
+
+		$order = $this->create_order_mock();
+		$order->shouldReceive( 'get_meta' )->with( '_kunaki_submitted' )->andReturn( '' );
+
+		$order->shouldReceive( 'update_meta_data' )->withAnyArgs()->zeroOrMoreTimes();
+		$order->shouldReceive( 'save' )->once()->andThrow( new \RuntimeException( 'DB down' ) );
+
+		Functions\expect( 'get_option' )->zeroOrMoreTimes()->andReturn( 'no' );
+
+		$this->fulfillment->handle_order_processing( 100, $order );
+	}
+
+	public function test_lock_not_acquired_skips_submission() {
+		$this->mock_wpdb_lock( false );
+
+		$order = $this->create_order_mock();
+		$order->shouldReceive( 'get_meta' )->with( '_kunaki_submitted' )->andReturn( '' );
+
+		// Should never attempt to get items or submit.
+		$order->shouldNotReceive( 'get_items' );
+		$order->shouldNotReceive( 'update_meta_data' );
+
+		Functions\expect( 'get_option' )->zeroOrMoreTimes()->andReturn( 'no' );
+
+		$this->fulfillment->handle_order_processing( 100, $order );
+	}
+
 	// --- Helpers ---
 
 	private function create_order_mock() {

@@ -156,6 +156,76 @@ class OrderStatusSyncTest extends KunakiTestCase {
 		$this->sync->sync_all_pending_orders();
 	}
 
+	public function test_sync_lock_not_acquired_skips_order() {
+		// Override the default mock — lock acquisition fails.
+		$this->mock_wpdb_lock( false );
+
+		$order = $this->create_order_mock( 'KUN123', '' );
+		$this->mock_wc_get_orders( array( $order ) );
+
+		// API should never be called.
+		Functions\expect( 'wp_remote_post' )->never();
+		$order->shouldNotReceive( 'update_meta_data' );
+		$order->shouldNotReceive( 'save' );
+
+		$this->sync->sync_all_pending_orders();
+	}
+
+	public function test_all_items_fallback_iterates_products() {
+		$order = $this->create_order_mock( 'KUN123', '' );
+
+		$this->mock_api_status( 'KUN123', 'SHIPPED', 'USPS', '9400111' );
+		$this->mock_wc_get_orders( array( $order ) );
+
+		$order->shouldReceive( 'update_meta_data' )->withAnyArgs()->zeroOrMoreTimes();
+		// No snapshot stored — triggers the fallback iteration.
+		$order->shouldReceive( 'get_meta' )->with( '_kunaki_all_items' )->andReturn( '' );
+
+		$item1 = Mockery::mock( 'WC_Order_Item_Product' );
+		$item1->shouldReceive( 'get_product_id' )->andReturn( 42 );
+		$item2 = Mockery::mock( 'WC_Order_Item_Product' );
+		$item2->shouldReceive( 'get_product_id' )->andReturn( 43 );
+		$order->shouldReceive( 'get_items' )->andReturn( array( $item1, $item2 ) );
+
+		// Both are Kunaki products — should auto-complete.
+		Functions\when( 'get_post_meta' )->alias( function ( $id, $key, $single ) {
+			return '_kunaki_product_id' === $key ? 'PXZZ111111' : '';
+		} );
+
+		$order->shouldReceive( 'set_status' )->with( 'completed', Mockery::any() )->once();
+		$order->shouldReceive( 'save' )->once();
+		$order->shouldNotReceive( 'add_order_note' );
+
+		$this->sync->sync_all_pending_orders();
+	}
+
+	public function test_all_items_fallback_non_kunaki_stays_processing() {
+		$order = $this->create_order_mock( 'KUN123', '' );
+
+		$this->mock_api_status( 'KUN123', 'SHIPPED', 'USPS', '9400111' );
+		$this->mock_wc_get_orders( array( $order ) );
+
+		$order->shouldReceive( 'update_meta_data' )->withAnyArgs()->zeroOrMoreTimes();
+		$order->shouldReceive( 'get_meta' )->with( '_kunaki_all_items' )->andReturn( '' );
+
+		$item1 = Mockery::mock( 'WC_Order_Item_Product' );
+		$item1->shouldReceive( 'get_product_id' )->andReturn( 42 );
+		$item2 = Mockery::mock( 'WC_Order_Item_Product' );
+		$item2->shouldReceive( 'get_product_id' )->andReturn( 43 );
+		$order->shouldReceive( 'get_items' )->andReturn( array( $item1, $item2 ) );
+
+		// Product 43 is NOT a Kunaki product — mixed cart.
+		Functions\when( 'get_post_meta' )->alias( function ( $id, $key, $single ) {
+			return ( '_kunaki_product_id' === $key && 42 === $id ) ? 'PXZZ111111' : '';
+		} );
+
+		$order->shouldNotReceive( 'set_status' );
+		$order->shouldReceive( 'save' )->once()->ordered();
+		$order->shouldReceive( 'add_order_note' )->with( Mockery::any(), true )->once()->ordered();
+
+		$this->sync->sync_all_pending_orders();
+	}
+
 	// --- Helpers ---
 
 	private function create_order_mock( $kunaki_order_id, $previous_status = '' ) {
