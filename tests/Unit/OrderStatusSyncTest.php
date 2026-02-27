@@ -48,10 +48,10 @@ class OrderStatusSyncTest extends KunakiTestCase {
 		$order->shouldReceive( 'update_meta_data' )->with( '_kunaki_tracking_type', 'USPS' )->once();
 		$order->shouldReceive( 'update_meta_data' )->with( '_kunaki_tracking_id', '9400111' )->once();
 		$order->shouldReceive( 'get_meta' )->with( '_kunaki_all_items' )->andReturn( 'yes' );
-		// Tracking embedded in completion note — no separate customer note.
-		$order->shouldReceive( 'set_status' )->with( 'completed', Mockery::pattern( '/USPS.*9400111/' ) )->once();
-		$order->shouldReceive( 'save' )->once();
-		$order->shouldNotReceive( 'add_order_note' );
+		$order->shouldReceive( 'set_status' )->with( 'completed', Mockery::type( 'string' ) )->once();
+		// save() must happen before the customer note with tracking is sent.
+		$order->shouldReceive( 'save' )->once()->ordered();
+		$order->shouldReceive( 'add_order_note' )->with( Mockery::pattern( '/USPS.*9400111/' ), true )->once()->ordered();
 
 		$this->sync->sync_all_pending_orders();
 	}
@@ -65,10 +65,10 @@ class OrderStatusSyncTest extends KunakiTestCase {
 		$order->shouldReceive( 'update_meta_data' )->with( '_kunaki_order_status', 'SHIPPED' )->once();
 		$order->shouldNotReceive( 'update_meta_data' )->with( '_kunaki_tracking_type', Mockery::any() );
 		$order->shouldReceive( 'get_meta' )->with( '_kunaki_all_items' )->andReturn( 'yes' );
-		// Tracking embedded in completion note — no separate customer note.
-		$order->shouldReceive( 'set_status' )->with( 'completed', Mockery::pattern( '/No tracking/' ) )->once();
-		$order->shouldReceive( 'save' )->once();
-		$order->shouldNotReceive( 'add_order_note' );
+		$order->shouldReceive( 'set_status' )->with( 'completed', Mockery::type( 'string' ) )->once();
+		// save() must happen before the customer note is sent.
+		$order->shouldReceive( 'save' )->once()->ordered();
+		$order->shouldReceive( 'add_order_note' )->with( Mockery::pattern( '/No tracking/' ), true )->once()->ordered();
 
 		$this->sync->sync_all_pending_orders();
 	}
@@ -193,8 +193,8 @@ class OrderStatusSyncTest extends KunakiTestCase {
 		} );
 
 		$order->shouldReceive( 'set_status' )->with( 'completed', Mockery::any() )->once();
-		$order->shouldReceive( 'save' )->once();
-		$order->shouldNotReceive( 'add_order_note' );
+		$order->shouldReceive( 'save' )->once()->ordered();
+		$order->shouldReceive( 'add_order_note' )->with( Mockery::pattern( '/USPS.*9400111/' ), true )->once()->ordered();
 
 		$this->sync->sync_all_pending_orders();
 	}

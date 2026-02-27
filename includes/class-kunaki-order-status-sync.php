@@ -148,14 +148,11 @@ class Kunaki_Order_Status_Sync {
 				}
 
 				// Transition to completed if all items are Kunaki products.
+				// The customer note with tracking is sent separately after
+				// save() because set_status() notes are admin-only and not
+				// included in the "Completed Order" email template.
 				if ( $this->all_items_are_kunaki( $order ) ) {
-					// Include tracking in the completion note so it appears in the
-					// "Completed Order" email. Skip the separate customer note to
-					// avoid sending two emails for the same event.
-					$completion_note = __( 'Kunaki fulfillment complete.', 'kunaki-woocommerce' )
-						. ' ' . $customer_note;
-					$order->set_status( 'completed', $completion_note );
-					$customer_note = '';
+					$order->set_status( 'completed', __( 'Kunaki fulfillment complete.', 'kunaki-woocommerce' ) );
 				}
 				break;
 
