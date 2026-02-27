@@ -1,99 +1,192 @@
 # Kunaki WooCommerce
 
-A WooCommerce plugin for automatic [Kunaki](https://kunaki.com) CD, DVD, and Blu-ray fulfillment — live shipping rates, automatic order submission, and tracking.
+Reliable [Kunaki](https://kunaki.com) disc fulfillment for WooCommerce -- live shipping rates, idempotent order submission, and concurrency-safe tracking synchronization.
+
+## Why This Plugin Exists
+
+Kunaki manufactures and ships CDs, DVDs, and Blu-ray discs on demand. Their integration surface is a stateless XML API with no webhooks, no order deduplication, and no delivery callbacks. Every order submitted is manufactured. There is no undo. In production stores, even a single duplicate submission represents real manufacturing cost and customer confusion.
+
+This creates a set of problems that naive implementations get wrong:
+
+- **Double submissions.** WooCommerce fires `woocommerce_order_status_processing` on every transition to "processing." Payment gateways, admin actions, and webhook retries can all trigger it concurrently. Without locking, the same order gets manufactured twice.
+- **Lost tracking numbers.** Kunaki provides tracking data only through status polling. Without a reliable sync loop, customers never receive shipping confirmation.
+- **Duplicate emails.** If the status sync runs concurrently (overlapping cron executions), the same tracking note gets added twice, sending the customer two identical emails.
+- **Mixed carts.** Orders containing both Kunaki and non-Kunaki products need partial fulfillment -- only the disc items go to Kunaki, and the order should not auto-complete until the store owner handles the rest.
+
+This plugin addresses these concerns through atomic locking, idempotent submission, save-before-notify ordering, and per-order concurrency control.
 
 ## Features
 
-- **Live Shipping Rates** — Real-time Kunaki shipping options and prices at checkout.
-- **Automatic Order Submission** — Orders are sent to Kunaki automatically when payment is received.
-- **Order Tracking** — Polls Kunaki for status updates and emails the customer their tracking number.
-- **Product Linking** — Link any WooCommerce product to a Kunaki disc via its Product ID.
-- **Mixed Carts** — Works alongside other shipping methods for non-Kunaki products.
+- **Live Shipping Rates** -- Real-time Kunaki shipping options and prices at checkout, cached via transients.
+- **Idempotent Order Submission** -- Orders are submitted to Kunaki exactly once, protected by atomic locks and multi-layer duplicate prevention.
+- **Order Tracking** -- Cron-based polling syncs Kunaki status and emails customers their tracking number.
+- **Product Linking** -- Link any WooCommerce product to a Kunaki disc via its 10-character Product ID.
+- **Mixed Cart Handling** -- Submits only Kunaki items; defers order completion when non-Kunaki items are present.
+- **HPOS Compatible** -- Declares compatibility with WooCommerce High-Performance Order Storage.
+- **Credential Encryption** -- Passwords encrypted at rest with AES-256-GCM.
 
-## Setup
+## Architecture Overview
 
-1. Download the ZIP from GitHub and upload it via **Plugins > Add New > Upload Plugin** in WordPress
-2. Activate the plugin in WordPress
-3. Go to **WooCommerce > Settings > Kunaki** and enter your Kunaki publisher email and password. Set mode to **Test** for development or **Live** for production.
-
-![Kunaki API Settings](assets/screenshots/settings.png)
-
-4. Go to **WooCommerce > Settings > Shipping > Shipping Zones**, create a zone, and add "Kunaki Shipping" as a shipping method.
-
-![Shipping Zone Setup](assets/screenshots/shipping.png)
-
-5. Edit any WooCommerce product and enter its Kunaki Product ID in the General tab.
-
-![Product Kunaki ID](assets/screenshots/simple-product.png)
-
-## Settings
-
-| Setting | Description |
-|---------|-------------|
-| Kunaki Email | Your Kunaki publisher account email |
-| Password | Your Kunaki account password |
-| Mode | `Test` (no real orders) or `Live` (production) |
-| Sync Interval | How often to poll Kunaki for status updates (default: 15 min) |
-| Debug Logging | Log API requests/responses to WooCommerce > Status > Logs |
-
-## Plugin Structure
+The plugin is organized into six single-responsibility components, coordinated by a singleton orchestrator. No component performs direct SQL outside controlled locking primitives.
 
 ```
-kunaki-woocommerce.php              → Plugin bootstrap, constants, cron scheduling, password encryption
+kunaki-woocommerce.php                   Bootstrap, constants, encryption filters, cron setup
 includes/
-  class-kunaki-woocommerce.php      → Orchestrator, hooks all components together
-  class-kunaki-api-client.php       → XML API client (shipping, orders, status)
-  class-kunaki-shipping-method.php  → WC_Shipping_Method with live Kunaki rates
-  class-kunaki-order-fulfillment.php → Auto-submits orders on payment
-  class-kunaki-order-status-sync.php → WP-Cron polling for tracking updates
-  class-kunaki-product-meta.php     → Kunaki Product ID field on products
-  class-kunaki-settings.php         → WooCommerce settings tab
-  class-kunaki-logger.php           → Logging wrapper
-  encryption.php                    → AES-256-GCM encryption helpers
-assets/css/
-  kunaki-admin.css                  → Admin styles
-uninstall.php                       → Cleanup on plugin deletion
+  class-kunaki-woocommerce.php           Orchestrator: loads components, registers hooks
+  class-kunaki-api-client.php            Stateless XML API client (shipping, orders, status)
+  class-kunaki-shipping-method.php       WC_Shipping_Method: live rates with transient caching
+  class-kunaki-order-fulfillment.php     Event-driven order submission with atomic locking
+  class-kunaki-order-status-sync.php     Cron-based status polling with per-order locks
+  class-kunaki-product-meta.php          Product editor field, validation, admin column
+  class-kunaki-settings.php              WooCommerce settings tab
+  class-kunaki-logger.php                Log wrapper with debug gating
+  encryption.php                         AES-256-GCM encrypt/decrypt helpers
+uninstall.php                            Option cleanup on plugin deletion
 ```
 
-## Development
+### Event-Driven Order Submission
 
-### Running Tests
+Order submission is triggered by the `woocommerce_order_status_processing` hook. The fulfillment handler collects Kunaki-linked line items, resolves the shipping description stored at checkout, maps the shipping address to Kunaki's format, and submits via the API client. The API client is stateless and injectable -- it reads credentials from `wp_options` by default but accepts constructor overrides for testing.
+
+### Cron-Based Status Polling
+
+A WP-Cron event (`kunaki_wc_sync_order_status`) runs on a configurable interval (default: 15 minutes, range: 5--1440). It queries all WooCommerce orders in "processing" status that have a stored Kunaki Order ID, polls the Kunaki API for each, and handles status transitions: SHIPPED triggers tracking delivery and optional auto-completion, DECLINED moves the order to on-hold, and intermediate statuses (PROCESSING, APPROVED, PENDING) log admin notes.
+
+### Performance Considerations
+
+- Status polling queries only orders in "processing" status with a stored Kunaki Order ID -- not the full order table.
+- Locks are short-lived and self-cleaning; expired locks are pruned atomically before each acquisition attempt.
+- Shipping rates are cached via transients (30-minute TTL) to minimize outbound API calls during checkout.
+
+### Separation of Concerns
+
+The API client knows nothing about WooCommerce orders. The fulfillment handler knows nothing about cron. The status sync knows nothing about order submission. Each component is independently testable and interacts only through order meta and the API client interface.
+
+## Reliability and Concurrency Guarantees
+
+### Atomic Locking
+
+Both order submission and status sync acquire per-order locks using `INSERT IGNORE` into `wp_options`. This is a single atomic SQL statement -- only one process wins the insert. Locks carry an expiry timestamp. Before acquiring, expired locks are cleaned up with a `DELETE WHERE option_value < NOW()` query (also atomic, no SELECT-then-DELETE race).
+
+- Submission locks expire after 5 minutes.
+- Sync locks expire after 2 minutes.
+
+### Idempotent Submission
+
+Order submission is protected by four layers:
+
+1. **Meta check** -- `_kunaki_submitted = yes` in order meta skips immediately.
+2. **Fallback marker check** -- If a previous submission succeeded at Kunaki but `$order->save()` failed catastrophically, a durable marker in `wp_options` preserves the Kunaki Order ID. On the next trigger, the marker is detected, meta is restored, and the order is not resubmitted.
+3. **Atomic lock** -- `INSERT IGNORE` ensures only one concurrent process proceeds.
+4. **Post-lock re-check** -- After acquiring the lock, the order is reloaded from the database to catch any submission that completed between the initial check and lock acquisition.
+
+### Failure Recovery
+
+If the Kunaki API accepts an order but `$order->save()` throws, the plugin attempts `$order->save_meta_data()` as a narrower fallback. If that also fails, a durable marker (`_kunaki_submitted_{order_id}`) is written directly to `wp_options` via `INSERT IGNORE`, storing the Kunaki Order ID. This marker survives lock expiration and prevents resubmission on any subsequent trigger. If even the marker write fails, the lock is deliberately retained to block further attempts until manual intervention.
+
+### Email Duplication Prevention
+
+The status sync saves all meta and status changes via `$order->save()` before adding any customer-facing order notes. If `save()` fails, no notes are persisted and the next cron run retries from a clean state. Customer emails are only triggered after a successful save, so duplicate notifications cannot occur from failed partial updates.
+
+All critical state transitions are deterministic and replay-safe.
+
+## Security Considerations
+
+### Encryption at Rest
+
+The Kunaki password is encrypted using AES-256-GCM before storage in `wp_options`. The encryption key is derived from WordPress's `AUTH_SALT` via SHA-256. Each encryption generates a fresh 12-byte random nonce. The stored value is `base64(nonce || tag || ciphertext)`.
+
+A legacy AES-256-CBC decryption path exists for passwords encrypted before the GCM upgrade. If both decryption methods fail (typically after salt rotation during site migration), the plugin sets a persistent flag and displays an admin notice prompting the user to re-enter their password.
+
+Encryption and decryption are applied transparently via `pre_update_option` and `option_{name}` filters. No plaintext password is stored in the database at any point after initial save.
+
+### Credential Handling
+
+- Credentials appear in API payloads only for authenticated operations (order submission and status polling). Shipping rate lookups are unauthenticated.
+- All API request/response logging automatically redacts `<UserId>` and `<Password>` XML elements before writing to the WooCommerce log.
+- The settings page renders the password field as `type="password"`.
+
+## Testing Strategy
+
+The test suite runs entirely outside WordPress. No WordPress installation, no database, no WooCommerce runtime. All WordPress and WooCommerce functions are stubbed using [Brain Monkey](https://github.com/Brain-WP/BrainMonkey), and object dependencies are mocked with [Mockery](https://github.com/mockery/mockery).
+
+This isolation strategy means tests execute in seconds, run in CI without infrastructure, and validate plugin logic without conflating it with WordPress behavior.
+
+79 unit tests cover:
+
+| Area | What's Validated |
+|------|-----------------|
+| API Client | XML request construction, response parsing, HTTP error handling, HTML-wrapped response extraction, credential injection |
+| Order Fulfillment | Duplicate submission prevention across all four layers, atomic lock acquisition and release, meta storage, mixed cart detection, fallback marker recovery |
+| Order Status Sync | SHIPPED/DECLINED/PENDING transitions, tracking info extraction, auto-completion logic for pure-Kunaki vs. mixed orders, save-before-notify ordering |
+| Shipping Method | Rate calculation, Kunaki product filtering, transient cache hit/miss, state/province handling for US/CA vs. international, country name resolution |
+| Product Meta | 10-character alphanumeric validation, capability checks, admin column rendering |
+| Logger | Debug gating based on settings, log level routing |
+| Encryption | AES-256-GCM round-trip, AES-256-CBC legacy fallback, invalid/corrupt input handling |
 
 ```bash
 composer install
 composer test
 ```
 
-No WordPress or WooCommerce installation required — all tests run in isolation using Brain Monkey and Mockery.
-
-79 unit tests cover the plugin's core functionality:
-
-| Area | What's tested |
-|------|---------------|
-| API Client | XML request/response parsing, HTTP errors, HTML-wrapped responses, credential injection |
-| Order Fulfillment | Duplicate submission prevention, atomic locking, meta storage, mixed cart handling |
-| Order Status Sync | SHIPPED/DECLINED/PENDING transitions, tracking info, auto-completion logic |
-| Shipping Method | Rate calculation, Kunaki product filtering, transient caching, state/country handling |
-| Product Meta | ID validation (10-char alphanumeric), capability checks, column rendering |
-| Logger | Debug gating, log level routing |
-| Encryption | AES-256-GCM encrypt/decrypt round-trip, AES-256-CBC legacy fallback, invalid input handling |
-
-To run a specific test file or filter by name, pass arguments via `composer test`:
+Run a specific test file or filter by name:
 
 ```bash
 composer test -- tests/Unit/APIClientTest.php
 composer test -- --filter "shipped"
 ```
 
+## Installation
+
+1. Download the latest release ZIP from GitHub.
+2. In WordPress, go to **Plugins > Add New > Upload Plugin** and upload the ZIP.
+3. Activate the plugin.
+4. Navigate to **WooCommerce > Settings > Kunaki** and enter your Kunaki publisher email and password. Set mode to **Test** for development or **Live** for production.
+5. Under **WooCommerce > Settings > Shipping > Shipping Zones**, add "Kunaki Shipping" as a shipping method to the appropriate zone(s).
+6. Edit any WooCommerce product and enter its Kunaki Product ID in the General tab.
+
+### Settings
+
+| Setting | Description |
+|---------|-------------|
+| Kunaki Email | Your Kunaki publisher account email |
+| Password | Your Kunaki account password (encrypted at rest) |
+| Mode | `Test` (no real orders manufactured) or `Live` (production) |
+| Sync Interval | How often to poll Kunaki for status updates (default: 15 min, range: 5--1440 min) |
+| Debug Logging | Log full API requests/responses (credentials redacted) to WooCommerce > Status > Logs |
+
 ## Requirements
 
 - WordPress 5.8+
 - WooCommerce 6.0+
-- PHP 7.4+
+- PHP 7.4+ with OpenSSL extension
+
+## Roadmap
+
+These are planned or under consideration. No guarantees on timeline.
+
+- **Webhook receiver** -- If Kunaki adds push notifications for status changes, replace polling with a webhook endpoint to eliminate sync latency.
+- **Bulk status sync CLI command** -- WP-CLI command for on-demand sync of all pending orders, useful for debugging and migration recovery.
+- **Admin dashboard widget** -- Summary of pending, shipped, and declined Kunaki orders at a glance.
+- **Retry queue visibility** -- Admin UI showing orders that failed submission with error details and a manual retry button.
+- **Structured logging** -- JSON log format with order ID indexing for easier parsing in external log aggregators.
+
+## Contributing
+
+Contributions are welcome. Please open an issue before submitting a pull request for non-trivial changes.
+
+```bash
+composer install
+composer test
+```
+
+All pull requests must pass the existing test suite. New features should include corresponding tests.
 
 ## License
 
-Proprietary. All rights reserved. Copyright &copy; 2026 Mobile Code Media.
+This program is free software: you can redistribute it and/or modify it under the terms of the GNU General Public License as published by the Free Software Foundation, either version 2 of the License, or (at your option) any later version.
+
+See [LICENSE](LICENSE) for the full text.
 
 ## Disclaimer
 

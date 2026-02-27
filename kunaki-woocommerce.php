@@ -6,8 +6,8 @@
  * Version:     1.0.2
  * Author:      MobileCodeMedia
  * Author URI:  https://mobilecodemedia.com
- * License:     Proprietary
- * License URI:
+ * License:     GPL-2.0-or-later
+ * License URI: https://www.gnu.org/licenses/gpl-2.0.html
  * Text Domain: kunaki-woocommerce
  * Domain Path: /languages
  * Requires at least: 5.8
