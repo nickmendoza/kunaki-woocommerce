@@ -8,6 +8,6 @@ phpunit.xml.dist       export-ignore
 .gitignore             export-ignore
 .phpunit.cache/        export-ignore
 .phpunit.result.cache  export-ignore
-claude-plugins.md      export-ignore
-marketing.md           export-ignore
-testing.md             export-ignore
+phpstan.neon           export-ignore
+phpstan-bootstrap.php  export-ignore
+.github/               export-ignore
