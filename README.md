@@ -1,5 +1,7 @@
 # Kunaki WooCommerce
 
+[![CI](https://github.com/nickmendoza/kunaki-woocommerce/actions/workflows/ci.yml/badge.svg)](https://github.com/nickmendoza/kunaki-woocommerce/actions/workflows/ci.yml)
+
 Reliable [Kunaki](https://kunaki.com) disc fulfillment for WooCommerce -- live shipping rates, idempotent order submission, and concurrency-safe tracking synchronization.
 
 ## Why This Plugin Exists
@@ -24,6 +26,45 @@ This plugin addresses these concerns through atomic locking, idempotent submissi
 - **Mixed Cart Handling** -- Submits only Kunaki items; defers order completion when non-Kunaki items are present.
 - **HPOS Compatible** -- Declares compatibility with WooCommerce High-Performance Order Storage.
 - **Credential Encryption** -- Passwords encrypted at rest with AES-256-GCM.
+
+## Requirements
+
+- WordPress 5.8+
+- WooCommerce 6.0+
+- PHP 7.4+ with OpenSSL extension
+
+## Installation
+
+1. Download the latest release ZIP from GitHub.
+2. In WordPress, go to **Plugins > Add New > Upload Plugin** and upload the ZIP.
+3. Activate the plugin.
+4. Navigate to **WooCommerce > Settings > Kunaki** and enter your Kunaki publisher email and password. Set mode to **Test** for development or **Live** for production.
+5. Under **WooCommerce > Settings > Shipping > Shipping Zones**, add "Kunaki Shipping" as a shipping method to the appropriate zone(s).
+6. Edit any WooCommerce product and enter its Kunaki Product ID in the General tab.
+
+### Screenshots
+
+**Settings** -- Configure credentials, mode, sync interval, and debug logging under WooCommerce > Settings > Kunaki.
+
+![Kunaki Settings](assets/screenshots/settings.png)
+
+**Shipping Zone** -- Add Kunaki Shipping as a method in any WooCommerce shipping zone for live rates at checkout.
+
+![Kunaki Shipping Zone](assets/screenshots/shipping.png)
+
+**Product Linking** -- Enter the 10-character Kunaki Product ID on any product's General tab.
+
+![Kunaki Product ID](assets/screenshots/simple-product.png)
+
+### Settings
+
+| Setting | Description |
+|---------|-------------|
+| Kunaki Email | Your Kunaki publisher account email |
+| Password | Your Kunaki account password (encrypted at rest) |
+| Mode | `Test` (no real orders manufactured) or `Live` (production) |
+| Sync Interval | How often to poll Kunaki for status updates (default: 15 min, range: 5--1440 min) |
+| Debug Logging | Log full API requests/responses (credentials redacted) to WooCommerce > Status > Logs |
 
 ## Architecture Overview
 
@@ -136,31 +177,6 @@ composer test -- tests/Unit/APIClientTest.php
 composer test -- --filter "shipped"
 ```
 
-## Installation
-
-1. Download the latest release ZIP from GitHub.
-2. In WordPress, go to **Plugins > Add New > Upload Plugin** and upload the ZIP.
-3. Activate the plugin.
-4. Navigate to **WooCommerce > Settings > Kunaki** and enter your Kunaki publisher email and password. Set mode to **Test** for development or **Live** for production.
-5. Under **WooCommerce > Settings > Shipping > Shipping Zones**, add "Kunaki Shipping" as a shipping method to the appropriate zone(s).
-6. Edit any WooCommerce product and enter its Kunaki Product ID in the General tab.
-
-### Settings
-
-| Setting | Description |
-|---------|-------------|
-| Kunaki Email | Your Kunaki publisher account email |
-| Password | Your Kunaki account password (encrypted at rest) |
-| Mode | `Test` (no real orders manufactured) or `Live` (production) |
-| Sync Interval | How often to poll Kunaki for status updates (default: 15 min, range: 5--1440 min) |
-| Debug Logging | Log full API requests/responses (credentials redacted) to WooCommerce > Status > Logs |
-
-## Requirements
-
-- WordPress 5.8+
-- WooCommerce 6.0+
-- PHP 7.4+ with OpenSSL extension
-
 ## Roadmap
 
 These are planned or under consideration. No guarantees on timeline.
@@ -186,7 +202,7 @@ All pull requests must pass the existing test suite. New features should include
 
 This program is free software: you can redistribute it and/or modify it under the terms of the GNU General Public License as published by the Free Software Foundation, either version 2 of the License, or (at your option) any later version.
 
-See [LICENSE](LICENSE) for the full text.
+See the [GNU General Public License v2.0](https://www.gnu.org/licenses/gpl-2.0.html) for the full text.
 
 ## Disclaimer
 
