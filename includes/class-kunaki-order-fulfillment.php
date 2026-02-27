@@ -194,11 +194,19 @@ class Kunaki_Order_Fulfillment {
 			} catch ( \Throwable $_ ) {
 				// Last resort: write a durable marker directly to wp_options so
 				// the order is never resubmitted, even after the lock expires.
-				$wpdb->query( $wpdb->prepare(
+				$marker_written = $wpdb->query( $wpdb->prepare(
 					"INSERT IGNORE INTO {$wpdb->options} (option_name, option_value, autoload) VALUES (%s, %s, 'no')",
 					'_kunaki_submitted_' . $order_id,
 					$result
 				) );
+				if ( ! $marker_written ) {
+					// Nothing persisted — keep the lock so the order can't be
+					// resubmitted until it expires and someone intervenes.
+					Kunaki_Logger::error(
+						"Order #{$order_id}: CATASTROPHIC — Could not write durable marker. Lock retained to prevent duplicate submission."
+					);
+					return;
+				}
 			}
 			$wpdb->delete( $wpdb->options, array( 'option_name' => $lock_option ) );
 			Kunaki_Logger::error(
