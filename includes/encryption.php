@@ -17,9 +17,10 @@ if ( ! function_exists( 'kunaki_wc_encrypt_password' ) ) {
 			return $value;
 		}
 		$key = hash( 'sha256', wp_salt( 'auth' ), true );
-		$iv  = openssl_random_pseudo_bytes( openssl_cipher_iv_length( 'aes-256-cbc' ) );
+		$iv  = openssl_random_pseudo_bytes( 12 ); // GCM uses 12-byte nonce.
+		$tag = '';
 
-		$encrypted = openssl_encrypt( $value, 'aes-256-cbc', $key, OPENSSL_RAW_DATA, $iv );
+		$encrypted = openssl_encrypt( $value, 'aes-256-gcm', $key, OPENSSL_RAW_DATA, $iv, $tag );
 		if ( false === $encrypted ) {
 			return $value;
 		}
@@ -28,7 +29,7 @@ if ( ! function_exists( 'kunaki_wc_encrypt_password' ) ) {
 		delete_option( 'kunaki_wc_decrypt_failed' );
 
 		// phpcs:ignore WordPress.PHP.DiscouragedPHPFunctions.obfuscation_base64_encode
-		return base64_encode( $iv . $encrypted );
+		return base64_encode( $iv . $tag . $encrypted );
 	}
 
 	function kunaki_wc_decrypt_password( $value ) {
@@ -40,24 +41,44 @@ if ( ! function_exists( 'kunaki_wc_encrypt_password' ) ) {
 		if ( false === $data ) {
 			return $value;
 		}
-		$iv_length = openssl_cipher_iv_length( 'aes-256-cbc' );
-		if ( strlen( $data ) <= $iv_length ) {
+
+		// Too short to be any encrypted format — likely a plaintext password.
+		if ( strlen( $data ) <= 16 ) {
 			return $value;
 		}
-		$iv        = substr( $data, 0, $iv_length );
-		$encrypted = substr( $data, $iv_length );
-		$key       = hash( 'sha256', wp_salt( 'auth' ), true );
 
-		$decrypted = openssl_decrypt( $encrypted, 'aes-256-cbc', $key, OPENSSL_RAW_DATA, $iv );
-		if ( false === $decrypted ) {
-			// Flag the failure so an admin notice can be shown.
-			update_option( 'kunaki_wc_decrypt_failed', 'yes', 'no' );
+		$key = hash( 'sha256', wp_salt( 'auth' ), true );
 
-			if ( function_exists( 'wc_get_logger' ) ) {
-				wc_get_logger()->error( 'Failed to decrypt Kunaki password. Auth salts may have changed.', array( 'source' => 'kunaki-woocommerce' ) );
+		// Try AES-256-GCM first (current format: 12-byte IV + 16-byte tag + ciphertext).
+		if ( strlen( $data ) > 28 ) {
+			$iv        = substr( $data, 0, 12 );
+			$tag       = substr( $data, 12, 16 );
+			$encrypted = substr( $data, 28 );
+
+			$decrypted = openssl_decrypt( $encrypted, 'aes-256-gcm', $key, OPENSSL_RAW_DATA, $iv, $tag );
+			if ( false !== $decrypted ) {
+				return $decrypted;
 			}
-			return '';
 		}
-		return $decrypted;
+
+		// Legacy fallback: AES-256-CBC (16-byte IV + ciphertext, no tag).
+		$cbc_iv_length = 16;
+		if ( strlen( $data ) > $cbc_iv_length ) {
+			$iv        = substr( $data, 0, $cbc_iv_length );
+			$encrypted = substr( $data, $cbc_iv_length );
+
+			$decrypted = openssl_decrypt( $encrypted, 'aes-256-cbc', $key, OPENSSL_RAW_DATA, $iv );
+			if ( false !== $decrypted ) {
+				return $decrypted;
+			}
+		}
+
+		// Both failed — flag for admin notice.
+		update_option( 'kunaki_wc_decrypt_failed', 'yes', 'no' );
+
+		if ( function_exists( 'wc_get_logger' ) ) {
+			wc_get_logger()->error( 'Failed to decrypt Kunaki password. Auth salts may have changed.', array( 'source' => 'kunaki-woocommerce' ) );
+		}
+		return '';
 	}
 }

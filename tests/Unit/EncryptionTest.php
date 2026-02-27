@@ -30,9 +30,7 @@ class EncryptionTest extends KunakiTestCase {
 	}
 
 	public function test_short_data_returns_original() {
-		Functions\when( 'wp_salt' )->justReturn( 'test-salt' );
-
-		// Valid base64 but decoded data is shorter than AES-256-CBC IV (16 bytes).
+		// Valid base64 but decoded data is too short for either GCM or CBC format.
 		$short = base64_encode( 'short' );
 		$this->assertSame( $short, kunaki_wc_decrypt_password( $short ) );
 	}
@@ -63,6 +61,19 @@ class EncryptionTest extends KunakiTestCase {
 			->with( 'kunaki_wc_decrypt_failed' );
 
 		kunaki_wc_encrypt_password( 'NewPassword' );
+	}
+
+	public function test_legacy_cbc_value_can_be_decrypted() {
+		Functions\when( 'wp_salt' )->justReturn( 'test-salt-for-legacy' );
+
+		// Encrypt using the old AES-256-CBC format (16-byte IV + ciphertext).
+		$key       = hash( 'sha256', 'test-salt-for-legacy', true );
+		$iv        = openssl_random_pseudo_bytes( 16 );
+		$encrypted = openssl_encrypt( 'LegacyPassword', 'aes-256-cbc', $key, OPENSSL_RAW_DATA, $iv );
+		// phpcs:ignore WordPress.PHP.DiscouragedPHPFunctions.obfuscation_base64_encode
+		$stored = base64_encode( $iv . $encrypted );
+
+		$this->assertSame( 'LegacyPassword', kunaki_wc_decrypt_password( $stored ) );
 	}
 
 }
