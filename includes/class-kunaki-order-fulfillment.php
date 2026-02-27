@@ -33,9 +33,29 @@ class Kunaki_Order_Fulfillment {
 			return;
 		}
 
+		// Fallback check: durable marker written when save_meta_data() also failed.
+		global $wpdb;
+		$fallback_option = '_kunaki_submitted_' . $order_id;
+		$fallback_value  = $wpdb->get_var( $wpdb->prepare(
+			"SELECT option_value FROM {$wpdb->options} WHERE option_name = %s",
+			$fallback_option
+		) );
+		if ( $fallback_value ) {
+			Kunaki_Logger::info( "Order #{$order_id}: Found fallback submitted marker (Kunaki ID: {$fallback_value}), restoring meta." );
+			$order->update_meta_data( self::META_KUNAKI_ORDER_ID, $fallback_value );
+			$order->update_meta_data( self::META_KUNAKI_SUBMITTED, 'yes' );
+			try {
+				$order->save();
+			} catch ( \Throwable $_ ) {
+				// Still can't save — leave the marker for the next attempt.
+				return;
+			}
+			$wpdb->delete( $wpdb->options, array( 'option_name' => $fallback_option ) );
+			return;
+		}
+
 		// Acquire an atomic lock to prevent concurrent submissions.
 		// Uses a single row in wp_options with the expiry timestamp as the value.
-		global $wpdb;
 		$lock_option = '_kunaki_lock_' . $order_id;
 		$lock_expiry = time() + 5 * MINUTE_IN_SECONDS;
 
@@ -171,10 +191,16 @@ class Kunaki_Order_Fulfillment {
 			$order->update_meta_data( self::META_KUNAKI_SUBMITTED, 'yes' );
 			try {
 				$order->save_meta_data();
-			} catch ( \Throwable $_ ) { // phpcs:ignore Generic.CodeAnalysis.EmptyStatement.DetectedCatch
-				// Last resort: if even meta-only save fails, the lock TTL still
-				// prevents resubmission for 5 minutes while an admin investigates.
+			} catch ( \Throwable $_ ) {
+				// Last resort: write a durable marker directly to wp_options so
+				// the order is never resubmitted, even after the lock expires.
+				$wpdb->query( $wpdb->prepare(
+					"INSERT IGNORE INTO {$wpdb->options} (option_name, option_value, autoload) VALUES (%s, %s, 'no')",
+					'_kunaki_submitted_' . $order_id,
+					$result
+				) );
 			}
+			$wpdb->delete( $wpdb->options, array( 'option_name' => $lock_option ) );
 			Kunaki_Logger::error(
 				"Order #{$order_id}: CRITICAL — Kunaki order {$result} was created but order save failed: "
 				. $e->getMessage() . '. Submitted flag written directly. Manual reconciliation required.'
@@ -183,6 +209,8 @@ class Kunaki_Order_Fulfillment {
 		}
 
 		$wpdb->delete( $wpdb->options, array( 'option_name' => $lock_option ) );
+		// Clean up any fallback marker from a previous failed attempt.
+		$wpdb->delete( $wpdb->options, array( 'option_name' => '_kunaki_submitted_' . $order_id ) );
 
 		$order->add_order_note(
 			sprintf(

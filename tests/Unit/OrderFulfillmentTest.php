@@ -281,11 +281,67 @@ class OrderFulfillmentTest extends KunakiTestCase {
 		$order->shouldReceive( 'get_shipping_postcode' )->andReturn( '90210' );
 	}
 
+	public function test_double_save_failure_writes_durable_marker_and_releases_lock() {
+		// Set up wpdb with tracking from the start (can't use mock_wpdb_lock
+		// because we need to capture specific calls).
+		$query_calls  = array();
+		$delete_calls = array();
+
+		$wpdb = Mockery::mock( 'wpdb' );
+		$wpdb->options = 'wp_options';
+		$wpdb->shouldReceive( 'prepare' )->andReturnUsing( function () { return 'prepared_query'; } );
+		$wpdb->shouldReceive( 'get_var' )->andReturn( null );
+		$wpdb->shouldReceive( 'query' )->andReturnUsing( function ( $sql ) use ( &$query_calls ) {
+			$query_calls[] = $sql;
+			return 1;
+		} );
+		$wpdb->shouldReceive( 'delete' )->andReturnUsing( function ( $table, $where ) use ( &$delete_calls ) {
+			$delete_calls[] = $where;
+			return true;
+		} );
+		$GLOBALS['wpdb'] = $wpdb;
+
+		$item = Mockery::mock( 'WC_Order_Item_Product' );
+		$item->shouldReceive( 'get_product_id' )->andReturn( 42 );
+		$item->shouldReceive( 'get_quantity' )->andReturn( 1 );
+
+		$order = Mockery::mock( 'WC_Order' );
+		$order->shouldReceive( 'get_id' )->andReturn( 100 );
+		$order->shouldReceive( 'get_meta' )->with( '_kunaki_submitted' )->andReturn( '' );
+		$order->shouldReceive( 'get_items' )->andReturn( array( $item ) );
+
+		Functions\expect( 'wc_get_order' )->with( 100 )->andReturn( $order );
+		Functions\expect( 'get_post_meta' )->with( 42, '_kunaki_product_id', true )->andReturn( 'PXZZ111111' );
+		Functions\expect( 'get_option' )->zeroOrMoreTimes()->andReturn( 'no' );
+
+		$this->setup_shipping_methods_on_order( $order );
+		$this->setup_address_on_order( $order );
+
+		Functions\expect( 'wp_remote_post' )->once()
+			->andReturn( array( 'body' => '<Response><ErrorCode>0</ErrorCode><OrderId>KUN555</OrderId></Response>' ) );
+		Functions\expect( 'wp_remote_retrieve_response_code' )->andReturn( 200 );
+		Functions\expect( 'wp_remote_retrieve_body' )->andReturn(
+			'<Response><ErrorCode>0</ErrorCode><OrderId>KUN555</OrderId></Response>'
+		);
+
+		$order->shouldReceive( 'update_meta_data' )->withAnyArgs()->zeroOrMoreTimes();
+		$order->shouldReceive( 'save' )->once()->andThrow( new \RuntimeException( 'DB down' ) );
+		$order->shouldReceive( 'save_meta_data' )->once()->andThrow( new \RuntimeException( 'DB still down' ) );
+
+		$this->fulfillment->handle_order_processing( 100, $order );
+
+		// Lock acquire (DELETE + INSERT IGNORE) + durable marker INSERT = 3 query() calls.
+		$this->assertCount( 3, $query_calls, 'Expected 3 $wpdb->query() calls (lock acquire + durable marker).' );
+		// Lock should have been released via delete().
+		$this->assertNotEmpty( $delete_calls, 'Expected $wpdb->delete() to release the lock.' );
+	}
+
 	private function mock_wpdb_lock( $acquired = true ) {
 		$wpdb = Mockery::mock( 'wpdb' );
 		$wpdb->options = 'wp_options';
 		$wpdb->shouldReceive( 'prepare' )->andReturnUsing( function () { return 'prepared_query'; } );
 		$wpdb->shouldReceive( 'query' )->andReturn( $acquired ? 1 : 0 );
+		$wpdb->shouldReceive( 'get_var' )->andReturn( null );
 		$wpdb->shouldReceive( 'delete' )->andReturn( true );
 
 		$GLOBALS['wpdb'] = $wpdb;
