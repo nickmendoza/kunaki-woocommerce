@@ -24,7 +24,7 @@ if ( ! defined( 'KUNAKI_WC_PLUGIN_FILE' ) ) {
 	define( 'KUNAKI_WC_PLUGIN_FILE', dirname( __DIR__ ) . '/kunaki-woocommerce.php' );
 }
 if ( ! defined( 'KUNAKI_WC_VERSION' ) ) {
-	define( 'KUNAKI_WC_VERSION', '1.0.2' );
+	define( 'KUNAKI_WC_VERSION', '1.1.0' );
 }
 
 // ── WP_Error stub ────────────────────────────────────────────────────
