@@ -49,6 +49,7 @@ includes/
   class-kunaki-product-meta.php     → Kunaki Product ID field on products
   class-kunaki-settings.php         → WooCommerce settings tab
   class-kunaki-logger.php           → Logging wrapper
+  encryption.php                    → AES-256-GCM encryption helpers
 assets/css/
   kunaki-admin.css                  → Admin styles
 uninstall.php                       → Cleanup on plugin deletion
@@ -65,7 +66,7 @@ composer test
 
 No WordPress or WooCommerce installation required — all tests run in isolation using Brain Monkey and Mockery.
 
-68 unit tests cover the plugin's core functionality:
+69 unit tests cover the plugin's core functionality:
 
 | Area | What's tested |
 |------|---------------|
@@ -75,7 +76,7 @@ No WordPress or WooCommerce installation required — all tests run in isolation
 | Shipping Method | Rate calculation, Kunaki product filtering, transient caching, state/country handling |
 | Product Meta | ID validation (10-char alphanumeric), capability checks, column rendering |
 | Logger | Debug gating, log level routing |
-| Encryption | AES-256-CBC encrypt/decrypt round-trip, invalid input handling |
+| Encryption | AES-256-GCM encrypt/decrypt round-trip, AES-256-CBC legacy fallback, invalid input handling |
 
 To run a specific test file or filter by name, pass arguments via `composer test`:
 
