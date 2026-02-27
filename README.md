@@ -35,7 +35,7 @@ This plugin addresses these concerns through atomic locking, idempotent submissi
 
 ## Installation
 
-1. Download the "Source code (zip)" from the [latest GitHub release](https://github.com/nickmendoza/kunaki-woocommerce/releases/latest). Rename the ZIP file to `kunaki-woocommerce.zip` before uploading so WordPress uses a consistent plugin directory across updates.
+1. Download `kunaki-woocommerce-x.x.x.zip` from the [latest GitHub release](https://github.com/nickmendoza/kunaki-woocommerce/releases/latest) (under **Assets**, not the auto-generated "Source code" archives).
 2. In WordPress, go to **Plugins > Add New > Upload Plugin** and upload the ZIP.
 3. Activate the plugin.
 4. Navigate to **WooCommerce > Settings > Kunaki** and enter your Kunaki publisher email and password. Set mode to **Test** for development or **Live** for production.
