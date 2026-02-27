@@ -122,16 +122,25 @@ class ShippingMethodTest extends KunakiTestCase {
 		$this->assertEmpty( $shipping->get_rates_added() );
 	}
 
-	public function test_empty_postcode_yields_no_rates() {
+	public function test_empty_postcode_still_queries_api() {
 		Functions\when( 'get_post_meta' )->justReturn( 'PXZZ111111' );
+		Functions\expect( 'get_transient' )->once()->andReturn( false );
+		Functions\expect( 'set_transient' )->once();
 		$this->mock_wc_countries();
+
+		$xml = '<Response><ErrorCode>0</ErrorCode>
+			<Option><Description>Standard</Description><DeliveryTime>10 days</DeliveryTime><Price>7.00</Price></Option>
+		</Response>';
+		Functions\expect( 'wp_remote_post' )->once()->andReturn( array( 'body' => $xml ) );
+		Functions\expect( 'wp_remote_retrieve_response_code' )->andReturn( 200 );
+		Functions\expect( 'wp_remote_retrieve_body' )->andReturn( $xml );
 
 		$shipping = new WC_Shipping_Kunaki();
 		$shipping->calculate_shipping( $this->build_package(
 			array( array( 'product_id' => 10, 'quantity' => 1 ) ), 'US', 'CA', ''
 		) );
 
-		$this->assertEmpty( $shipping->get_rates_added() );
+		$this->assertCount( 1, $shipping->get_rates_added() );
 	}
 
 	public function test_non_us_ca_sends_empty_state() {

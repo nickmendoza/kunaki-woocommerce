@@ -78,7 +78,7 @@ class WC_Shipping_Kunaki extends WC_Shipping_Method {
 			: '';
 		$postal_code  = $package['destination']['postcode'];
 
-		if ( empty( $country ) || empty( $postal_code ) ) {
+		if ( empty( $country ) ) {
 			return;
 		}
 
