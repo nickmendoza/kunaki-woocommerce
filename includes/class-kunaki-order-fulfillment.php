@@ -252,16 +252,12 @@ class Kunaki_Order_Fulfillment {
 		$order->update_meta_data( self::META_FULFILLMENT_FAILED, gmdate( 'c' ) );
 		$order->update_meta_data( self::META_FULFILLMENT_ATTEMPTS, $attempts + 1 );
 		try {
-			$order->save();
+			$order->save_meta_data();
 		} catch ( \Throwable $e ) {
-			Kunaki_Logger::warning( "Order #{$order->get_id()}: Failed to persist failure meta: " . $e->getMessage() );
-			try {
-				$order->save_meta_data();
-			} catch ( \Throwable $_ ) {
-				Kunaki_Logger::error(
-					"Order #{$order->get_id()}: Failed to persist failure meta via fallback. Order requires manual intervention."
-				);
-			}
+			Kunaki_Logger::error(
+				"Order #{$order->get_id()}: Failed to persist failure meta: " . $e->getMessage()
+				. '. Order requires manual intervention.'
+			);
 		}
 
 		try {
@@ -328,6 +324,16 @@ class Kunaki_Order_Fulfillment {
 				}
 				Kunaki_Logger::info( "Order #{$order->get_id()}: Max retries ({$max_retries}) exhausted. Requires manual intervention." );
 				continue;
+			}
+
+			// Linear backoff: wait $attempts * 15 minutes since the last failure.
+			$failed_at = $order->get_meta( self::META_FULFILLMENT_FAILED );
+			if ( $failed_at ) {
+				$elapsed = time() - strtotime( $failed_at );
+				$backoff = $attempts * 15 * MINUTE_IN_SECONDS;
+				if ( $elapsed < $backoff ) {
+					continue;
+				}
 			}
 
 			$order_id = $order->get_id();
