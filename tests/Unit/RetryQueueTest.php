@@ -223,16 +223,14 @@ class RetryQueueTest extends KunakiTestCase {
 		Functions\expect( 'check_ajax_referer' )->once()->with( 'kunaki_retry_order', 'nonce' );
 		Functions\expect( 'current_user_can' )->once()->with( 'manage_woocommerce' )->andReturn( false );
 
-		$response = null;
-		Functions\expect( 'wp_send_json_error' )->once()->andReturnUsing( function ( $data ) use ( &$response ) {
-			$response = $data;
+		$test = $this;
+		Functions\expect( 'wp_send_json_error' )->once()->andReturnUsing( function ( $data ) use ( $test ) {
+			$test->assertSame( 'Permission denied.', $data['message'] );
 			throw new \RuntimeException( 'wp_die' );
 		} );
 
 		$this->expectException( \RuntimeException::class );
 		$retry_queue->ajax_retry_order();
-
-		$this->assertSame( 'Permission denied.', $response['message'] );
 	}
 
 	public function test_ajax_rejects_missing_order_id() {
@@ -242,16 +240,14 @@ class RetryQueueTest extends KunakiTestCase {
 		Functions\expect( 'check_ajax_referer' )->once()->with( 'kunaki_retry_order', 'nonce' );
 		Functions\expect( 'current_user_can' )->once()->with( 'manage_woocommerce' )->andReturn( true );
 
-		$response = null;
-		Functions\expect( 'wp_send_json_error' )->once()->andReturnUsing( function ( $data ) use ( &$response ) {
-			$response = $data;
+		$test = $this;
+		Functions\expect( 'wp_send_json_error' )->once()->andReturnUsing( function ( $data ) use ( $test ) {
+			$test->assertSame( 'Invalid order ID.', $data['message'] );
 			throw new \RuntimeException( 'wp_die' );
 		} );
 
 		$this->expectException( \RuntimeException::class );
 		$retry_queue->ajax_retry_order();
-
-		$this->assertSame( 'Invalid order ID.', $response['message'] );
 	}
 
 	public function test_ajax_rejects_non_numeric_order_id() {
@@ -260,16 +256,15 @@ class RetryQueueTest extends KunakiTestCase {
 
 		Functions\expect( 'check_ajax_referer' )->once()->with( 'kunaki_retry_order', 'nonce' );
 		Functions\expect( 'current_user_can' )->once()->with( 'manage_woocommerce' )->andReturn( true );
-		$response = null;
-		Functions\expect( 'wp_send_json_error' )->once()->andReturnUsing( function ( $data ) use ( &$response ) {
-			$response = $data;
+
+		$test = $this;
+		Functions\expect( 'wp_send_json_error' )->once()->andReturnUsing( function ( $data ) use ( $test ) {
+			$test->assertSame( 'Invalid order ID.', $data['message'] );
 			throw new \RuntimeException( 'wp_die' );
 		} );
 
 		$this->expectException( \RuntimeException::class );
 		$retry_queue->ajax_retry_order();
-
-		$this->assertSame( 'Invalid order ID.', $response['message'] );
 	}
 
 	public function test_ajax_returns_error_from_prepare_for_retry() {
@@ -280,16 +275,14 @@ class RetryQueueTest extends KunakiTestCase {
 		Functions\expect( 'current_user_can' )->once()->with( 'manage_woocommerce' )->andReturn( true );
 		Functions\expect( 'wc_get_order' )->with( 100 )->andReturn( false );
 
-		$response = null;
-		Functions\expect( 'wp_send_json_error' )->once()->andReturnUsing( function ( $data ) use ( &$response ) {
-			$response = $data;
+		$test = $this;
+		Functions\expect( 'wp_send_json_error' )->once()->andReturnUsing( function ( $data ) use ( $test ) {
+			$test->assertSame( 'Order not found.', $data['message'] );
 			throw new \RuntimeException( 'wp_die' );
 		} );
 
 		$this->expectException( \RuntimeException::class );
 		$retry_queue->ajax_retry_order();
-
-		$this->assertSame( 'Order not found.', $response['message'] );
 	}
 
 	public function test_ajax_returns_success_on_successful_retry() {
@@ -298,6 +291,7 @@ class RetryQueueTest extends KunakiTestCase {
 
 		Functions\expect( 'check_ajax_referer' )->once()->with( 'kunaki_retry_order', 'nonce' );
 		Functions\expect( 'current_user_can' )->once()->with( 'manage_woocommerce' )->andReturn( true );
+
 		$order = Mockery::mock( 'WC_Order' );
 		$order->shouldReceive( 'get_id' )->andReturn( 100 );
 		$order->shouldReceive( 'get_status' )->andReturn( 'processing' );
@@ -314,16 +308,14 @@ class RetryQueueTest extends KunakiTestCase {
 
 		$this->mock_wpdb_lock( true );
 
-		$response = null;
-		Functions\expect( 'wp_send_json_success' )->once()->andReturnUsing( function ( $data ) use ( &$response ) {
-			$response = $data;
+		$test = $this;
+		Functions\expect( 'wp_send_json_success' )->once()->andReturnUsing( function ( $data ) use ( $test ) {
+			$test->assertStringContainsString( '#100', $data['message'] );
 			throw new \RuntimeException( 'wp_die' );
 		} );
 
 		$this->expectException( \RuntimeException::class );
 		$retry_queue->ajax_retry_order();
-
-		$this->assertStringContainsString( '#100', $response['message'] );
 	}
 
 	public function test_ajax_handler_registers_on_init() {
