@@ -6,10 +6,14 @@ class Kunaki_Order_Fulfillment {
 	const META_KUNAKI_ORDER_ID      = '_kunaki_order_id';
 	const META_KUNAKI_SUBMITTED     = '_kunaki_submitted';
 	const META_KUNAKI_SHIPPING_DESC = '_kunaki_shipping_description';
+	const META_FULFILLMENT_ERROR    = '_kunaki_fulfillment_error';
+	const META_FULFILLMENT_FAILED   = '_kunaki_fulfillment_failed_at';
+	const META_FULFILLMENT_ATTEMPTS = '_kunaki_fulfillment_attempts';
 
 	public function init() {
 		add_action( 'woocommerce_order_status_processing', array( $this, 'handle_order_processing' ), 10, 2 );
 		add_action( 'woocommerce_admin_order_data_after_shipping_address', array( $this, 'display_kunaki_order_info' ) );
+		add_action( 'kunaki_wc_retry_failed_orders', array( $this, 'retry_failed_orders' ) );
 	}
 
 	/**
@@ -44,6 +48,9 @@ class Kunaki_Order_Fulfillment {
 			Kunaki_Logger::info( "Order #{$order_id}: Found fallback submitted marker (Kunaki ID: {$fallback_value}), restoring meta." );
 			$order->update_meta_data( self::META_KUNAKI_ORDER_ID, $fallback_value );
 			$order->update_meta_data( self::META_KUNAKI_SUBMITTED, 'yes' );
+			$order->delete_meta_data( self::META_FULFILLMENT_ERROR );
+			$order->delete_meta_data( self::META_FULFILLMENT_FAILED );
+			$order->delete_meta_data( self::META_FULFILLMENT_ATTEMPTS );
 			try {
 				$order->save();
 			} catch ( \Throwable $_ ) {
@@ -119,9 +126,9 @@ class Kunaki_Order_Fulfillment {
 
 		if ( empty( $shipping_description ) ) {
 			Kunaki_Logger::error( "Order #{$order_id}: No Kunaki shipping description found." );
-			$order->add_order_note(
-				__( 'Kunaki fulfillment failed: No matching Kunaki shipping method found on this order.', 'kunaki-woocommerce' ),
-				false
+			$this->record_failure(
+				$order,
+				__( 'No matching Kunaki shipping method found on this order.', 'kunaki-woocommerce' )
 			);
 			$wpdb->delete( $wpdb->options, array( 'option_name' => $lock_option ) );
 			return;
@@ -153,26 +160,19 @@ class Kunaki_Order_Fulfillment {
 		$result = $api->submit_order( $address, $shipping_description, array_values( $kunaki_products ) );
 
 		if ( is_wp_error( $result ) ) {
-			$wpdb->delete( $wpdb->options, array( 'option_name' => $lock_option ) );
 			Kunaki_Logger::error( "Order #{$order_id}: Kunaki submission failed: " . $result->get_error_message() );
-			$order->add_order_note(
-				sprintf(
-					/* translators: %s: error message */
-					__( 'Kunaki fulfillment failed: %s', 'kunaki-woocommerce' ),
-					$result->get_error_message()
-				),
-				false
-			);
+			$this->record_failure( $order, $result->get_error_message() );
+			$wpdb->delete( $wpdb->options, array( 'option_name' => $lock_option ) );
 			return;
 		}
 
 		if ( '' === $result ) {
-			$wpdb->delete( $wpdb->options, array( 'option_name' => $lock_option ) );
 			Kunaki_Logger::error( "Order #{$order_id}: Kunaki returned success but no Order ID." );
-			$order->add_order_note(
-				__( 'Kunaki fulfillment failed: API returned success but no Order ID.', 'kunaki-woocommerce' ),
-				false
+			$this->record_failure(
+				$order,
+				__( 'API returned success but no Order ID.', 'kunaki-woocommerce' )
 			);
+			$wpdb->delete( $wpdb->options, array( 'option_name' => $lock_option ) );
 			return;
 		}
 
@@ -181,6 +181,11 @@ class Kunaki_Order_Fulfillment {
 		$order->update_meta_data( self::META_KUNAKI_SUBMITTED, 'yes' );
 		$order->update_meta_data( self::META_KUNAKI_SHIPPING_DESC, $shipping_description );
 		$order->update_meta_data( '_kunaki_all_items', $has_non_kunaki ? 'no' : 'yes' );
+
+		// Clear any failure meta from previous attempts.
+		$order->delete_meta_data( self::META_FULFILLMENT_ERROR );
+		$order->delete_meta_data( self::META_FULFILLMENT_FAILED );
+		$order->delete_meta_data( self::META_FULFILLMENT_ATTEMPTS );
 
 		try {
 			$order->save();
@@ -230,6 +235,93 @@ class Kunaki_Order_Fulfillment {
 		);
 
 		Kunaki_Logger::info( "Order #{$order_id}: Submitted to Kunaki, Kunaki Order ID: {$result}" );
+	}
+
+	/**
+	 * Record a structured failure on the order.
+	 *
+	 * @param WC_Order $order         WooCommerce order.
+	 * @param string   $error_message Human-readable error description.
+	 */
+	private function record_failure( $order, $error_message ) {
+		$attempts = (int) $order->get_meta( self::META_FULFILLMENT_ATTEMPTS );
+		$order->update_meta_data( self::META_FULFILLMENT_ERROR, $error_message );
+		$order->update_meta_data( self::META_FULFILLMENT_FAILED, gmdate( 'c' ) );
+		$order->update_meta_data( self::META_FULFILLMENT_ATTEMPTS, $attempts + 1 );
+		try {
+			$order->save();
+		} catch ( \Throwable $_ ) {
+			// Meta didn't persist — next attempt will try again.
+		}
+
+		try {
+			$order->add_order_note(
+				sprintf(
+					/* translators: %s: error message */
+					__( 'Kunaki fulfillment failed: %s', 'kunaki-woocommerce' ),
+					$error_message
+				),
+				false
+			);
+		} catch ( \Throwable $_ ) {
+			// Note didn't persist — not worth leaking the caller's lock.
+		}
+	}
+
+	/**
+	 * Cron handler: retry orders that failed submission and haven't exceeded max retries.
+	 */
+	public function retry_failed_orders() {
+		$max_retries = absint( get_option( 'kunaki_wc_max_retries', 3 ) );
+		if ( $max_retries < 1 ) {
+			$max_retries = 3;
+		}
+
+		Kunaki_Logger::info( 'Starting failed order retry (max retries: ' . $max_retries . ').' );
+
+		$orders = wc_get_orders( array(
+			'status'     => array( 'processing' ),
+			'meta_query' => array(
+				array(
+					'key'     => self::META_FULFILLMENT_ERROR,
+					'compare' => 'EXISTS',
+				),
+				array(
+					'key'     => self::META_KUNAKI_SUBMITTED,
+					'compare' => 'NOT EXISTS',
+				),
+			),
+			'limit'   => 50,
+			'orderby' => 'date',
+			'order'   => 'ASC',
+		) );
+
+		if ( empty( $orders ) ) {
+			Kunaki_Logger::debug( 'No failed orders to retry.' );
+			return;
+		}
+
+		$retried = 0;
+
+		foreach ( $orders as $order ) {
+			$attempts = (int) $order->get_meta( self::META_FULFILLMENT_ATTEMPTS );
+			if ( $attempts >= $max_retries ) {
+				continue;
+			}
+
+			$order_id = $order->get_id();
+			Kunaki_Logger::info( "Order #{$order_id}: Retrying submission (attempt " . ( $attempts + 1 ) . " of {$max_retries})." );
+
+			try {
+				$this->handle_order_processing( $order_id, $order );
+			} catch ( \Throwable $e ) {
+				Kunaki_Logger::error( "Order #{$order_id}: Retry failed with exception: " . $e->getMessage() );
+			}
+
+			$retried++;
+		}
+
+		Kunaki_Logger::info( "Retry complete. Attempted {$retried} order(s)." );
 	}
 
 	/**

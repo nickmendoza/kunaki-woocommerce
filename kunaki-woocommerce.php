@@ -116,14 +116,20 @@ add_action( 'plugins_loaded', function () {
 add_action( 'update_option_kunaki_wc_sync_interval', function () {
 	wp_clear_scheduled_hook( 'kunaki_wc_sync_order_status' );
 	wp_schedule_event( time(), 'kunaki_sync_interval', 'kunaki_wc_sync_order_status' );
+	wp_clear_scheduled_hook( 'kunaki_wc_retry_failed_orders' );
+	wp_schedule_event( time() + 60, 'kunaki_sync_interval', 'kunaki_wc_retry_failed_orders' );
 } );
 
 // Migrate cron from old schedule name (kunaki_every_15_minutes → kunaki_sync_interval).
+// Also auto-schedule retry cron for existing installs that update without deactivating.
 add_action( 'init', function () {
 	$scheduled = wp_get_schedule( 'kunaki_wc_sync_order_status' );
 	if ( 'kunaki_every_15_minutes' === $scheduled ) {
 		wp_clear_scheduled_hook( 'kunaki_wc_sync_order_status' );
 		wp_schedule_event( time(), 'kunaki_sync_interval', 'kunaki_wc_sync_order_status' );
+	}
+	if ( ! wp_next_scheduled( 'kunaki_wc_retry_failed_orders' ) ) {
+		wp_schedule_event( time() + 60, 'kunaki_sync_interval', 'kunaki_wc_retry_failed_orders' );
 	}
 } );
 
@@ -132,9 +138,13 @@ register_activation_hook( __FILE__, function () {
 	if ( ! wp_next_scheduled( 'kunaki_wc_sync_order_status' ) ) {
 		wp_schedule_event( time(), 'kunaki_sync_interval', 'kunaki_wc_sync_order_status' );
 	}
+	if ( ! wp_next_scheduled( 'kunaki_wc_retry_failed_orders' ) ) {
+		wp_schedule_event( time() + 60, 'kunaki_sync_interval', 'kunaki_wc_retry_failed_orders' );
+	}
 } );
 
 // Deactivation: unschedule cron.
 register_deactivation_hook( __FILE__, function () {
 	wp_clear_scheduled_hook( 'kunaki_wc_sync_order_status' );
+	wp_clear_scheduled_hook( 'kunaki_wc_retry_failed_orders' );
 } );
