@@ -505,18 +505,22 @@ class OrderFulfillmentTest extends KunakiTestCase {
 	public function test_retry_cron_skips_order_at_max_attempts() {
 		$order = Mockery::mock( 'WC_Order' );
 		$order->shouldReceive( 'get_id' )->andReturn( 100 );
-		$order->shouldReceive( 'get_meta' )->with( '_kunaki_fulfillment_attempts' )->andReturn( '4' );
+		$order->shouldReceive( 'get_meta' )->with( '_kunaki_fulfillment_attempts' )->andReturn( '3' );
 
-		// Should never attempt submission (4 > 3: initial + 3 retries exhausted).
+		// Should never attempt submission (3 >= 3: exhausted).
 		$order->shouldNotReceive( 'get_items' );
 
-		// Should mark exhausted and save.
+		// Should mark exhausted, add order note, and save.
 		$order->shouldReceive( 'update_meta_data' )->with( '_kunaki_fulfillment_exhausted', 'yes' )->once();
 		$order->shouldReceive( 'save' )->once();
+		$order->shouldReceive( 'add_order_note' )
+			->once()->with( Mockery::pattern( '/retries exhausted/' ), false );
 
 		Functions\expect( 'wc_get_orders' )->once()->andReturn( array( $order ) );
 		Functions\expect( 'get_option' )->with( 'kunaki_wc_max_retries', 3 )->andReturn( '3' );
 		Functions\expect( 'get_option' )->zeroOrMoreTimes()->andReturn( 'no' );
+
+		$this->mock_wpdb_recovery();
 
 		$this->fulfillment->retry_failed_orders();
 	}
@@ -573,6 +577,8 @@ class OrderFulfillmentTest extends KunakiTestCase {
 		Functions\expect( 'get_option' )->with( 'kunaki_wc_max_retries', 3 )->andReturn( '3' );
 		Functions\expect( 'get_option' )->zeroOrMoreTimes()->andReturn( 'no' );
 
+		$this->mock_wpdb_recovery();
+
 		$this->fulfillment->retry_failed_orders();
 	}
 
@@ -603,6 +609,8 @@ class OrderFulfillmentTest extends KunakiTestCase {
 		Functions\expect( 'wc_get_orders' )->once()->andReturn( array() );
 		Functions\expect( 'get_option' )->with( 'kunaki_wc_max_retries', 3 )->andReturn( '3' );
 		Functions\expect( 'get_option' )->zeroOrMoreTimes()->andReturn( 'no' );
+
+		$this->mock_wpdb_recovery();
 
 		$this->fulfillment->retry_failed_orders();
 	}
@@ -709,18 +717,87 @@ class OrderFulfillmentTest extends KunakiTestCase {
 	public function test_retry_cron_respects_max_retries_setting() {
 		$order = Mockery::mock( 'WC_Order' );
 		$order->shouldReceive( 'get_id' )->andReturn( 100 );
-		$order->shouldReceive( 'get_meta' )->with( '_kunaki_fulfillment_attempts' )->andReturn( '6' );
+		$order->shouldReceive( 'get_meta' )->with( '_kunaki_fulfillment_attempts' )->andReturn( '5' );
 
-		// With max_retries=5, attempts=6 > 5 means exhausted.
+		// With max_retries=5, attempts=5 >= 5 means exhausted.
 		$order->shouldNotReceive( 'get_items' );
 		$order->shouldReceive( 'update_meta_data' )->with( '_kunaki_fulfillment_exhausted', 'yes' )->once();
 		$order->shouldReceive( 'save' )->once();
+		$order->shouldReceive( 'add_order_note' )
+			->once()->with( Mockery::pattern( '/retries exhausted/' ), false );
 
 		Functions\expect( 'wc_get_orders' )->once()->andReturn( array( $order ) );
 		Functions\expect( 'get_option' )->with( 'kunaki_wc_max_retries', 3 )->andReturn( '5' );
 		Functions\expect( 'get_option' )->zeroOrMoreTimes()->andReturn( 'no' );
 
+		$this->mock_wpdb_recovery();
+
 		$this->fulfillment->retry_failed_orders();
+	}
+
+	public function test_recover_orphaned_failure_restores_meta() {
+		$order = Mockery::mock( 'WC_Order' );
+		$order->shouldReceive( 'get_id' )->andReturn( 100 );
+		$order->shouldReceive( 'get_meta' )->with( '_kunaki_fulfillment_attempts' )->andReturn( '' );
+		$order->shouldReceive( 'update_meta_data' )
+			->with( '_kunaki_fulfillment_error', 'Connection timed out' )->once();
+		$order->shouldReceive( 'update_meta_data' )
+			->with( '_kunaki_fulfillment_attempts', 1 )->once();
+		$order->shouldReceive( 'save_meta_data' )->once();
+
+		$marker = (object) array(
+			'option_name'  => '_kunaki_failed_100',
+			'option_value' => 'Connection timed out',
+		);
+
+		$wpdb = Mockery::mock( 'wpdb' );
+		$wpdb->options = 'wp_options';
+		$wpdb->shouldReceive( 'get_results' )->once()->andReturn( array( $marker ) );
+		$wpdb->shouldReceive( 'delete' )
+			->with( 'wp_options', array( 'option_name' => '_kunaki_failed_100' ) )->once();
+		$GLOBALS['wpdb'] = $wpdb;
+
+		Functions\expect( 'wc_get_order' )->with( 100 )->andReturn( $order );
+		Functions\expect( 'wc_get_orders' )->once()->andReturn( array() );
+		Functions\expect( 'get_option' )->with( 'kunaki_wc_max_retries', 3 )->andReturn( '3' );
+		Functions\expect( 'get_option' )->zeroOrMoreTimes()->andReturn( 'no' );
+
+		$this->fulfillment->retry_failed_orders();
+	}
+
+	public function test_record_failure_writes_durable_marker_on_save_throw() {
+		$order = $this->create_full_order_mock( 'PXZZ111111' );
+
+		Functions\expect( 'wp_remote_post' )->once()
+			->andReturn( new \WP_Error( 'timeout', 'Connection timed out' ) );
+		Functions\expect( 'get_option' )->zeroOrMoreTimes()->andReturn( 'no' );
+
+		$order->shouldReceive( 'get_meta' )->with( '_kunaki_fulfillment_attempts' )->andReturn( '' );
+		$order->shouldReceive( 'update_meta_data' )->withAnyArgs()->zeroOrMoreTimes();
+		$order->shouldReceive( 'save_meta_data' )->once()->andThrow( new \RuntimeException( 'DB down' ) );
+		$order->shouldReceive( 'add_order_note' )->zeroOrMoreTimes();
+
+		$queries = array();
+		$wpdb = Mockery::mock( 'wpdb' );
+		$wpdb->options = 'wp_options';
+		$wpdb->shouldReceive( 'prepare' )->andReturnUsing( function () { return 'prepared_query'; } );
+		$wpdb->shouldReceive( 'get_var' )->andReturn( null );
+		$wpdb->shouldReceive( 'query' )->andReturnUsing( function ( $q ) use ( &$queries ) {
+			$queries[] = $q;
+			return 1;
+		} );
+		$wpdb->shouldReceive( 'delete' )->andReturn( true );
+		$GLOBALS['wpdb'] = $wpdb;
+
+		Functions\expect( 'wc_get_order' )->with( 100 )->andReturn( $order );
+
+		$this->fulfillment->handle_order_processing( 100, $order );
+
+		// The durable marker query should contain '_kunaki_failed_100'.
+		$this->assertTrue(
+			count( $queries ) > 0,
+			'At least one query should have been executed (including the durable failure marker).'
+		);
 	}
 
 	private function mock_wpdb_lock( $acquired = true ) {
@@ -729,7 +806,16 @@ class OrderFulfillmentTest extends KunakiTestCase {
 		$wpdb->shouldReceive( 'prepare' )->andReturnUsing( function () { return 'prepared_query'; } );
 		$wpdb->shouldReceive( 'query' )->andReturn( $acquired ? 1 : 0 );
 		$wpdb->shouldReceive( 'get_var' )->andReturn( null );
+		$wpdb->shouldReceive( 'get_results' )->andReturn( array() );
 		$wpdb->shouldReceive( 'delete' )->andReturn( true );
+
+		$GLOBALS['wpdb'] = $wpdb;
+	}
+
+	private function mock_wpdb_recovery() {
+		$wpdb = Mockery::mock( 'wpdb' );
+		$wpdb->options = 'wp_options';
+		$wpdb->shouldReceive( 'get_results' )->andReturn( array() );
 
 		$GLOBALS['wpdb'] = $wpdb;
 	}

@@ -225,8 +225,9 @@ class Kunaki_Order_Fulfillment {
 		}
 
 		$wpdb->delete( $wpdb->options, array( 'option_name' => $lock_option ) );
-		// Clean up any fallback marker from a previous failed attempt.
+		// Clean up any fallback markers from previous failed attempts.
 		$wpdb->delete( $wpdb->options, array( 'option_name' => '_kunaki_submitted_' . $order_id ) );
+		$wpdb->delete( $wpdb->options, array( 'option_name' => '_kunaki_failed_' . $order_id ) );
 
 		$order->add_order_note(
 			sprintf(
@@ -254,9 +255,16 @@ class Kunaki_Order_Fulfillment {
 		try {
 			$order->save_meta_data();
 		} catch ( \Throwable $e ) {
+			// Durable marker so retry_failed_orders() can still find this order.
+			global $wpdb;
+			$wpdb->query( $wpdb->prepare(
+				"INSERT IGNORE INTO {$wpdb->options} (option_name, option_value, autoload) VALUES (%s, %s, 'no')",
+				'_kunaki_failed_' . $order->get_id(),
+				$error_message
+			) );
 			Kunaki_Logger::error(
 				"Order #{$order->get_id()}: Failed to persist failure meta: " . $e->getMessage()
-				. '. Order requires manual intervention.'
+				. '. Wrote durable failure marker.'
 			);
 		}
 
@@ -275,6 +283,44 @@ class Kunaki_Order_Fulfillment {
 	}
 
 	/**
+	 * Restore failure meta for orders whose save_meta_data() failed in record_failure().
+	 *
+	 * These orders have a durable `_kunaki_failed_{order_id}` marker in wp_options
+	 * but no META_FULFILLMENT_ERROR on the order itself.
+	 */
+	private function recover_orphaned_failures() {
+		global $wpdb;
+		$rows = $wpdb->get_results(
+			"SELECT option_name, option_value FROM {$wpdb->options} WHERE option_name LIKE '_kunaki_failed_%'"
+		);
+
+		if ( empty( $rows ) ) {
+			return;
+		}
+
+		foreach ( $rows as $row ) {
+			$order_id = (int) str_replace( '_kunaki_failed_', '', $row->option_name );
+			$order    = wc_get_order( $order_id );
+			if ( ! $order ) {
+				$wpdb->delete( $wpdb->options, array( 'option_name' => $row->option_name ) );
+				continue;
+			}
+
+			$order->update_meta_data( self::META_FULFILLMENT_ERROR, $row->option_value );
+			$attempts = (int) $order->get_meta( self::META_FULFILLMENT_ATTEMPTS );
+			$order->update_meta_data( self::META_FULFILLMENT_ATTEMPTS, max( $attempts, 1 ) );
+			try {
+				$order->save_meta_data();
+			} catch ( \Throwable $_ ) {
+				// Still can't save — leave the marker for the next run.
+				continue;
+			}
+			$wpdb->delete( $wpdb->options, array( 'option_name' => $row->option_name ) );
+			Kunaki_Logger::info( "Order #{$order_id}: Recovered orphaned failure marker." );
+		}
+	}
+
+	/**
 	 * Cron handler: retry orders that failed submission and haven't exceeded max retries.
 	 */
 	public function retry_failed_orders() {
@@ -284,6 +330,9 @@ class Kunaki_Order_Fulfillment {
 		}
 
 		Kunaki_Logger::info( 'Starting failed order retry (max retries: ' . $max_retries . ').' );
+
+		// Recover any orders orphaned by a save_meta_data() failure in record_failure().
+		$this->recover_orphaned_failures();
 
 		$orders = wc_get_orders( array(
 			'status'     => array( 'processing' ),
@@ -315,12 +364,24 @@ class Kunaki_Order_Fulfillment {
 
 		foreach ( $orders as $order ) {
 			$attempts = (int) $order->get_meta( self::META_FULFILLMENT_ATTEMPTS );
-			if ( $attempts > $max_retries ) {
+			if ( $attempts >= $max_retries ) {
 				$order->update_meta_data( self::META_FULFILLMENT_EXHAUSTED, 'yes' );
 				try {
 					$order->save();
 				} catch ( \Throwable $_ ) {
 					// Will be caught again next cron run.
+				}
+				try {
+					$order->add_order_note(
+						sprintf(
+							/* translators: %d: max retry count */
+							__( 'Kunaki fulfillment: all %d automatic retries exhausted. Manual intervention required.', 'kunaki-woocommerce' ),
+							$max_retries
+						),
+						false
+					);
+				} catch ( \Throwable $_ ) {
+					// Best effort — log entry below is the fallback.
 				}
 				Kunaki_Logger::info( "Order #{$order->get_id()}: Max retries ({$max_retries}) exhausted. Requires manual intervention." );
 				continue;
@@ -348,7 +409,7 @@ class Kunaki_Order_Fulfillment {
 			$retried++;
 		}
 
-		Kunaki_Logger::info( "Retry complete. Attempted {$retried} order(s)." );
+		Kunaki_Logger::info( "Retry complete. Dispatched {$retried} order(s) for reprocessing." );
 	}
 
 	/**
