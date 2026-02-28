@@ -499,9 +499,9 @@ class OrderFulfillmentTest extends KunakiTestCase {
 	public function test_retry_cron_skips_order_at_max_attempts() {
 		$order = Mockery::mock( 'WC_Order' );
 		$order->shouldReceive( 'get_id' )->andReturn( 100 );
-		$order->shouldReceive( 'get_meta' )->with( '_kunaki_fulfillment_attempts' )->andReturn( '3' );
+		$order->shouldReceive( 'get_meta' )->with( '_kunaki_fulfillment_attempts' )->andReturn( '4' );
 
-		// Should never attempt submission.
+		// Should never attempt submission (4 > 3: initial + 3 retries exhausted).
 		$order->shouldNotReceive( 'get_items' );
 
 		// Should mark exhausted and save.
@@ -658,9 +658,9 @@ class OrderFulfillmentTest extends KunakiTestCase {
 	public function test_retry_cron_respects_max_retries_setting() {
 		$order = Mockery::mock( 'WC_Order' );
 		$order->shouldReceive( 'get_id' )->andReturn( 100 );
-		$order->shouldReceive( 'get_meta' )->with( '_kunaki_fulfillment_attempts' )->andReturn( '5' );
+		$order->shouldReceive( 'get_meta' )->with( '_kunaki_fulfillment_attempts' )->andReturn( '6' );
 
-		// With max_retries=5, this order should be skipped and marked exhausted.
+		// With max_retries=5, attempts=6 > 5 means exhausted.
 		$order->shouldNotReceive( 'get_items' );
 		$order->shouldReceive( 'update_meta_data' )->with( '_kunaki_fulfillment_exhausted', 'yes' )->once();
 		$order->shouldReceive( 'save' )->once();

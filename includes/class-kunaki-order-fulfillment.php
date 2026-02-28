@@ -253,8 +253,8 @@ class Kunaki_Order_Fulfillment {
 		$order->update_meta_data( self::META_FULFILLMENT_ATTEMPTS, $attempts + 1 );
 		try {
 			$order->save();
-		} catch ( \Throwable $_ ) {
-			// Meta didn't persist — next attempt will try again.
+		} catch ( \Throwable $e ) {
+			Kunaki_Logger::warning( "Order #{$order->get_id()}: Failed to persist failure meta: " . $e->getMessage() );
 		}
 
 		try {
@@ -312,7 +312,7 @@ class Kunaki_Order_Fulfillment {
 
 		foreach ( $orders as $order ) {
 			$attempts = (int) $order->get_meta( self::META_FULFILLMENT_ATTEMPTS );
-			if ( $attempts >= $max_retries ) {
+			if ( $attempts > $max_retries ) {
 				$order->update_meta_data( self::META_FULFILLMENT_EXHAUSTED, 'yes' );
 				try {
 					$order->save();
@@ -324,7 +324,7 @@ class Kunaki_Order_Fulfillment {
 			}
 
 			$order_id = $order->get_id();
-			Kunaki_Logger::info( "Order #{$order_id}: Retrying submission (attempt " . ( $attempts + 1 ) . " of {$max_retries})." );
+			Kunaki_Logger::info( "Order #{$order_id}: Retrying submission (retry {$attempts} of {$max_retries})." );
 
 			try {
 				$this->handle_order_processing( $order_id, $order );
