@@ -140,7 +140,7 @@ When the Kunaki API returns an error or the HTTP request fails, the plugin recor
 
 ### Email Duplication Prevention
 
-The status sync saves all meta and status changes via `$order->save()` before adding any customer-facing order notes. If `save()` fails, no notes are persisted and the next cron run retries from a clean state. Customer emails are only triggered after a successful save, so duplicate notifications cannot occur from failed partial updates.
+The status sync saves all meta and status changes via `$order->save()` before adding any customer-facing order notes. If `save()` fails, no notes are persisted and the next cron run retries from a clean state. To handle the crash window between a successful `save()` and `add_order_note()`, pending notes are stored in order meta atomically with the status change. If the process dies after save but before the note is sent, the next cron run detects the pending note, delivers it, and clears the flag.
 
 All critical state transitions are deterministic and replay-safe.
 
@@ -166,7 +166,7 @@ The test suite runs entirely outside WordPress. No WordPress installation, no da
 
 This isolation strategy means tests execute in seconds, run in CI without infrastructure, and validate plugin logic without conflating it with WordPress behavior.
 
-107 unit tests cover:
+115 unit tests cover:
 
 | Area | What's Validated |
 |------|-----------------|
