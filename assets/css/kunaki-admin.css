@@ -26,3 +26,17 @@
 	margin: 4px 0;
 	font-size: 13px;
 }
+
+.kunaki-error {
+	color: #dc3232;
+}
+
+.kunaki-retry-button {
+	margin-top: 8px;
+}
+
+.kunaki-retry-result {
+	display: inline-block;
+	margin-left: 8px;
+	font-weight: 600;
+}

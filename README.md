@@ -24,6 +24,7 @@ This plugin addresses these concerns through atomic locking, idempotent submissi
 - **Order Tracking** -- Cron-based polling syncs Kunaki status and emails customers their tracking number.
 - **Product Linking** -- Link any WooCommerce product to a Kunaki disc via its 10-character Product ID.
 - **Mixed Cart Handling** -- Submits only Kunaki items; defers order completion when non-Kunaki items are present.
+- **Retry Queue** -- Admin page listing failed submissions with error details, attempt counts, and one-click retry buttons. Per-order retry on the order edit page.
 - **HPOS Compatible** -- Declares compatibility with WooCommerce High-Performance Order Storage.
 - **Credential Encryption** -- Passwords encrypted at rest with AES-256-GCM.
 
@@ -68,7 +69,7 @@ This plugin addresses these concerns through atomic locking, idempotent submissi
 
 ## Architecture Overview
 
-The plugin is organized into six single-responsibility components, coordinated by a singleton orchestrator. No component performs direct SQL outside controlled locking primitives.
+The plugin is organized into seven single-responsibility components, coordinated by a singleton orchestrator. No component performs direct SQL outside controlled locking primitives.
 
 ```
 kunaki-woocommerce.php                   Bootstrap, constants, encryption filters, cron setup
@@ -78,6 +79,7 @@ includes/
   class-kunaki-shipping-method.php       WC_Shipping_Method: live rates with transient caching
   class-kunaki-order-fulfillment.php     Event-driven order submission with atomic locking
   class-kunaki-order-status-sync.php     Cron-based status polling with per-order locks
+  class-kunaki-retry-queue.php           Failed order admin page with manual retry
   class-kunaki-product-meta.php          Product editor field, validation, admin column
   class-kunaki-settings.php              WooCommerce settings tab
   class-kunaki-logger.php                Log wrapper with debug gating
@@ -153,12 +155,12 @@ The test suite runs entirely outside WordPress. No WordPress installation, no da
 
 This isolation strategy means tests execute in seconds, run in CI without infrastructure, and validate plugin logic without conflating it with WordPress behavior.
 
-80 unit tests cover:
+95 unit tests cover:
 
 | Area | What's Validated |
 |------|-----------------|
 | API Client | XML request construction, response parsing, HTTP error handling, HTML-wrapped response extraction, credential injection |
-| Order Fulfillment | Duplicate submission prevention across all four layers, atomic lock acquisition and release, meta storage, mixed cart detection, fallback marker recovery |
+| Order Fulfillment | Duplicate submission prevention across all four layers, atomic lock acquisition and release, meta storage, mixed cart detection, fallback marker recovery, failure meta recording and cleanup, retry logic |
 | Order Status Sync | SHIPPED/DECLINED/PENDING transitions, tracking info extraction, auto-completion logic for pure-Kunaki vs. mixed orders, save-before-notify ordering |
 | Shipping Method | Rate calculation, Kunaki product filtering, transient cache hit/miss, state/province handling for US/CA vs. international, country name resolution |
 | Product Meta | 10-character alphanumeric validation, capability checks, admin column rendering, safe handling of absent POST fields |
@@ -184,7 +186,6 @@ These are planned or under consideration. No guarantees on timeline.
 - **Webhook receiver** -- If Kunaki adds push notifications for status changes, replace polling with a webhook endpoint to eliminate sync latency.
 - **Bulk status sync CLI command** -- WP-CLI command for on-demand sync of all pending orders, useful for debugging and migration recovery.
 - **Admin dashboard widget** -- Summary of pending, shipped, and declined Kunaki orders at a glance.
-- **Retry queue visibility** -- Admin UI showing orders that failed submission with error details and a manual retry button.
 - **Structured logging** -- JSON log format with order ID indexing for easier parsing in external log aggregators.
 
 ## Contributing

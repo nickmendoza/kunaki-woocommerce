@@ -54,6 +54,11 @@ class OrderFulfillmentTest extends KunakiTestCase {
 		Functions\expect( 'get_option' )->zeroOrMoreTimes()->andReturn( 'no' );
 
 		$order->shouldReceive( 'get_shipping_methods' )->andReturn( array() );
+		$order->shouldReceive( 'get_meta' )->with( '_kunaki_fulfillment_attempts' )->andReturn( '' );
+		$order->shouldReceive( 'update_meta_data' )->with( '_kunaki_fulfillment_error', Mockery::type( 'string' ) )->once();
+		$order->shouldReceive( 'update_meta_data' )->with( '_kunaki_fulfillment_failed_at', Mockery::type( 'string' ) )->once();
+		$order->shouldReceive( 'update_meta_data' )->with( '_kunaki_fulfillment_attempts', 1 )->once();
+		$order->shouldReceive( 'save' )->once();
 		$order->shouldReceive( 'add_order_note' )
 			->once()->with( Mockery::pattern( '/No matching Kunaki shipping/' ), false );
 
@@ -75,6 +80,9 @@ class OrderFulfillmentTest extends KunakiTestCase {
 		$order->shouldReceive( 'update_meta_data' )->with( '_kunaki_submitted', 'yes' )->once();
 		$order->shouldReceive( 'update_meta_data' )->with( '_kunaki_shipping_description', 'USPS Priority' )->once();
 		$order->shouldReceive( 'update_meta_data' )->with( '_kunaki_all_items', 'yes' )->once();
+		$order->shouldReceive( 'delete_meta_data' )->with( '_kunaki_fulfillment_error' )->once();
+		$order->shouldReceive( 'delete_meta_data' )->with( '_kunaki_fulfillment_failed_at' )->once();
+		$order->shouldReceive( 'delete_meta_data' )->with( '_kunaki_fulfillment_attempts' )->once();
 		$order->shouldReceive( 'save' )->once();
 		$order->shouldReceive( 'add_order_note' )->with( Mockery::pattern( '/KUN999/' ), false )->once();
 
@@ -88,9 +96,13 @@ class OrderFulfillmentTest extends KunakiTestCase {
 			->andReturn( new WP_Error( 'timeout', 'Connection timed out' ) );
 		Functions\expect( 'get_option' )->zeroOrMoreTimes()->andReturn( 'no' );
 
+		$order->shouldReceive( 'get_meta' )->with( '_kunaki_fulfillment_attempts' )->andReturn( '' );
+		$order->shouldReceive( 'update_meta_data' )->with( '_kunaki_fulfillment_error', Mockery::type( 'string' ) )->once();
+		$order->shouldReceive( 'update_meta_data' )->with( '_kunaki_fulfillment_failed_at', Mockery::type( 'string' ) )->once();
+		$order->shouldReceive( 'update_meta_data' )->with( '_kunaki_fulfillment_attempts', 1 )->once();
+		$order->shouldReceive( 'save' )->once();
 		$order->shouldReceive( 'add_order_note' )
 			->once()->with( Mockery::pattern( '/Connection timed out/' ), false );
-		$order->shouldNotReceive( 'update_meta_data' );
 
 		$this->fulfillment->handle_order_processing( 100, $order );
 	}
@@ -106,6 +118,11 @@ class OrderFulfillmentTest extends KunakiTestCase {
 		);
 		Functions\expect( 'get_option' )->zeroOrMoreTimes()->andReturn( 'no' );
 
+		$order->shouldReceive( 'get_meta' )->with( '_kunaki_fulfillment_attempts' )->andReturn( '' );
+		$order->shouldReceive( 'update_meta_data' )->with( '_kunaki_fulfillment_error', Mockery::type( 'string' ) )->once();
+		$order->shouldReceive( 'update_meta_data' )->with( '_kunaki_fulfillment_failed_at', Mockery::type( 'string' ) )->once();
+		$order->shouldReceive( 'update_meta_data' )->with( '_kunaki_fulfillment_attempts', 1 )->once();
+		$order->shouldReceive( 'save' )->once();
 		$order->shouldReceive( 'add_order_note' )
 			->once()->with( Mockery::pattern( '/no Order ID/' ), false );
 
@@ -140,6 +157,7 @@ class OrderFulfillmentTest extends KunakiTestCase {
 
 		$order->shouldReceive( 'update_meta_data' )->with( '_kunaki_all_items', 'no' )->once();
 		$order->shouldReceive( 'update_meta_data' )->withAnyArgs()->zeroOrMoreTimes();
+		$order->shouldReceive( 'delete_meta_data' )->withAnyArgs()->zeroOrMoreTimes();
 		$order->shouldReceive( 'save' )->once();
 		$order->shouldReceive( 'add_order_note' )->zeroOrMoreTimes();
 
@@ -162,6 +180,7 @@ class OrderFulfillmentTest extends KunakiTestCase {
 		Functions\expect( 'get_option' )->zeroOrMoreTimes()->andReturn( 'no' );
 
 		$order->shouldReceive( 'update_meta_data' )->withAnyArgs()->zeroOrMoreTimes();
+		$order->shouldReceive( 'delete_meta_data' )->withAnyArgs()->zeroOrMoreTimes();
 		$order->shouldReceive( 'save' )->once();
 		$order->shouldReceive( 'add_order_note' )->zeroOrMoreTimes();
 
@@ -203,6 +222,7 @@ class OrderFulfillmentTest extends KunakiTestCase {
 		Functions\expect( 'get_option' )->zeroOrMoreTimes()->andReturn( 'no' );
 
 		$order->shouldReceive( 'update_meta_data' )->withAnyArgs()->zeroOrMoreTimes();
+		$order->shouldReceive( 'delete_meta_data' )->withAnyArgs()->zeroOrMoreTimes();
 		$order->shouldReceive( 'save' )->once();
 		$order->shouldReceive( 'add_order_note' )->zeroOrMoreTimes();
 
@@ -227,6 +247,9 @@ class OrderFulfillmentTest extends KunakiTestCase {
 
 		$order->shouldReceive( 'update_meta_data' )->with( '_kunaki_order_id', 'KUN555' )->once();
 		$order->shouldReceive( 'update_meta_data' )->with( '_kunaki_submitted', 'yes' )->once();
+		$order->shouldReceive( 'delete_meta_data' )->with( '_kunaki_fulfillment_error' )->once();
+		$order->shouldReceive( 'delete_meta_data' )->with( '_kunaki_fulfillment_failed_at' )->once();
+		$order->shouldReceive( 'delete_meta_data' )->with( '_kunaki_fulfillment_attempts' )->once();
 		$order->shouldReceive( 'save' )->once();
 
 		Functions\expect( 'get_option' )->zeroOrMoreTimes()->andReturn( 'no' );
@@ -247,6 +270,7 @@ class OrderFulfillmentTest extends KunakiTestCase {
 		$order->shouldReceive( 'get_meta' )->with( '_kunaki_submitted' )->andReturn( '' );
 
 		$order->shouldReceive( 'update_meta_data' )->withAnyArgs()->zeroOrMoreTimes();
+		$order->shouldReceive( 'delete_meta_data' )->withAnyArgs()->zeroOrMoreTimes();
 		$order->shouldReceive( 'save' )->once()->andThrow( new \RuntimeException( 'DB down' ) );
 
 		Functions\expect( 'get_option' )->zeroOrMoreTimes()->andReturn( 'no' );
@@ -383,6 +407,7 @@ class OrderFulfillmentTest extends KunakiTestCase {
 		);
 
 		$order->shouldReceive( 'update_meta_data' )->withAnyArgs()->zeroOrMoreTimes();
+		$order->shouldReceive( 'delete_meta_data' )->withAnyArgs()->zeroOrMoreTimes();
 		$order->shouldReceive( 'save' )->once()->andThrow( new \RuntimeException( 'DB down' ) );
 		$order->shouldReceive( 'save_meta_data' )->once()->andThrow( new \RuntimeException( 'DB still down' ) );
 
@@ -440,6 +465,7 @@ class OrderFulfillmentTest extends KunakiTestCase {
 		);
 
 		$order->shouldReceive( 'update_meta_data' )->withAnyArgs()->zeroOrMoreTimes();
+		$order->shouldReceive( 'delete_meta_data' )->withAnyArgs()->zeroOrMoreTimes();
 		$order->shouldReceive( 'save' )->once()->andThrow( new \RuntimeException( 'DB down' ) );
 		$order->shouldReceive( 'save_meta_data' )->once()->andThrow( new \RuntimeException( 'DB still down' ) );
 
