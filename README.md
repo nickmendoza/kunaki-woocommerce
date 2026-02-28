@@ -71,7 +71,7 @@ This plugin addresses these concerns through atomic locking, idempotent submissi
 
 ## Architecture Overview
 
-The plugin is organized into seven single-responsibility components, coordinated by a singleton orchestrator. No component performs direct SQL outside controlled locking primitives.
+The plugin is organized into nine single-responsibility components, coordinated by a singleton orchestrator. No component performs direct SQL outside controlled locking primitives.
 
 ```
 kunaki-woocommerce.php                   Bootstrap, constants, encryption filters, cron setup
@@ -105,7 +105,7 @@ A WP-Cron event (`kunaki_wc_sync_order_status`) runs on a configurable interval 
 
 ### Separation of Concerns
 
-The API client knows nothing about WooCommerce orders. The fulfillment handler knows nothing about cron. The status sync knows nothing about order submission. Each component is independently testable and interacts only through order meta and the API client interface.
+The API client knows nothing about WooCommerce orders. The status sync knows nothing about order submission. The fulfillment handler owns both event-driven submission and cron-based retry, but knows nothing about status polling. Each component is independently testable and interacts only through order meta and the API client interface.
 
 ## Reliability and Concurrency Guarantees
 
@@ -176,6 +176,7 @@ This isolation strategy means tests execute in seconds, run in CI without infras
 | Shipping Method | Rate calculation, Kunaki product filtering, transient cache hit/miss, state/province handling for US/CA vs. international, country name resolution |
 | Product Meta | 10-character alphanumeric validation, capability checks, admin column rendering, safe handling of absent POST fields |
 | Logger | Debug gating based on settings, log level routing |
+| Retry Queue | AJAX handler permission and input validation, `prepare_for_retry` guard clauses, admin page hook registration |
 | Encryption | AES-256-GCM round-trip, AES-256-CBC legacy fallback, invalid/corrupt input handling |
 
 ```bash
