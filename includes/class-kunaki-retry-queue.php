@@ -24,13 +24,16 @@ class Kunaki_Retry_Queue {
 			'status'       => 'processing',
 			'meta_key'     => Kunaki_Order_Fulfillment::META_FULFILLMENT_ERROR,
 			'meta_compare' => 'EXISTS',
-			'limit'        => 100,
+			'limit'        => -1,
 			'orderby'      => 'date',
 			'order'        => 'DESC',
 		) );
 
+		$count = count( $failed_orders );
+
 		echo '<div class="wrap">';
-		echo '<h1>' . esc_html__( 'Kunaki Failed Orders', 'kunaki-woocommerce' ) . '</h1>';
+		echo '<h1>' . esc_html__( 'Kunaki Failed Orders', 'kunaki-woocommerce' )
+			. ' <span class="count">(' . esc_html( $count ) . ')</span></h1>';
 
 		if ( empty( $failed_orders ) ) {
 			echo '<p>' . esc_html__( 'No failed orders found.', 'kunaki-woocommerce' ) . '</p>';

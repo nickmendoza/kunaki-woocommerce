@@ -250,14 +250,18 @@ class Kunaki_Order_Fulfillment {
 			// Meta didn't persist — next attempt will try again.
 		}
 
-		$order->add_order_note(
-			sprintf(
-				/* translators: %s: error message */
-				__( 'Kunaki fulfillment failed: %s', 'kunaki-woocommerce' ),
-				$error_message
-			),
-			false
-		);
+		try {
+			$order->add_order_note(
+				sprintf(
+					/* translators: %s: error message */
+					__( 'Kunaki fulfillment failed: %s', 'kunaki-woocommerce' ),
+					$error_message
+				),
+				false
+			);
+		} catch ( \Throwable $_ ) {
+			// Note didn't persist — not worth leaking the caller's lock.
+		}
 	}
 
 	/**
@@ -358,11 +362,13 @@ class Kunaki_Order_Fulfillment {
 				echo '<p><strong>' . esc_html__( 'Last attempt:', 'kunaki-woocommerce' ) . '</strong> '
 					. esc_html( $failed_at ) . '</p>';
 			}
-			echo '<button type="button" class="button kunaki-retry-button" data-order-id="'
-				. esc_attr( $order->get_id() ) . '">'
-				. esc_html__( 'Retry Submission', 'kunaki-woocommerce' ) . '</button>';
-			echo ' <span class="kunaki-retry-spinner spinner"></span>';
-			echo '<span class="kunaki-retry-result"></span>';
+			if ( 'processing' === $order->get_status() ) {
+				echo '<button type="button" class="button kunaki-retry-button" data-order-id="'
+					. esc_attr( $order->get_id() ) . '">'
+					. esc_html__( 'Retry Submission', 'kunaki-woocommerce' ) . '</button>';
+				echo ' <span class="kunaki-retry-spinner spinner"></span>';
+				echo '<span class="kunaki-retry-result"></span>';
+			}
 		}
 
 		echo '</div>';
