@@ -255,6 +255,13 @@ class Kunaki_Order_Fulfillment {
 			$order->save();
 		} catch ( \Throwable $e ) {
 			Kunaki_Logger::warning( "Order #{$order->get_id()}: Failed to persist failure meta: " . $e->getMessage() );
+			try {
+				$order->save_meta_data();
+			} catch ( \Throwable $_ ) {
+				Kunaki_Logger::error(
+					"Order #{$order->get_id()}: Failed to persist failure meta via fallback. Order requires manual intervention."
+				);
+			}
 		}
 
 		try {

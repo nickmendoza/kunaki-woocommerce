@@ -54,6 +54,9 @@ class OrderFulfillmentTest extends KunakiTestCase {
 		Functions\expect( 'get_option' )->zeroOrMoreTimes()->andReturn( 'no' );
 
 		$order->shouldReceive( 'get_shipping_methods' )->andReturn( array() );
+		// Missing shipping method is non-retryable — must NOT set failure meta.
+		$order->shouldNotReceive( 'update_meta_data' );
+		$order->shouldNotReceive( 'save' );
 		$order->shouldReceive( 'add_order_note' )
 			->once()->with( Mockery::pattern( '/No matching Kunaki shipping/' ), false );
 
@@ -641,6 +644,7 @@ class OrderFulfillmentTest extends KunakiTestCase {
 		$order->shouldReceive( 'get_shipping_postcode' )->andReturn( '90210' );
 		$order->shouldReceive( 'update_meta_data' )->withAnyArgs()->zeroOrMoreTimes();
 		$order->shouldReceive( 'save' )->once()->andThrow( new \RuntimeException( 'DB down' ) );
+		$order->shouldReceive( 'save_meta_data' )->once();
 		$order->shouldReceive( 'add_order_note' )->once();
 
 		Functions\expect( 'wc_get_order' )->with( 100 )->andReturn( $order );
@@ -653,6 +657,67 @@ class OrderFulfillmentTest extends KunakiTestCase {
 
 		// Lock must be released even though record_failure's save() threw.
 		$this->assertNotEmpty( $delete_calls, 'Lock must be released when record_failure save() throws.' );
+	}
+
+	public function test_record_failure_both_saves_throw_still_releases_lock() {
+		$delete_calls = array();
+
+		$wpdb = Mockery::mock( 'wpdb' );
+		$wpdb->options = 'wp_options';
+		$wpdb->shouldReceive( 'prepare' )->andReturnUsing( function () { return 'prepared_query'; } );
+		$wpdb->shouldReceive( 'get_var' )->andReturn( null );
+		$wpdb->shouldReceive( 'query' )->andReturn( 1 );
+		$wpdb->shouldReceive( 'delete' )->andReturnUsing( function ( $table, $where ) use ( &$delete_calls ) {
+			$delete_calls[] = $where;
+			return true;
+		} );
+		$GLOBALS['wpdb'] = $wpdb;
+
+		$item = Mockery::mock( 'WC_Order_Item_Product' );
+		$item->shouldReceive( 'get_product_id' )->andReturn( 42 );
+		$item->shouldReceive( 'get_quantity' )->andReturn( 1 );
+
+		$shipping_item = Mockery::mock( 'WC_Order_Item_Shipping' );
+		$shipping_item->shouldReceive( 'get_method_id' )->andReturn( 'kunaki_shipping' );
+		$shipping_item->shouldReceive( 'get_meta' )
+			->with( 'kunaki_shipping_description' )->andReturn( 'USPS Priority' );
+
+		$countries_obj = Mockery::mock( 'WC_Countries' );
+		$countries_obj->shouldReceive( 'get_countries' )->andReturn( array( 'US' => 'United States' ) );
+		$wc = Mockery::mock( 'WooCommerce' );
+		$wc->countries = $countries_obj;
+		Functions\when( 'WC' )->justReturn( $wc );
+
+		$order = Mockery::mock( 'WC_Order' );
+		$order->shouldReceive( 'get_id' )->andReturn( 100 );
+		$order->shouldReceive( 'get_meta' )->with( '_kunaki_submitted' )->andReturn( '' );
+		$order->shouldReceive( 'get_meta' )->with( '_kunaki_fulfillment_attempts' )->andReturn( '' );
+		$order->shouldReceive( 'get_items' )->andReturn( array( $item ) );
+		$order->shouldReceive( 'get_shipping_methods' )->andReturn( array( $shipping_item ) );
+		$order->shouldReceive( 'get_shipping_country' )->andReturn( 'US' );
+		$order->shouldReceive( 'get_shipping_state' )->andReturn( 'CA' );
+		$order->shouldReceive( 'get_shipping_first_name' )->andReturn( 'John' );
+		$order->shouldReceive( 'get_shipping_last_name' )->andReturn( 'Doe' );
+		$order->shouldReceive( 'get_shipping_company' )->andReturn( '' );
+		$order->shouldReceive( 'get_shipping_address_1' )->andReturn( '123 Main St' );
+		$order->shouldReceive( 'get_shipping_address_2' )->andReturn( '' );
+		$order->shouldReceive( 'get_shipping_city' )->andReturn( 'Beverly Hills' );
+		$order->shouldReceive( 'get_shipping_postcode' )->andReturn( '90210' );
+		$order->shouldReceive( 'update_meta_data' )->withAnyArgs()->zeroOrMoreTimes();
+		$order->shouldReceive( 'save' )->once()->andThrow( new \RuntimeException( 'DB down' ) );
+		$order->shouldReceive( 'save_meta_data' )->once()->andThrow( new \RuntimeException( 'DB still down' ) );
+		$order->shouldReceive( 'add_order_note' )->once();
+
+		Functions\expect( 'wc_get_order' )->with( 100 )->andReturn( $order );
+		Functions\expect( 'get_post_meta' )->with( 42, '_kunaki_product_id', true )->andReturn( 'PXZZ111111' );
+		Functions\expect( 'wp_remote_post' )->once()
+			->andReturn( new WP_Error( 'timeout', 'Connection timed out' ) );
+		Functions\expect( 'get_option' )->zeroOrMoreTimes()->andReturn( 'no' );
+
+		$this->fulfillment->handle_order_processing( 100, $order );
+
+		// Lock must be released even when both save() and save_meta_data() throw.
+		$this->assertNotEmpty( $delete_calls, 'Lock must be released when both saves throw.' );
 	}
 
 	public function test_retry_cron_respects_max_retries_setting() {
