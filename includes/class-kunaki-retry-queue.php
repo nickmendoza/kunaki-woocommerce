@@ -24,7 +24,7 @@ class Kunaki_Retry_Queue {
 			'status'       => 'processing',
 			'meta_query'   => array(
 				array( 'key' => Kunaki_Order_Fulfillment::META_FULFILLMENT_ERROR, 'compare' => 'EXISTS' ),
-				array( 'key' => Kunaki_Order_Fulfillment::META_KUNAKI_SUBMITTED, 'value' => 'yes', 'compare' => '!=' ),
+				array( 'key' => Kunaki_Order_Fulfillment::META_KUNAKI_SUBMITTED, 'compare' => 'NOT EXISTS' ),
 			),
 			'limit'        => -1,
 			'orderby'      => 'date',
