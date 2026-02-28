@@ -360,14 +360,14 @@ class Kunaki_Order_Fulfillment {
 			echo '<p><strong>' . esc_html__( 'Error:', 'kunaki-woocommerce' ) . '</strong> '
 				. esc_html( $error ) . '</p>';
 			echo '<p><strong>' . esc_html__( 'Attempts:', 'kunaki-woocommerce' ) . '</strong> '
-				. esc_html( $attempts ) . '</p>';
+				. esc_html( (string) $attempts ) . '</p>';
 			if ( $failed_at ) {
 				echo '<p><strong>' . esc_html__( 'Last attempt:', 'kunaki-woocommerce' ) . '</strong> '
 					. esc_html( $failed_at ) . '</p>';
 			}
 			if ( 'processing' === $order->get_status() ) {
 				echo '<button type="button" class="button kunaki-retry-button" data-order-id="'
-					. esc_attr( $order->get_id() ) . '">'
+					. esc_attr( (string) $order->get_id() ) . '">'
 					. esc_html__( 'Retry Submission', 'kunaki-woocommerce' ) . '</button>';
 				echo ' <span class="kunaki-retry-spinner spinner"></span>';
 				echo '<span class="kunaki-retry-result"></span>';

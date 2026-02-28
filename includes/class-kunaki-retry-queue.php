@@ -35,7 +35,7 @@ class Kunaki_Retry_Queue {
 
 		echo '<div class="wrap">';
 		echo '<h1>' . esc_html__( 'Kunaki Failed Orders', 'kunaki-woocommerce' )
-			. ' <span class="count">(' . esc_html( $count ) . ')</span></h1>';
+			. ' <span class="count">(' . esc_html( (string) $count ) . ')</span></h1>';
 
 		if ( empty( $failed_orders ) ) {
 			echo '<p>' . esc_html__( 'No failed orders found.', 'kunaki-woocommerce' ) . '</p>';
@@ -63,15 +63,15 @@ class Kunaki_Retry_Queue {
 			$failed_at = $order->get_meta( Kunaki_Order_Fulfillment::META_FULFILLMENT_FAILED );
 
 			echo '<tr>';
-			echo '<td><a href="' . esc_url( $edit_url ) . '"><strong>#' . esc_html( $order_id ) . '</strong></a></td>';
+			echo '<td><a href="' . esc_url( $edit_url ) . '"><strong>#' . esc_html( (string) $order_id ) . '</strong></a></td>';
 			$date_created = $order->get_date_created();
 			echo '<td>' . esc_html( $date_created ? $date_created->date_i18n( get_option( 'date_format' ) ) : '—' ) . '</td>';
 			echo '<td>' . esc_html( $order->get_billing_first_name() . ' ' . $order->get_billing_last_name() ) . '</td>';
 			echo '<td>' . esc_html( $error ) . '</td>';
-			echo '<td>' . esc_html( $attempts ) . '</td>';
+			echo '<td>' . esc_html( (string) $attempts ) . '</td>';
 			echo '<td>' . esc_html( $failed_at ) . '</td>';
 			echo '<td>';
-			echo '<button type="button" class="button kunaki-retry-button" data-order-id="' . esc_attr( $order_id ) . '">'
+			echo '<button type="button" class="button kunaki-retry-button" data-order-id="' . esc_attr( (string) $order_id ) . '">'
 				. esc_html__( 'Retry', 'kunaki-woocommerce' ) . '</button>';
 			echo ' <span class="spinner"></span>';
 			echo '<span class="kunaki-retry-result"></span>';
