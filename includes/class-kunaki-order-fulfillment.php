@@ -47,6 +47,9 @@ class Kunaki_Order_Fulfillment {
 			Kunaki_Logger::info( "Order #{$order_id}: Found fallback submitted marker (Kunaki ID: {$fallback_value}), restoring meta." );
 			$order->update_meta_data( self::META_KUNAKI_ORDER_ID, $fallback_value );
 			$order->update_meta_data( self::META_KUNAKI_SUBMITTED, 'yes' );
+			$order->delete_meta_data( self::META_FULFILLMENT_ERROR );
+			$order->delete_meta_data( self::META_FULFILLMENT_FAILED );
+			$order->delete_meta_data( self::META_FULFILLMENT_ATTEMPTS );
 			try {
 				$order->save();
 			} catch ( \Throwable $_ ) {

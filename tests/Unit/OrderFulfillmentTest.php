@@ -247,6 +247,9 @@ class OrderFulfillmentTest extends KunakiTestCase {
 
 		$order->shouldReceive( 'update_meta_data' )->with( '_kunaki_order_id', 'KUN555' )->once();
 		$order->shouldReceive( 'update_meta_data' )->with( '_kunaki_submitted', 'yes' )->once();
+		$order->shouldReceive( 'delete_meta_data' )->with( '_kunaki_fulfillment_error' )->once();
+		$order->shouldReceive( 'delete_meta_data' )->with( '_kunaki_fulfillment_failed_at' )->once();
+		$order->shouldReceive( 'delete_meta_data' )->with( '_kunaki_fulfillment_attempts' )->once();
 		$order->shouldReceive( 'save' )->once();
 
 		Functions\expect( 'get_option' )->zeroOrMoreTimes()->andReturn( 'no' );
@@ -267,6 +270,7 @@ class OrderFulfillmentTest extends KunakiTestCase {
 		$order->shouldReceive( 'get_meta' )->with( '_kunaki_submitted' )->andReturn( '' );
 
 		$order->shouldReceive( 'update_meta_data' )->withAnyArgs()->zeroOrMoreTimes();
+		$order->shouldReceive( 'delete_meta_data' )->withAnyArgs()->zeroOrMoreTimes();
 		$order->shouldReceive( 'save' )->once()->andThrow( new \RuntimeException( 'DB down' ) );
 
 		Functions\expect( 'get_option' )->zeroOrMoreTimes()->andReturn( 'no' );
