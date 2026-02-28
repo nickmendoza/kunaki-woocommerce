@@ -54,11 +54,6 @@ class OrderFulfillmentTest extends KunakiTestCase {
 		Functions\expect( 'get_option' )->zeroOrMoreTimes()->andReturn( 'no' );
 
 		$order->shouldReceive( 'get_shipping_methods' )->andReturn( array() );
-		$order->shouldReceive( 'get_meta' )->with( '_kunaki_fulfillment_attempts' )->andReturn( '' );
-		$order->shouldReceive( 'update_meta_data' )->with( '_kunaki_fulfillment_error', Mockery::type( 'string' ) )->once();
-		$order->shouldReceive( 'update_meta_data' )->with( '_kunaki_fulfillment_failed_at', Mockery::type( 'string' ) )->once();
-		$order->shouldReceive( 'update_meta_data' )->with( '_kunaki_fulfillment_attempts', 1 )->once();
-		$order->shouldReceive( 'save' )->once();
 		$order->shouldReceive( 'add_order_note' )
 			->once()->with( Mockery::pattern( '/No matching Kunaki shipping/' ), false );
 
@@ -83,6 +78,7 @@ class OrderFulfillmentTest extends KunakiTestCase {
 		$order->shouldReceive( 'delete_meta_data' )->with( '_kunaki_fulfillment_error' )->once();
 		$order->shouldReceive( 'delete_meta_data' )->with( '_kunaki_fulfillment_failed_at' )->once();
 		$order->shouldReceive( 'delete_meta_data' )->with( '_kunaki_fulfillment_attempts' )->once();
+		$order->shouldReceive( 'delete_meta_data' )->with( '_kunaki_fulfillment_exhausted' )->once();
 		$order->shouldReceive( 'save' )->once();
 		$order->shouldReceive( 'add_order_note' )->with( Mockery::pattern( '/KUN999/' ), false )->once();
 
@@ -250,6 +246,7 @@ class OrderFulfillmentTest extends KunakiTestCase {
 		$order->shouldReceive( 'delete_meta_data' )->with( '_kunaki_fulfillment_error' )->once();
 		$order->shouldReceive( 'delete_meta_data' )->with( '_kunaki_fulfillment_failed_at' )->once();
 		$order->shouldReceive( 'delete_meta_data' )->with( '_kunaki_fulfillment_attempts' )->once();
+		$order->shouldReceive( 'delete_meta_data' )->with( '_kunaki_fulfillment_exhausted' )->once();
 		$order->shouldReceive( 'save' )->once();
 
 		Functions\expect( 'get_option' )->zeroOrMoreTimes()->andReturn( 'no' );
@@ -507,6 +504,10 @@ class OrderFulfillmentTest extends KunakiTestCase {
 		// Should never attempt submission.
 		$order->shouldNotReceive( 'get_items' );
 
+		// Should mark exhausted and save.
+		$order->shouldReceive( 'update_meta_data' )->with( '_kunaki_fulfillment_exhausted', 'yes' )->once();
+		$order->shouldReceive( 'save' )->once();
+
 		Functions\expect( 'wc_get_orders' )->once()->andReturn( array( $order ) );
 		Functions\expect( 'get_option' )->with( 'kunaki_wc_max_retries', 3 )->andReturn( '3' );
 		Functions\expect( 'get_option' )->zeroOrMoreTimes()->andReturn( 'no' );
@@ -570,6 +571,7 @@ class OrderFulfillmentTest extends KunakiTestCase {
 		$order->shouldReceive( 'delete_meta_data' )->with( '_kunaki_fulfillment_error' )->once();
 		$order->shouldReceive( 'delete_meta_data' )->with( '_kunaki_fulfillment_failed_at' )->once();
 		$order->shouldReceive( 'delete_meta_data' )->with( '_kunaki_fulfillment_attempts' )->once();
+		$order->shouldReceive( 'delete_meta_data' )->with( '_kunaki_fulfillment_exhausted' )->once();
 		$order->shouldReceive( 'save' )->once();
 		$order->shouldReceive( 'add_order_note' )->zeroOrMoreTimes();
 
@@ -577,12 +579,12 @@ class OrderFulfillmentTest extends KunakiTestCase {
 	}
 
 	public function test_attempt_counter_increments() {
-		$order = $this->create_submittable_order();
+		$order = $this->create_full_order_mock( 'PXZZ111111' );
 
-		Functions\expect( 'get_post_meta' )->with( 42, '_kunaki_product_id', true )->andReturn( 'PXZZ111111' );
+		Functions\expect( 'wp_remote_post' )->once()
+			->andReturn( new WP_Error( 'timeout', 'Connection timed out' ) );
 		Functions\expect( 'get_option' )->zeroOrMoreTimes()->andReturn( 'no' );
 
-		$order->shouldReceive( 'get_shipping_methods' )->andReturn( array() );
 		$order->shouldReceive( 'get_meta' )->with( '_kunaki_fulfillment_attempts' )->andReturn( '2' );
 		$order->shouldReceive( 'update_meta_data' )
 			->with( '_kunaki_fulfillment_attempts', 3 )->once();
@@ -611,18 +613,40 @@ class OrderFulfillmentTest extends KunakiTestCase {
 		$item->shouldReceive( 'get_product_id' )->andReturn( 42 );
 		$item->shouldReceive( 'get_quantity' )->andReturn( 1 );
 
+		$shipping_item = Mockery::mock( 'WC_Order_Item_Shipping' );
+		$shipping_item->shouldReceive( 'get_method_id' )->andReturn( 'kunaki_shipping' );
+		$shipping_item->shouldReceive( 'get_meta' )
+			->with( 'kunaki_shipping_description' )->andReturn( 'USPS Priority' );
+
+		$countries_obj = Mockery::mock( 'WC_Countries' );
+		$countries_obj->shouldReceive( 'get_countries' )->andReturn( array( 'US' => 'United States' ) );
+		$wc = Mockery::mock( 'WooCommerce' );
+		$wc->countries = $countries_obj;
+		Functions\when( 'WC' )->justReturn( $wc );
+
 		$order = Mockery::mock( 'WC_Order' );
 		$order->shouldReceive( 'get_id' )->andReturn( 100 );
 		$order->shouldReceive( 'get_meta' )->with( '_kunaki_submitted' )->andReturn( '' );
 		$order->shouldReceive( 'get_meta' )->with( '_kunaki_fulfillment_attempts' )->andReturn( '' );
 		$order->shouldReceive( 'get_items' )->andReturn( array( $item ) );
-		$order->shouldReceive( 'get_shipping_methods' )->andReturn( array() );
+		$order->shouldReceive( 'get_shipping_methods' )->andReturn( array( $shipping_item ) );
+		$order->shouldReceive( 'get_shipping_country' )->andReturn( 'US' );
+		$order->shouldReceive( 'get_shipping_state' )->andReturn( 'CA' );
+		$order->shouldReceive( 'get_shipping_first_name' )->andReturn( 'John' );
+		$order->shouldReceive( 'get_shipping_last_name' )->andReturn( 'Doe' );
+		$order->shouldReceive( 'get_shipping_company' )->andReturn( '' );
+		$order->shouldReceive( 'get_shipping_address_1' )->andReturn( '123 Main St' );
+		$order->shouldReceive( 'get_shipping_address_2' )->andReturn( '' );
+		$order->shouldReceive( 'get_shipping_city' )->andReturn( 'Beverly Hills' );
+		$order->shouldReceive( 'get_shipping_postcode' )->andReturn( '90210' );
 		$order->shouldReceive( 'update_meta_data' )->withAnyArgs()->zeroOrMoreTimes();
 		$order->shouldReceive( 'save' )->once()->andThrow( new \RuntimeException( 'DB down' ) );
 		$order->shouldReceive( 'add_order_note' )->once();
 
 		Functions\expect( 'wc_get_order' )->with( 100 )->andReturn( $order );
 		Functions\expect( 'get_post_meta' )->with( 42, '_kunaki_product_id', true )->andReturn( 'PXZZ111111' );
+		Functions\expect( 'wp_remote_post' )->once()
+			->andReturn( new WP_Error( 'timeout', 'Connection timed out' ) );
 		Functions\expect( 'get_option' )->zeroOrMoreTimes()->andReturn( 'no' );
 
 		$this->fulfillment->handle_order_processing( 100, $order );
@@ -636,8 +660,10 @@ class OrderFulfillmentTest extends KunakiTestCase {
 		$order->shouldReceive( 'get_id' )->andReturn( 100 );
 		$order->shouldReceive( 'get_meta' )->with( '_kunaki_fulfillment_attempts' )->andReturn( '5' );
 
-		// With max_retries=5, this order should be skipped.
+		// With max_retries=5, this order should be skipped and marked exhausted.
 		$order->shouldNotReceive( 'get_items' );
+		$order->shouldReceive( 'update_meta_data' )->with( '_kunaki_fulfillment_exhausted', 'yes' )->once();
+		$order->shouldReceive( 'save' )->once();
 
 		Functions\expect( 'wc_get_orders' )->once()->andReturn( array( $order ) );
 		Functions\expect( 'get_option' )->with( 'kunaki_wc_max_retries', 3 )->andReturn( '5' );

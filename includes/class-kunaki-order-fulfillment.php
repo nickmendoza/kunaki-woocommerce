@@ -6,9 +6,10 @@ class Kunaki_Order_Fulfillment {
 	const META_KUNAKI_ORDER_ID      = '_kunaki_order_id';
 	const META_KUNAKI_SUBMITTED     = '_kunaki_submitted';
 	const META_KUNAKI_SHIPPING_DESC = '_kunaki_shipping_description';
-	const META_FULFILLMENT_ERROR    = '_kunaki_fulfillment_error';
-	const META_FULFILLMENT_FAILED   = '_kunaki_fulfillment_failed_at';
-	const META_FULFILLMENT_ATTEMPTS = '_kunaki_fulfillment_attempts';
+	const META_FULFILLMENT_ERROR     = '_kunaki_fulfillment_error';
+	const META_FULFILLMENT_FAILED    = '_kunaki_fulfillment_failed_at';
+	const META_FULFILLMENT_ATTEMPTS  = '_kunaki_fulfillment_attempts';
+	const META_FULFILLMENT_EXHAUSTED = '_kunaki_fulfillment_exhausted';
 
 	public function init() {
 		add_action( 'woocommerce_order_status_processing', array( $this, 'handle_order_processing' ), 10, 2 );
@@ -51,6 +52,7 @@ class Kunaki_Order_Fulfillment {
 			$order->delete_meta_data( self::META_FULFILLMENT_ERROR );
 			$order->delete_meta_data( self::META_FULFILLMENT_FAILED );
 			$order->delete_meta_data( self::META_FULFILLMENT_ATTEMPTS );
+			$order->delete_meta_data( self::META_FULFILLMENT_EXHAUSTED );
 			try {
 				$order->save();
 			} catch ( \Throwable $_ ) {
@@ -126,9 +128,9 @@ class Kunaki_Order_Fulfillment {
 
 		if ( empty( $shipping_description ) ) {
 			Kunaki_Logger::error( "Order #{$order_id}: No Kunaki shipping description found." );
-			$this->record_failure(
-				$order,
-				__( 'No matching Kunaki shipping method found on this order.', 'kunaki-woocommerce' )
+			$order->add_order_note(
+				__( 'Kunaki fulfillment failed: No matching Kunaki shipping method found on this order.', 'kunaki-woocommerce' ),
+				false
 			);
 			$wpdb->delete( $wpdb->options, array( 'option_name' => $lock_option ) );
 			return;
@@ -186,6 +188,7 @@ class Kunaki_Order_Fulfillment {
 		$order->delete_meta_data( self::META_FULFILLMENT_ERROR );
 		$order->delete_meta_data( self::META_FULFILLMENT_FAILED );
 		$order->delete_meta_data( self::META_FULFILLMENT_ATTEMPTS );
+		$order->delete_meta_data( self::META_FULFILLMENT_EXHAUSTED );
 
 		try {
 			$order->save();
@@ -290,6 +293,10 @@ class Kunaki_Order_Fulfillment {
 					'key'     => self::META_KUNAKI_SUBMITTED,
 					'compare' => 'NOT EXISTS',
 				),
+				array(
+					'key'     => self::META_FULFILLMENT_EXHAUSTED,
+					'compare' => 'NOT EXISTS',
+				),
 			),
 			'limit'   => 50,
 			'orderby' => 'date',
@@ -306,6 +313,13 @@ class Kunaki_Order_Fulfillment {
 		foreach ( $orders as $order ) {
 			$attempts = (int) $order->get_meta( self::META_FULFILLMENT_ATTEMPTS );
 			if ( $attempts >= $max_retries ) {
+				$order->update_meta_data( self::META_FULFILLMENT_EXHAUSTED, 'yes' );
+				try {
+					$order->save();
+				} catch ( \Throwable $_ ) {
+					// Will be caught again next cron run.
+				}
+				Kunaki_Logger::info( "Order #{$order->get_id()}: Max retries ({$max_retries}) exhausted. Requires manual intervention." );
 				continue;
 			}
 
