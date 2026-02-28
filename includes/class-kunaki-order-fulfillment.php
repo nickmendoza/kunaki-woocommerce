@@ -60,6 +60,14 @@ class Kunaki_Order_Fulfillment {
 				return;
 			}
 			$wpdb->delete( $wpdb->options, array( 'option_name' => $fallback_option ) );
+			$order->add_order_note(
+				sprintf(
+					/* translators: %s: Kunaki order ID */
+					__( 'Order submitted to Kunaki successfully. Kunaki Order ID: %s (recovered from fallback marker)', 'kunaki-woocommerce' ),
+					$fallback_value
+				),
+				false
+			);
 			return;
 		}
 

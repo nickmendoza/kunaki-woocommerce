@@ -253,6 +253,8 @@ class OrderFulfillmentTest extends KunakiTestCase {
 		$order->shouldReceive( 'delete_meta_data' )->with( '_kunaki_fulfillment_attempts' )->once();
 		$order->shouldReceive( 'delete_meta_data' )->with( '_kunaki_fulfillment_exhausted' )->once();
 		$order->shouldReceive( 'save' )->once();
+		$order->shouldReceive( 'add_order_note' )
+			->with( Mockery::pattern( '/KUN555.*recovered/' ), false )->once();
 
 		Functions\expect( 'get_option' )->zeroOrMoreTimes()->andReturn( 'no' );
 
@@ -757,6 +759,148 @@ class OrderFulfillmentTest extends KunakiTestCase {
 		$wpdb->shouldReceive( 'get_results' )->once()->andReturn( array( $marker ) );
 		$wpdb->shouldReceive( 'delete' )
 			->with( 'wp_options', array( 'option_name' => '_kunaki_failed_100' ) )->once();
+		$GLOBALS['wpdb'] = $wpdb;
+
+		Functions\expect( 'wc_get_order' )->with( 100 )->andReturn( $order );
+		Functions\expect( 'wc_get_orders' )->once()->andReturn( array() );
+		Functions\expect( 'get_option' )->with( 'kunaki_wc_max_retries', 3 )->andReturn( '3' );
+		Functions\expect( 'get_option' )->zeroOrMoreTimes()->andReturn( 'no' );
+
+		$this->fulfillment->retry_failed_orders();
+	}
+
+	public function test_fallback_marker_recovery_adds_order_note() {
+		$wpdb = Mockery::mock( 'wpdb' );
+		$wpdb->options = 'wp_options';
+		$wpdb->shouldReceive( 'prepare' )->andReturnUsing( function () { return 'prepared_query'; } );
+		$wpdb->shouldReceive( 'get_var' )->once()->andReturn( 'KUN555' );
+		$wpdb->shouldReceive( 'delete' )
+			->once()->with( 'wp_options', array( 'option_name' => '_kunaki_submitted_100' ) )
+			->andReturn( true );
+		$GLOBALS['wpdb'] = $wpdb;
+
+		$order = $this->create_order_mock();
+		$order->shouldReceive( 'get_meta' )->with( '_kunaki_submitted' )->andReturn( '' );
+		$order->shouldReceive( 'update_meta_data' )->withAnyArgs()->zeroOrMoreTimes();
+		$order->shouldReceive( 'delete_meta_data' )->withAnyArgs()->zeroOrMoreTimes();
+		$order->shouldReceive( 'save' )->once();
+		$order->shouldReceive( 'add_order_note' )
+			->with( Mockery::pattern( '/KUN555.*recovered/' ), false )->once();
+
+		Functions\expect( 'get_option' )->zeroOrMoreTimes()->andReturn( 'no' );
+
+		$this->fulfillment->handle_order_processing( 100, $order );
+	}
+
+	public function test_race_condition_recheck_skips_already_submitted() {
+		$this->mock_wpdb_lock( true );
+
+		$order = $this->create_order_mock();
+		$order->shouldReceive( 'get_meta' )->with( '_kunaki_submitted' )->andReturn( '' );
+
+		// After lock acquired, re-fetch returns order already submitted.
+		$refetched = Mockery::mock( 'WC_Order' );
+		$refetched->shouldReceive( 'get_meta' )->with( '_kunaki_submitted' )->andReturn( 'yes' );
+
+		Functions\expect( 'wc_get_order' )->with( 100 )->andReturn( $refetched );
+		Functions\expect( 'get_option' )->zeroOrMoreTimes()->andReturn( 'no' );
+
+		// Should never attempt to get items or submit.
+		$refetched->shouldNotReceive( 'get_items' );
+		$refetched->shouldNotReceive( 'update_meta_data' );
+
+		$this->fulfillment->handle_order_processing( 100, $order );
+	}
+
+	public function test_save_fails_but_save_meta_succeeds() {
+		$delete_calls = array();
+
+		$wpdb = Mockery::mock( 'wpdb' );
+		$wpdb->options = 'wp_options';
+		$wpdb->shouldReceive( 'prepare' )->andReturnUsing( function () { return 'prepared_query'; } );
+		$wpdb->shouldReceive( 'get_var' )->andReturn( null );
+		$wpdb->shouldReceive( 'query' )->andReturn( 1 );
+		$wpdb->shouldReceive( 'delete' )->andReturnUsing( function ( $table, $where ) use ( &$delete_calls ) {
+			$delete_calls[] = $where;
+			return true;
+		} );
+		$GLOBALS['wpdb'] = $wpdb;
+
+		$item = Mockery::mock( 'WC_Order_Item_Product' );
+		$item->shouldReceive( 'get_product_id' )->andReturn( 42 );
+		$item->shouldReceive( 'get_quantity' )->andReturn( 1 );
+
+		$order = Mockery::mock( 'WC_Order' );
+		$order->shouldReceive( 'get_id' )->andReturn( 100 );
+		$order->shouldReceive( 'get_meta' )->with( '_kunaki_submitted' )->andReturn( '' );
+		$order->shouldReceive( 'get_items' )->andReturn( array( $item ) );
+
+		Functions\expect( 'wc_get_order' )->with( 100 )->andReturn( $order );
+		Functions\expect( 'get_post_meta' )->with( 42, '_kunaki_product_id', true )->andReturn( 'PXZZ111111' );
+		Functions\expect( 'get_option' )->zeroOrMoreTimes()->andReturn( 'no' );
+
+		$this->setup_shipping_methods_on_order( $order );
+		$this->setup_address_on_order( $order );
+
+		Functions\expect( 'wp_remote_post' )->once()
+			->andReturn( array( 'body' => '<Response><ErrorCode>0</ErrorCode><OrderId>KUN555</OrderId></Response>' ) );
+		Functions\expect( 'wp_remote_retrieve_response_code' )->andReturn( 200 );
+		Functions\expect( 'wp_remote_retrieve_body' )->andReturn(
+			'<Response><ErrorCode>0</ErrorCode><OrderId>KUN555</OrderId></Response>'
+		);
+
+		$order->shouldReceive( 'update_meta_data' )->withAnyArgs()->zeroOrMoreTimes();
+		$order->shouldReceive( 'delete_meta_data' )->withAnyArgs()->zeroOrMoreTimes();
+		// save() throws, but save_meta_data() succeeds — no durable marker needed.
+		$order->shouldReceive( 'save' )->once()->andThrow( new \RuntimeException( 'DB down' ) );
+		$order->shouldReceive( 'save_meta_data' )->once();
+
+		$this->fulfillment->handle_order_processing( 100, $order );
+
+		// Lock should be released (only 2 query calls: lock DELETE + INSERT, no durable marker).
+		$this->assertNotEmpty( $delete_calls, 'Lock must be released when save_meta_data() succeeds.' );
+	}
+
+	public function test_recover_orphaned_failures_deleted_order_cleans_marker() {
+		$marker = (object) array(
+			'option_name'  => '_kunaki_failed_999',
+			'option_value' => 'Connection timed out',
+		);
+
+		$wpdb = Mockery::mock( 'wpdb' );
+		$wpdb->options = 'wp_options';
+		$wpdb->shouldReceive( 'get_results' )->once()->andReturn( array( $marker ) );
+		// Marker should be cleaned up even though order doesn't exist.
+		$wpdb->shouldReceive( 'delete' )
+			->with( 'wp_options', array( 'option_name' => '_kunaki_failed_999' ) )->once();
+		$GLOBALS['wpdb'] = $wpdb;
+
+		Functions\expect( 'wc_get_order' )->with( 999 )->andReturn( false );
+		Functions\expect( 'wc_get_orders' )->once()->andReturn( array() );
+		Functions\expect( 'get_option' )->with( 'kunaki_wc_max_retries', 3 )->andReturn( '3' );
+		Functions\expect( 'get_option' )->zeroOrMoreTimes()->andReturn( 'no' );
+
+		$this->fulfillment->retry_failed_orders();
+	}
+
+	public function test_recover_orphaned_failures_save_throws_leaves_marker() {
+		$order = Mockery::mock( 'WC_Order' );
+		$order->shouldReceive( 'get_id' )->andReturn( 100 );
+		$order->shouldReceive( 'get_meta' )->with( '_kunaki_fulfillment_attempts' )->andReturn( '' );
+		$order->shouldReceive( 'update_meta_data' )->withAnyArgs()->zeroOrMoreTimes();
+		$order->shouldReceive( 'save_meta_data' )->once()
+			->andThrow( new \RuntimeException( 'DB down' ) );
+
+		$marker = (object) array(
+			'option_name'  => '_kunaki_failed_100',
+			'option_value' => 'Connection timed out',
+		);
+
+		$wpdb = Mockery::mock( 'wpdb' );
+		$wpdb->options = 'wp_options';
+		$wpdb->shouldReceive( 'get_results' )->once()->andReturn( array( $marker ) );
+		// Marker should NOT be deleted when save_meta_data() throws.
+		$wpdb->shouldNotReceive( 'delete' );
 		$GLOBALS['wpdb'] = $wpdb;
 
 		Functions\expect( 'wc_get_order' )->with( 100 )->andReturn( $order );

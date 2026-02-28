@@ -11,3 +11,18 @@ delete_option( 'kunaki_wc_max_retries' );
 
 wp_clear_scheduled_hook( 'kunaki_wc_sync_order_status' );
 wp_clear_scheduled_hook( 'kunaki_wc_retry_failed_orders' );
+
+// Clean up dynamic per-order options (locks, durable markers).
+global $wpdb;
+$patterns = array(
+	'\_kunaki\_lock\_%',
+	'\_kunaki\_sync\_lock\_%',
+	'\_kunaki\_submitted\_%',
+	'\_kunaki\_failed\_%',
+);
+foreach ( $patterns as $pattern ) {
+	$wpdb->query( $wpdb->prepare(
+		"DELETE FROM {$wpdb->options} WHERE option_name LIKE %s",
+		$pattern
+	) );
+}

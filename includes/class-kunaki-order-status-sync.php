@@ -103,6 +103,13 @@ class Kunaki_Order_Status_Sync {
 	private function process_sync( $order, $api, $kunaki_order_id ) {
 		$order_id = $order->get_id();
 
+		// Recover notes from a previous crash between save() and add_order_note().
+		$pending = $order->get_meta( '_kunaki_sync_note_pending' );
+		if ( '' !== $pending ) {
+			$this->send_pending_notes( $order );
+			return;
+		}
+
 		$result = $api->get_order_status( $kunaki_order_id );
 
 		if ( is_wp_error( $result ) ) {
@@ -172,15 +179,54 @@ class Kunaki_Order_Status_Sync {
 				break;
 		}
 
+		// Store pending notes in meta so they survive a crash between save()
+		// and add_order_note(). The next cron run recovers them.
+		$notes     = array();
+		$notes_json = '';
+		if ( '' !== $admin_note ) {
+			$notes[] = array( 'text' => $admin_note, 'is_customer' => false );
+		}
+		if ( '' !== $customer_note ) {
+			$notes[] = array( 'text' => $customer_note, 'is_customer' => true );
+		}
+		if ( ! empty( $notes ) ) {
+			$notes_json = wp_json_encode( $notes );
+			$order->update_meta_data( '_kunaki_sync_note_pending', $notes_json );
+		}
+
 		// Persist all meta and status changes before adding notes.
 		$order->save();
 
 		// Now safe — meta is persisted, so the next cron run won't retry.
-		if ( '' !== $admin_note ) {
-			$order->add_order_note( $admin_note, false );
+		$this->send_pending_notes( $order, $notes_json );
+	}
+
+	/**
+	 * Send pending order notes and clear the pending flag.
+	 *
+	 * @param WC_Order    $order        WooCommerce order.
+	 * @param string|null $pending_json JSON-encoded notes array. Reads from meta if null.
+	 */
+	private function send_pending_notes( $order, $pending_json = null ) {
+		if ( null === $pending_json ) {
+			$pending_json = $order->get_meta( '_kunaki_sync_note_pending' );
 		}
-		if ( '' !== $customer_note ) {
-			$order->add_order_note( $customer_note, true );
+		if ( '' === $pending_json ) {
+			return;
+		}
+
+		$notes = json_decode( $pending_json, true );
+		if ( is_array( $notes ) ) {
+			foreach ( $notes as $note ) {
+				$order->add_order_note( $note['text'], $note['is_customer'] );
+			}
+		}
+
+		$order->delete_meta_data( '_kunaki_sync_note_pending' );
+		try {
+			$order->save_meta_data();
+		} catch ( \Throwable $_ ) {
+			// Worst case: note is sent again on next cron run — better than lost.
 		}
 	}
 
