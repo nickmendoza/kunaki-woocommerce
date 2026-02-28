@@ -63,6 +63,20 @@ class Kunaki_Settings extends WC_Settings_Page {
 				),
 			),
 			array(
+				'title'    => __( 'Max Retry Attempts', 'kunaki-woocommerce' ),
+				'desc'     => __( 'Maximum number of times to automatically retry a failed Kunaki submission.', 'kunaki-woocommerce' ),
+				'id'       => 'kunaki_wc_max_retries',
+				'type'     => 'number',
+				'default'  => 3,
+				'desc_tip' => true,
+				'css'      => 'width: 80px;',
+				'custom_attributes' => array(
+					'min'  => 1,
+					'max'  => 10,
+					'step' => 1,
+				),
+			),
+			array(
 				'title'   => __( 'Enable Debug Logging', 'kunaki-woocommerce' ),
 				'desc'    => __( 'Log API requests and responses to WooCommerce > Status > Logs.', 'kunaki-woocommerce' ),
 				'id'      => 'kunaki_wc_debug_log',

@@ -47,7 +47,7 @@ class RetryQueueTest extends KunakiTestCase {
 			->with( '_kunaki_fulfillment_failed_at', Mockery::type( 'string' ) )->once();
 		$order->shouldReceive( 'update_meta_data' )
 			->with( '_kunaki_fulfillment_attempts', 1 )->once();
-		$order->shouldReceive( 'save' )->once();
+		$order->shouldReceive( 'save_meta_data' )->once();
 		$order->shouldReceive( 'add_order_note' )->once();
 
 		$this->fulfillment->handle_order_processing( 100, $order );
@@ -70,6 +70,7 @@ class RetryQueueTest extends KunakiTestCase {
 		$order->shouldReceive( 'delete_meta_data' )->with( '_kunaki_fulfillment_error' )->once();
 		$order->shouldReceive( 'delete_meta_data' )->with( '_kunaki_fulfillment_failed_at' )->once();
 		$order->shouldReceive( 'delete_meta_data' )->with( '_kunaki_fulfillment_attempts' )->once();
+		$order->shouldReceive( 'delete_meta_data' )->with( '_kunaki_fulfillment_exhausted' )->once();
 		$order->shouldReceive( 'save' )->once();
 		$order->shouldReceive( 'add_order_note' )->zeroOrMoreTimes();
 
@@ -88,7 +89,7 @@ class RetryQueueTest extends KunakiTestCase {
 		$order1->shouldReceive( 'update_meta_data' )
 			->with( '_kunaki_fulfillment_attempts', 3 )->once();
 		$order1->shouldReceive( 'update_meta_data' )->withAnyArgs()->zeroOrMoreTimes();
-		$order1->shouldReceive( 'save' )->once();
+		$order1->shouldReceive( 'save_meta_data' )->once();
 		$order1->shouldReceive( 'add_order_note' )->once();
 
 		$this->fulfillment->handle_order_processing( 100, $order1 );
@@ -204,7 +205,7 @@ class RetryQueueTest extends KunakiTestCase {
 		$order->shouldReceive( 'get_items' )->andReturn( array( $item ) );
 		$order->shouldReceive( 'get_shipping_methods' )->andReturn( array() );
 		$order->shouldReceive( 'update_meta_data' )->withAnyArgs()->zeroOrMoreTimes();
-		$order->shouldReceive( 'save' )->once()->andThrow( new \RuntimeException( 'DB down' ) );
+		$order->shouldReceive( 'save_meta_data' )->once()->andThrow( new \RuntimeException( 'DB down' ) );
 		$order->shouldReceive( 'add_order_note' )->once();
 
 		Functions\expect( 'wc_get_order' )->with( 100 )->andReturn( $order );
@@ -213,8 +214,8 @@ class RetryQueueTest extends KunakiTestCase {
 
 		$this->fulfillment->handle_order_processing( 100, $order );
 
-		// Lock must be released even though save() threw.
-		$this->assertNotEmpty( $delete_calls, 'Lock must be released when record_failure save() throws.' );
+		// Lock must be released even though save_meta_data() threw.
+		$this->assertNotEmpty( $delete_calls, 'Lock must be released when record_failure save_meta_data() throws.' );
 	}
 
 	public function test_ajax_rejects_missing_capability() {

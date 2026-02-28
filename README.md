@@ -26,6 +26,7 @@ This plugin addresses these concerns through atomic locking, idempotent submissi
 - **Mixed Cart Handling** -- Submits only Kunaki items; defers order completion when non-Kunaki items are present.
 - **Retry Queue** -- Admin page listing failed submissions with error details, attempt counts, and one-click retry buttons. Per-order retry on the order edit page.
 - **HPOS Compatible** -- Declares compatibility with WooCommerce High-Performance Order Storage.
+- **Automatic Retry** -- Failed submissions are retried automatically via cron with linear backoff and a configurable attempt limit.
 - **Credential Encryption** -- Passwords encrypted at rest with AES-256-GCM.
 
 ## Requirements
@@ -65,6 +66,7 @@ This plugin addresses these concerns through atomic locking, idempotent submissi
 | Password | Your Kunaki account password (encrypted at rest) |
 | Mode | `Test` (no real orders manufactured) or `Live` (production) |
 | Sync Interval | How often to poll Kunaki for status updates (default: 15 min, range: 5--1440 min) |
+| Max Retry Attempts | Maximum total attempts for a failed submission before requiring manual intervention (default: 3, range: 1--10) |
 | Debug Logging | Log full API requests/responses (credentials redacted) to WooCommerce > Status > Logs |
 
 ## Architecture Overview
@@ -127,6 +129,15 @@ Order submission is protected by four layers:
 
 If the Kunaki API accepts an order but `$order->save()` throws, the plugin attempts `$order->save_meta_data()` as a narrower fallback. If that also fails, a durable marker (`_kunaki_submitted_{order_id}`) is written directly to `wp_options` via `INSERT IGNORE`, storing the Kunaki Order ID. This marker survives lock expiration and prevents resubmission on any subsequent trigger. If even the marker write fails, the lock is deliberately retained to block further attempts until manual intervention.
 
+### Automatic Retry
+
+When the Kunaki API returns an error or the HTTP request fails, the plugin records structured failure metadata on the order (error message, timestamp, attempt count) and releases the lock. A separate WP-Cron event (`kunaki_wc_retry_failed_orders`) runs on the same interval as the status sync and retries eligible orders automatically.
+
+- **Linear backoff** -- Each retry waits `attempts * 15 minutes` since the last failure before retrying.
+- **Configurable limit** -- After the configured max attempts (default: 3), the order is marked exhausted and an order note alerts the admin.
+- **Durable failure markers** -- If failure metadata fails to persist (e.g., database instability), a `_kunaki_failed_{order_id}` marker is written to `wp_options`. The retry cron recovers these orphaned markers at the start of each run.
+- **Idempotent** -- Retries go through the same `handle_order_processing` path with its full locking and deduplication guarantees.
+
 ### Email Duplication Prevention
 
 The status sync saves all meta and status changes via `$order->save()` before adding any customer-facing order notes. If `save()` fails, no notes are persisted and the next cron run retries from a clean state. Customer emails are only triggered after a successful save, so duplicate notifications cannot occur from failed partial updates.
@@ -155,12 +166,12 @@ The test suite runs entirely outside WordPress. No WordPress installation, no da
 
 This isolation strategy means tests execute in seconds, run in CI without infrastructure, and validate plugin logic without conflating it with WordPress behavior.
 
-95 unit tests cover:
+107 unit tests cover:
 
 | Area | What's Validated |
 |------|-----------------|
 | API Client | XML request construction, response parsing, HTTP error handling, HTML-wrapped response extraction, credential injection |
-| Order Fulfillment | Duplicate submission prevention across all four layers, atomic lock acquisition and release, meta storage, mixed cart detection, fallback marker recovery, failure meta recording and cleanup, retry logic |
+| Order Fulfillment | Duplicate submission prevention across all four layers, atomic lock acquisition and release, meta storage, mixed cart detection, fallback marker recovery, failure meta recording and cleanup, auto-retry with backoff, exhaustion handling, orphaned failure recovery, retry logic |
 | Order Status Sync | SHIPPED/DECLINED/PENDING transitions, tracking info extraction, auto-completion logic for pure-Kunaki vs. mixed orders, save-before-notify ordering |
 | Shipping Method | Rate calculation, Kunaki product filtering, transient cache hit/miss, state/province handling for US/CA vs. international, country name resolution |
 | Product Meta | 10-character alphanumeric validation, capability checks, admin column rendering, safe handling of absent POST fields |
