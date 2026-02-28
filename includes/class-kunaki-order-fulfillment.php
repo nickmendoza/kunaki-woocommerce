@@ -244,7 +244,11 @@ class Kunaki_Order_Fulfillment {
 		$order->update_meta_data( self::META_FULFILLMENT_ERROR, $error_message );
 		$order->update_meta_data( self::META_FULFILLMENT_FAILED, gmdate( 'c' ) );
 		$order->update_meta_data( self::META_FULFILLMENT_ATTEMPTS, $attempts + 1 );
-		$order->save();
+		try {
+			$order->save();
+		} catch ( \Throwable $_ ) {
+			// Meta didn't persist — next attempt will try again.
+		}
 
 		$order->add_order_note(
 			sprintf(

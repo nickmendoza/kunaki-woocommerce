@@ -62,7 +62,8 @@ class Kunaki_Retry_Queue {
 
 			echo '<tr>';
 			echo '<td><a href="' . esc_url( $edit_url ) . '"><strong>#' . esc_html( $order_id ) . '</strong></a></td>';
-			echo '<td>' . esc_html( $order->get_date_created()->date_i18n( get_option( 'date_format' ) ) ) . '</td>';
+			$date_created = $order->get_date_created();
+			echo '<td>' . esc_html( $date_created ? $date_created->date_i18n( get_option( 'date_format' ) ) : '—' ) . '</td>';
 			echo '<td>' . esc_html( $order->get_billing_first_name() . ' ' . $order->get_billing_last_name() ) . '</td>';
 			echo '<td>' . esc_html( $error ) . '</td>';
 			echo '<td>' . esc_html( $attempts ) . '</td>';
