@@ -22,8 +22,10 @@ class Kunaki_Retry_Queue {
 	public function render_page() {
 		$failed_orders = wc_get_orders( array(
 			'status'       => 'processing',
-			'meta_key'     => Kunaki_Order_Fulfillment::META_FULFILLMENT_ERROR,
-			'meta_compare' => 'EXISTS',
+			'meta_query'   => array(
+				array( 'key' => Kunaki_Order_Fulfillment::META_FULFILLMENT_ERROR, 'compare' => 'EXISTS' ),
+				array( 'key' => Kunaki_Order_Fulfillment::META_KUNAKI_SUBMITTED, 'value' => 'yes', 'compare' => '!=' ),
+			),
 			'limit'        => -1,
 			'orderby'      => 'date',
 			'order'        => 'DESC',
