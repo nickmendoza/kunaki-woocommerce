@@ -164,6 +164,44 @@ class RetryQueueTest extends KunakiTestCase {
 		$this->assertEquals( 'retry_failed', $result->get_error_code() );
 	}
 
+	public function test_record_failure_save_throws_still_releases_lock() {
+		$delete_calls = array();
+
+		$wpdb = Mockery::mock( 'wpdb' );
+		$wpdb->options = 'wp_options';
+		$wpdb->shouldReceive( 'prepare' )->andReturnUsing( function () { return 'prepared_query'; } );
+		$wpdb->shouldReceive( 'get_var' )->andReturn( null );
+		$wpdb->shouldReceive( 'query' )->andReturn( 1 );
+		$wpdb->shouldReceive( 'delete' )->andReturnUsing( function ( $table, $where ) use ( &$delete_calls ) {
+			$delete_calls[] = $where;
+			return true;
+		} );
+		$GLOBALS['wpdb'] = $wpdb;
+
+		$item = Mockery::mock( 'WC_Order_Item_Product' );
+		$item->shouldReceive( 'get_product_id' )->andReturn( 42 );
+		$item->shouldReceive( 'get_quantity' )->andReturn( 1 );
+
+		$order = Mockery::mock( 'WC_Order' );
+		$order->shouldReceive( 'get_id' )->andReturn( 100 );
+		$order->shouldReceive( 'get_meta' )->with( '_kunaki_submitted' )->andReturn( '' );
+		$order->shouldReceive( 'get_meta' )->with( '_kunaki_fulfillment_attempts' )->andReturn( '' );
+		$order->shouldReceive( 'get_items' )->andReturn( array( $item ) );
+		$order->shouldReceive( 'get_shipping_methods' )->andReturn( array() );
+		$order->shouldReceive( 'update_meta_data' )->withAnyArgs()->zeroOrMoreTimes();
+		$order->shouldReceive( 'save' )->once()->andThrow( new \RuntimeException( 'DB down' ) );
+		$order->shouldReceive( 'add_order_note' )->once();
+
+		Functions\expect( 'wc_get_order' )->with( 100 )->andReturn( $order );
+		Functions\expect( 'get_post_meta' )->with( 42, '_kunaki_product_id', true )->andReturn( 'PXZZ111111' );
+		Functions\expect( 'get_option' )->zeroOrMoreTimes()->andReturn( 'no' );
+
+		$this->fulfillment->handle_order_processing( 100, $order );
+
+		// Lock must be released even though save() threw.
+		$this->assertNotEmpty( $delete_calls, 'Lock must be released when record_failure save() throws.' );
+	}
+
 	public function test_ajax_handler_registers_on_init() {
 		$retry_queue = new Kunaki_Retry_Queue();
 
