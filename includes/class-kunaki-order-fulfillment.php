@@ -6,6 +6,9 @@ class Kunaki_Order_Fulfillment {
 	const META_KUNAKI_ORDER_ID      = '_kunaki_order_id';
 	const META_KUNAKI_SUBMITTED     = '_kunaki_submitted';
 	const META_KUNAKI_SHIPPING_DESC = '_kunaki_shipping_description';
+	const META_FULFILLMENT_ERROR    = '_kunaki_fulfillment_error';
+	const META_FULFILLMENT_FAILED   = '_kunaki_fulfillment_failed_at';
+	const META_FULFILLMENT_ATTEMPTS = '_kunaki_fulfillment_attempts';
 
 	public function init() {
 		add_action( 'woocommerce_order_status_processing', array( $this, 'handle_order_processing' ), 10, 2 );
@@ -119,9 +122,9 @@ class Kunaki_Order_Fulfillment {
 
 		if ( empty( $shipping_description ) ) {
 			Kunaki_Logger::error( "Order #{$order_id}: No Kunaki shipping description found." );
-			$order->add_order_note(
-				__( 'Kunaki fulfillment failed: No matching Kunaki shipping method found on this order.', 'kunaki-woocommerce' ),
-				false
+			$this->record_failure(
+				$order,
+				__( 'No matching Kunaki shipping method found on this order.', 'kunaki-woocommerce' )
 			);
 			$wpdb->delete( $wpdb->options, array( 'option_name' => $lock_option ) );
 			return;
@@ -153,26 +156,19 @@ class Kunaki_Order_Fulfillment {
 		$result = $api->submit_order( $address, $shipping_description, array_values( $kunaki_products ) );
 
 		if ( is_wp_error( $result ) ) {
-			$wpdb->delete( $wpdb->options, array( 'option_name' => $lock_option ) );
 			Kunaki_Logger::error( "Order #{$order_id}: Kunaki submission failed: " . $result->get_error_message() );
-			$order->add_order_note(
-				sprintf(
-					/* translators: %s: error message */
-					__( 'Kunaki fulfillment failed: %s', 'kunaki-woocommerce' ),
-					$result->get_error_message()
-				),
-				false
-			);
+			$this->record_failure( $order, $result->get_error_message() );
+			$wpdb->delete( $wpdb->options, array( 'option_name' => $lock_option ) );
 			return;
 		}
 
 		if ( '' === $result ) {
-			$wpdb->delete( $wpdb->options, array( 'option_name' => $lock_option ) );
 			Kunaki_Logger::error( "Order #{$order_id}: Kunaki returned success but no Order ID." );
-			$order->add_order_note(
-				__( 'Kunaki fulfillment failed: API returned success but no Order ID.', 'kunaki-woocommerce' ),
-				false
+			$this->record_failure(
+				$order,
+				__( 'API returned success but no Order ID.', 'kunaki-woocommerce' )
 			);
+			$wpdb->delete( $wpdb->options, array( 'option_name' => $lock_option ) );
 			return;
 		}
 
@@ -181,6 +177,11 @@ class Kunaki_Order_Fulfillment {
 		$order->update_meta_data( self::META_KUNAKI_SUBMITTED, 'yes' );
 		$order->update_meta_data( self::META_KUNAKI_SHIPPING_DESC, $shipping_description );
 		$order->update_meta_data( '_kunaki_all_items', $has_non_kunaki ? 'no' : 'yes' );
+
+		// Clear any failure meta from previous attempts.
+		$order->delete_meta_data( self::META_FULFILLMENT_ERROR );
+		$order->delete_meta_data( self::META_FULFILLMENT_FAILED );
+		$order->delete_meta_data( self::META_FULFILLMENT_ATTEMPTS );
 
 		try {
 			$order->save();
@@ -233,6 +234,59 @@ class Kunaki_Order_Fulfillment {
 	}
 
 	/**
+	 * Record a structured failure on the order.
+	 *
+	 * @param WC_Order $order         WooCommerce order.
+	 * @param string   $error_message Human-readable error description.
+	 */
+	private function record_failure( $order, $error_message ) {
+		$attempts = (int) $order->get_meta( self::META_FULFILLMENT_ATTEMPTS );
+		$order->update_meta_data( self::META_FULFILLMENT_ERROR, $error_message );
+		$order->update_meta_data( self::META_FULFILLMENT_FAILED, gmdate( 'c' ) );
+		$order->update_meta_data( self::META_FULFILLMENT_ATTEMPTS, $attempts + 1 );
+		$order->save();
+
+		$order->add_order_note(
+			sprintf(
+				/* translators: %s: error message */
+				__( 'Kunaki fulfillment failed: %s', 'kunaki-woocommerce' ),
+				$error_message
+			),
+			false
+		);
+	}
+
+	/**
+	 * Retry order submission to Kunaki.
+	 *
+	 * @param int $order_id WooCommerce order ID.
+	 * @return true|WP_Error True on success, WP_Error on failure.
+	 */
+	public function prepare_for_retry( $order_id ) {
+		$order = wc_get_order( $order_id );
+		if ( ! $order ) {
+			return new \WP_Error( 'invalid_order', __( 'Order not found.', 'kunaki-woocommerce' ) );
+		}
+
+		if ( 'yes' === $order->get_meta( self::META_KUNAKI_SUBMITTED ) ) {
+			return new \WP_Error( 'already_submitted', __( 'Order already submitted to Kunaki.', 'kunaki-woocommerce' ) );
+		}
+
+		$this->handle_order_processing( $order_id, $order );
+
+		// Re-fetch to check result.
+		$order = wc_get_order( $order_id );
+		if ( $order && 'yes' === $order->get_meta( self::META_KUNAKI_SUBMITTED ) ) {
+			return true;
+		}
+
+		return new \WP_Error(
+			'retry_failed',
+			$order ? $order->get_meta( self::META_FULFILLMENT_ERROR ) : __( 'Retry failed.', 'kunaki-woocommerce' )
+		);
+	}
+
+	/**
 	 * Extract the Kunaki shipping description from the WooCommerce order.
 	 *
 	 * @param WC_Order $order WooCommerce order.
@@ -258,25 +312,49 @@ class Kunaki_Order_Fulfillment {
 	 */
 	public function display_kunaki_order_info( $order ) {
 		$kunaki_order_id = $order->get_meta( self::META_KUNAKI_ORDER_ID );
-		if ( empty( $kunaki_order_id ) ) {
+		$error           = $order->get_meta( self::META_FULFILLMENT_ERROR );
+
+		if ( empty( $kunaki_order_id ) && empty( $error ) ) {
 			return;
 		}
 
 		echo '<div class="kunaki-order-info">';
 		echo '<h3>' . esc_html__( 'Kunaki Fulfillment', 'kunaki-woocommerce' ) . '</h3>';
-		echo '<p><strong>' . esc_html__( 'Kunaki Order ID:', 'kunaki-woocommerce' ) . '</strong> ' . esc_html( $kunaki_order_id ) . '</p>';
 
-		$status = $order->get_meta( '_kunaki_order_status' );
-		if ( ! empty( $status ) ) {
-			echo '<p><strong>' . esc_html__( 'Kunaki Status:', 'kunaki-woocommerce' ) . '</strong> ' . esc_html( $status ) . '</p>';
-		}
+		if ( ! empty( $kunaki_order_id ) ) {
+			echo '<p><strong>' . esc_html__( 'Kunaki Order ID:', 'kunaki-woocommerce' ) . '</strong> ' . esc_html( $kunaki_order_id ) . '</p>';
 
-		$tracking_id   = $order->get_meta( '_kunaki_tracking_id' );
-		$tracking_type = $order->get_meta( '_kunaki_tracking_type' );
-		if ( ! empty( $tracking_id ) && 'NA' !== $tracking_id ) {
-			echo '<p><strong>' . esc_html__( 'Tracking:', 'kunaki-woocommerce' ) . '</strong> ';
-			echo esc_html( $tracking_type ) . ' &ndash; ' . esc_html( $tracking_id );
-			echo '</p>';
+			$status = $order->get_meta( '_kunaki_order_status' );
+			if ( ! empty( $status ) ) {
+				echo '<p><strong>' . esc_html__( 'Kunaki Status:', 'kunaki-woocommerce' ) . '</strong> ' . esc_html( $status ) . '</p>';
+			}
+
+			$tracking_id   = $order->get_meta( '_kunaki_tracking_id' );
+			$tracking_type = $order->get_meta( '_kunaki_tracking_type' );
+			if ( ! empty( $tracking_id ) && 'NA' !== $tracking_id ) {
+				echo '<p><strong>' . esc_html__( 'Tracking:', 'kunaki-woocommerce' ) . '</strong> ';
+				echo esc_html( $tracking_type ) . ' &ndash; ' . esc_html( $tracking_id );
+				echo '</p>';
+			}
+		} else {
+			$attempts  = (int) $order->get_meta( self::META_FULFILLMENT_ATTEMPTS );
+			$failed_at = $order->get_meta( self::META_FULFILLMENT_FAILED );
+
+			echo '<p class="kunaki-error"><strong>' . esc_html__( 'Status:', 'kunaki-woocommerce' ) . '</strong> '
+				. esc_html__( 'Failed', 'kunaki-woocommerce' ) . '</p>';
+			echo '<p><strong>' . esc_html__( 'Error:', 'kunaki-woocommerce' ) . '</strong> '
+				. esc_html( $error ) . '</p>';
+			echo '<p><strong>' . esc_html__( 'Attempts:', 'kunaki-woocommerce' ) . '</strong> '
+				. esc_html( $attempts ) . '</p>';
+			if ( $failed_at ) {
+				echo '<p><strong>' . esc_html__( 'Last attempt:', 'kunaki-woocommerce' ) . '</strong> '
+					. esc_html( $failed_at ) . '</p>';
+			}
+			echo '<button type="button" class="button kunaki-retry-button" data-order-id="'
+				. esc_attr( $order->get_id() ) . '">'
+				. esc_html__( 'Retry Submission', 'kunaki-woocommerce' ) . '</button>';
+			echo ' <span class="kunaki-retry-spinner spinner"></span>';
+			echo '<span class="kunaki-retry-result"></span>';
 		}
 
 		echo '</div>';

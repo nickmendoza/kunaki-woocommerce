@@ -23,6 +23,7 @@ class Kunaki_WooCommerce {
 		require_once KUNAKI_WC_PLUGIN_DIR . 'includes/class-kunaki-product-meta.php';
 		require_once KUNAKI_WC_PLUGIN_DIR . 'includes/class-kunaki-order-fulfillment.php';
 		require_once KUNAKI_WC_PLUGIN_DIR . 'includes/class-kunaki-order-status-sync.php';
+		require_once KUNAKI_WC_PLUGIN_DIR . 'includes/class-kunaki-retry-queue.php';
 	}
 
 	private function init_hooks() {
@@ -44,6 +45,10 @@ class Kunaki_WooCommerce {
 		// Order status sync.
 		$sync = new Kunaki_Order_Status_Sync();
 		$sync->init();
+
+		// Retry queue.
+		$retry_queue = new Kunaki_Retry_Queue();
+		$retry_queue->init();
 
 		// Admin assets.
 		add_action( 'admin_enqueue_scripts', array( $this, 'enqueue_admin_assets' ) );
@@ -69,13 +74,44 @@ class Kunaki_WooCommerce {
 
 	public function enqueue_admin_assets( $hook ) {
 		$screen = get_current_screen();
-		if ( $screen && in_array( $screen->id, array( 'product', 'woocommerce_page_wc-settings' ), true ) ) {
+		if ( ! $screen ) {
+			return;
+		}
+
+		$css_screens = array( 'product', 'woocommerce_page_wc-settings', 'shop_order', 'woocommerce_page_kunaki-failed-orders' );
+		if ( function_exists( 'wc_get_page_screen_id' ) ) {
+			$css_screens[] = wc_get_page_screen_id( 'shop-order' );
+		}
+
+		if ( in_array( $screen->id, $css_screens, true ) ) {
 			wp_enqueue_style(
 				'kunaki-admin',
 				KUNAKI_WC_PLUGIN_URL . 'assets/css/kunaki-admin.css',
 				array(),
 				KUNAKI_WC_VERSION
 			);
+		}
+
+		$retry_screens = array( 'shop_order', 'woocommerce_page_kunaki-failed-orders' );
+		if ( function_exists( 'wc_get_page_screen_id' ) ) {
+			$retry_screens[] = wc_get_page_screen_id( 'shop-order' );
+		}
+
+		if ( in_array( $screen->id, $retry_screens, true ) ) {
+			wp_enqueue_script(
+				'kunaki-retry',
+				KUNAKI_WC_PLUGIN_URL . 'assets/js/kunaki-retry.js',
+				array( 'jquery' ),
+				KUNAKI_WC_VERSION,
+				true
+			);
+			wp_localize_script( 'kunaki-retry', 'kunakiRetry', array(
+				'nonce' => wp_create_nonce( 'kunaki_retry_order' ),
+				'i18n'  => array(
+					'submitted'     => __( 'Submitted', 'kunaki-woocommerce' ),
+					'requestFailed' => __( 'Request failed.', 'kunaki-woocommerce' ),
+				),
+			) );
 		}
 	}
 
