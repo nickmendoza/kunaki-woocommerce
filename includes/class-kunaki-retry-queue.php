@@ -20,17 +20,14 @@ class Kunaki_Retry_Queue {
 	}
 
 	public function render_page() {
-		$orders = wc_get_orders( array(
+		$failed_orders = wc_get_orders( array(
+			'status'       => 'processing',
 			'meta_key'     => Kunaki_Order_Fulfillment::META_FULFILLMENT_ERROR,
 			'meta_compare' => 'EXISTS',
 			'limit'        => 100,
 			'orderby'      => 'date',
 			'order'        => 'DESC',
 		) );
-
-		$failed_orders = array_filter( $orders, function ( $order ) {
-			return 'yes' !== $order->get_meta( Kunaki_Order_Fulfillment::META_KUNAKI_SUBMITTED );
-		} );
 
 		echo '<div class="wrap">';
 		echo '<h1>' . esc_html__( 'Kunaki Failed Orders', 'kunaki-woocommerce' ) . '</h1>';

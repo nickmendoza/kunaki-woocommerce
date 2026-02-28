@@ -94,8 +94,21 @@ class RetryQueueTest extends KunakiTestCase {
 		$this->fulfillment->handle_order_processing( 100, $order1 );
 	}
 
+	public function test_prepare_for_retry_rejects_non_processing_order() {
+		$order = Mockery::mock( 'WC_Order' );
+		$order->shouldReceive( 'get_status' )->andReturn( 'cancelled' );
+
+		Functions\expect( 'wc_get_order' )->with( 100 )->andReturn( $order );
+
+		$result = $this->fulfillment->prepare_for_retry( 100 );
+
+		$this->assertInstanceOf( WP_Error::class, $result );
+		$this->assertEquals( 'invalid_status', $result->get_error_code() );
+	}
+
 	public function test_prepare_for_retry_rejects_already_submitted_order() {
 		$order = Mockery::mock( 'WC_Order' );
+		$order->shouldReceive( 'get_status' )->andReturn( 'processing' );
 		$order->shouldReceive( 'get_meta' )->with( '_kunaki_submitted' )->andReturn( 'yes' );
 
 		Functions\expect( 'wc_get_order' )->with( 100 )->andReturn( $order );
@@ -119,6 +132,7 @@ class RetryQueueTest extends KunakiTestCase {
 		// First wc_get_order call — initial load in prepare_for_retry.
 		$order = Mockery::mock( 'WC_Order' );
 		$order->shouldReceive( 'get_id' )->andReturn( 100 );
+		$order->shouldReceive( 'get_status' )->andReturn( 'processing' );
 		$order->shouldReceive( 'get_meta' )->with( '_kunaki_submitted' )->andReturn( '' );
 		$order->shouldReceive( 'get_meta' )->with( '_kunaki_fulfillment_attempts' )->andReturn( '' );
 		$order->shouldReceive( 'get_items' )->andReturn( array() );
@@ -144,6 +158,7 @@ class RetryQueueTest extends KunakiTestCase {
 	public function test_prepare_for_retry_returns_error_on_failure() {
 		$order = Mockery::mock( 'WC_Order' );
 		$order->shouldReceive( 'get_id' )->andReturn( 100 );
+		$order->shouldReceive( 'get_status' )->andReturn( 'processing' );
 		$order->shouldReceive( 'get_meta' )->with( '_kunaki_submitted' )->andReturn( '' );
 		$order->shouldReceive( 'get_meta' )->with( '_kunaki_fulfillment_attempts' )->andReturn( '' );
 		$order->shouldReceive( 'get_meta' )->with( '_kunaki_fulfillment_error' )->andReturn( 'Some error' );

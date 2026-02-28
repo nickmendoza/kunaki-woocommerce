@@ -272,6 +272,10 @@ class Kunaki_Order_Fulfillment {
 			return new \WP_Error( 'invalid_order', __( 'Order not found.', 'kunaki-woocommerce' ) );
 		}
 
+		if ( 'processing' !== $order->get_status() ) {
+			return new \WP_Error( 'invalid_status', __( 'Order must be in processing status to retry.', 'kunaki-woocommerce' ) );
+		}
+
 		if ( 'yes' === $order->get_meta( self::META_KUNAKI_SUBMITTED ) ) {
 			return new \WP_Error( 'already_submitted', __( 'Order already submitted to Kunaki.', 'kunaki-woocommerce' ) );
 		}
