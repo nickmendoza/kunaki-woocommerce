@@ -11,7 +11,7 @@ class Kunaki_Order_Status_Sync {
 	 * Query Kunaki for status updates on all submitted but not yet completed orders.
 	 */
 	public function sync_all_pending_orders() {
-		Kunaki_Logger::info( 'Starting Kunaki order status sync.' );
+		Kunaki_Logger::info( 'Starting order status sync.' );
 
 		$orders = wc_get_orders( array(
 			'status'       => array( 'processing' ),
@@ -23,7 +23,7 @@ class Kunaki_Order_Status_Sync {
 		) );
 
 		if ( empty( $orders ) ) {
-			Kunaki_Logger::debug( 'No pending Kunaki orders to sync.' );
+			Kunaki_Logger::debug( 'No pending orders to sync.' );
 			return;
 		}
 
@@ -33,13 +33,11 @@ class Kunaki_Order_Status_Sync {
 			try {
 				$this->sync_single_order( $order, $api );
 			} catch ( \Throwable $e ) {
-				Kunaki_Logger::error(
-					'Order #' . $order->get_id() . ': Sync failed with exception: ' . $e->getMessage()
-				);
+				Kunaki_Logger::error( 'Sync failed.', array( 'order_id' => $order->get_id(), 'error' => $e->getMessage() ) );
 			}
 		}
 
-		Kunaki_Logger::info( 'Kunaki order status sync complete. Checked ' . count( $orders ) . ' orders.' );
+		Kunaki_Logger::info( 'Order status sync complete.', array( 'orders_checked' => count( $orders ) ) );
 	}
 
 	/**
@@ -77,7 +75,7 @@ class Kunaki_Order_Status_Sync {
 		) );
 
 		if ( ! $acquired ) {
-			Kunaki_Logger::debug( "Order #{$order_id}: Could not acquire sync lock, another process is syncing." );
+			Kunaki_Logger::debug( 'Could not acquire sync lock.', array( 'order_id' => $order_id ) );
 			return;
 		}
 
@@ -113,7 +111,7 @@ class Kunaki_Order_Status_Sync {
 		$result = $api->get_order_status( $kunaki_order_id );
 
 		if ( is_wp_error( $result ) ) {
-			Kunaki_Logger::error( "Order #{$order_id}: Failed to get Kunaki status: " . $result->get_error_message() );
+			Kunaki_Logger::error( 'Failed to get Kunaki status.', array( 'order_id' => $order_id, 'error' => $result->get_error_message() ) );
 			return;
 		}
 
@@ -130,7 +128,7 @@ class Kunaki_Order_Status_Sync {
 
 		$order->update_meta_data( '_kunaki_order_status', $kunaki_status );
 
-		Kunaki_Logger::info( "Order #{$order_id}: Kunaki status changed from '{$previous_status}' to '{$kunaki_status}'." );
+		Kunaki_Logger::info( 'Kunaki status changed.', array( 'order_id' => $order_id, 'from' => $previous_status, 'to' => $kunaki_status ) );
 
 		// Defer all order notes until after save() succeeds. If save() fails,
 		// no meta is persisted and the next cron run retries cleanly — without
@@ -198,7 +196,7 @@ class Kunaki_Order_Status_Sync {
 		try {
 			$order->save();
 		} catch ( \Throwable $e ) {
-			Kunaki_Logger::error( "Order #{$order_id}: save() failed during sync — " . $e->getMessage() );
+			Kunaki_Logger::error( 'save() failed during sync.', array( 'order_id' => $order_id, 'error' => $e->getMessage() ) );
 			// Pending notes meta remains in memory (unsaved); next cron run will
 			// re-detect the status change, rebuild notes, and retry the save.
 			return;

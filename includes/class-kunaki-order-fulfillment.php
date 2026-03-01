@@ -33,7 +33,7 @@ class Kunaki_Order_Fulfillment {
 
 		// Prevent double-submission.
 		if ( 'yes' === $order->get_meta( self::META_KUNAKI_SUBMITTED ) ) {
-			Kunaki_Logger::info( "Order #{$order_id}: Already submitted to Kunaki, skipping." );
+			Kunaki_Logger::info( 'Already submitted to Kunaki, skipping.', array( 'order_id' => $order_id ) );
 			return;
 		}
 
@@ -45,7 +45,7 @@ class Kunaki_Order_Fulfillment {
 			$fallback_option
 		) );
 		if ( $fallback_value ) {
-			Kunaki_Logger::info( "Order #{$order_id}: Found fallback submitted marker (Kunaki ID: {$fallback_value}), restoring meta." );
+			Kunaki_Logger::info( 'Found fallback submitted marker, restoring meta.', array( 'order_id' => $order_id, 'kunaki_order_id' => $fallback_value ) );
 			$order->update_meta_data( self::META_KUNAKI_ORDER_ID, $fallback_value );
 			$order->update_meta_data( self::META_KUNAKI_SUBMITTED, 'yes' );
 			$order->delete_meta_data( self::META_FULFILLMENT_ERROR );
@@ -90,7 +90,7 @@ class Kunaki_Order_Fulfillment {
 		) );
 
 		if ( ! $acquired ) {
-			Kunaki_Logger::debug( "Order #{$order_id}: Could not acquire lock, another process is submitting." );
+			Kunaki_Logger::debug( 'Could not acquire lock, another process is submitting.', array( 'order_id' => $order_id ) );
 			return;
 		}
 
@@ -125,7 +125,7 @@ class Kunaki_Order_Fulfillment {
 		}
 
 		if ( empty( $kunaki_products ) ) {
-			Kunaki_Logger::debug( "Order #{$order_id}: No Kunaki products found, skipping." );
+			Kunaki_Logger::debug( 'No Kunaki products found, skipping.', array( 'order_id' => $order_id ) );
 			$wpdb->delete( $wpdb->options, array( 'option_name' => $lock_option ) );
 			return;
 		}
@@ -134,7 +134,7 @@ class Kunaki_Order_Fulfillment {
 		$shipping_description = $this->get_shipping_description( $order );
 
 		if ( empty( $shipping_description ) ) {
-			Kunaki_Logger::error( "Order #{$order_id}: No Kunaki shipping description found." );
+			Kunaki_Logger::error( 'No Kunaki shipping description found.', array( 'order_id' => $order_id ) );
 			$this->record_failure(
 				$order,
 				__( 'No matching Kunaki shipping method found on this order.', 'kunaki-woocommerce' )
@@ -169,14 +169,14 @@ class Kunaki_Order_Fulfillment {
 		$result = $api->submit_order( $address, $shipping_description, array_values( $kunaki_products ) );
 
 		if ( is_wp_error( $result ) ) {
-			Kunaki_Logger::error( "Order #{$order_id}: Kunaki submission failed: " . $result->get_error_message() );
+			Kunaki_Logger::error( 'Kunaki submission failed.', array( 'order_id' => $order_id, 'error' => $result->get_error_message() ) );
 			$this->record_failure( $order, $result->get_error_message() );
 			$wpdb->delete( $wpdb->options, array( 'option_name' => $lock_option ) );
 			return;
 		}
 
 		if ( '' === $result ) {
-			Kunaki_Logger::error( "Order #{$order_id}: Kunaki returned success but no Order ID." );
+			Kunaki_Logger::error( 'Kunaki returned success but no Order ID.', array( 'order_id' => $order_id ) );
 			$this->record_failure(
 				$order,
 				__( 'API returned success but no Order ID.', 'kunaki-woocommerce' )
@@ -216,17 +216,16 @@ class Kunaki_Order_Fulfillment {
 				if ( ! $marker_written ) {
 					// Nothing persisted — keep the lock so the order can't be
 					// resubmitted until it expires and someone intervenes.
-					Kunaki_Logger::error(
-						"Order #{$order_id}: CATASTROPHIC — Could not write durable marker. Lock retained to prevent duplicate submission."
-					);
+					Kunaki_Logger::error( 'CATASTROPHIC — Could not write durable marker. Lock retained.', array( 'order_id' => $order_id ) );
 					return;
 				}
 			}
 			$wpdb->delete( $wpdb->options, array( 'option_name' => $lock_option ) );
-			Kunaki_Logger::error(
-				"Order #{$order_id}: CRITICAL — Kunaki order {$result} was created but order save failed: "
-				. $e->getMessage() . '. Submitted flag written directly. Manual reconciliation required.'
-			);
+			Kunaki_Logger::error( 'CRITICAL — Kunaki order created but save failed. Manual reconciliation required.', array(
+				'order_id'        => $order_id,
+				'kunaki_order_id' => $result,
+				'error'           => $e->getMessage(),
+			) );
 			return;
 		}
 
@@ -244,7 +243,7 @@ class Kunaki_Order_Fulfillment {
 			false
 		);
 
-		Kunaki_Logger::info( "Order #{$order_id}: Submitted to Kunaki, Kunaki Order ID: {$result}" );
+		Kunaki_Logger::info( 'Submitted to Kunaki.', array( 'order_id' => $order_id, 'kunaki_order_id' => $result ) );
 	}
 
 	/**
@@ -268,10 +267,10 @@ class Kunaki_Order_Fulfillment {
 				'_kunaki_failed_' . $order->get_id(),
 				$error_message
 			) );
-			Kunaki_Logger::error(
-				"Order #{$order->get_id()}: Failed to persist failure meta: " . $e->getMessage()
-				. '. Wrote durable failure marker.'
-			);
+			Kunaki_Logger::error( 'Failed to persist failure meta. Wrote durable failure marker.', array(
+				'order_id' => $order->get_id(),
+				'error'    => $e->getMessage(),
+			) );
 		}
 
 		try {
@@ -358,7 +357,7 @@ class Kunaki_Order_Fulfillment {
 				continue;
 			}
 			$wpdb->delete( $wpdb->options, array( 'option_name' => $row->option_name ) );
-			Kunaki_Logger::info( "Order #{$order_id}: Recovered orphaned failure marker." );
+			Kunaki_Logger::info( 'Recovered orphaned failure marker.', array( 'order_id' => $order_id ) );
 		}
 	}
 
@@ -371,7 +370,7 @@ class Kunaki_Order_Fulfillment {
 			$max_retries = 3;
 		}
 
-		Kunaki_Logger::info( 'Starting failed order retry (max retries: ' . $max_retries . ').' );
+		Kunaki_Logger::info( 'Starting failed order retry.', array( 'max_retries' => $max_retries ) );
 
 		// Recover any orders orphaned by a save_meta_data() failure in record_failure().
 		$this->recover_orphaned_failures();
@@ -425,7 +424,7 @@ class Kunaki_Order_Fulfillment {
 				} catch ( \Throwable $_ ) {
 					// Best effort — log entry below is the fallback.
 				}
-				Kunaki_Logger::info( "Order #{$order->get_id()}: Max retries ({$max_retries}) exhausted. Requires manual intervention." );
+				Kunaki_Logger::info( 'Max retries exhausted. Requires manual intervention.', array( 'order_id' => $order->get_id(), 'max_retries' => $max_retries ) );
 				continue;
 			}
 
@@ -440,18 +439,18 @@ class Kunaki_Order_Fulfillment {
 			}
 
 			$order_id = $order->get_id();
-			Kunaki_Logger::info( "Order #{$order_id}: Retrying submission (retry {$attempts} of {$max_retries})." );
+			Kunaki_Logger::info( 'Retrying submission.', array( 'order_id' => $order_id, 'attempt' => $attempts, 'max_retries' => $max_retries ) );
 
 			try {
 				$this->handle_order_processing( $order_id, $order );
 			} catch ( \Throwable $e ) {
-				Kunaki_Logger::error( "Order #{$order_id}: Retry failed with exception: " . $e->getMessage() );
+				Kunaki_Logger::error( 'Retry failed.', array( 'order_id' => $order_id, 'error' => $e->getMessage() ) );
 			}
 
 			$retried++;
 		}
 
-		Kunaki_Logger::info( "Retry complete. Dispatched {$retried} order(s) for reprocessing." );
+		Kunaki_Logger::info( 'Retry complete.', array( 'orders_retried' => $retried ) );
 	}
 
 	/**
