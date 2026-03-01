@@ -9,9 +9,10 @@ class Kunaki_Logger {
 		if ( ! function_exists( 'wc_get_logger' ) ) {
 			return;
 		}
-		$entry  = array_merge( array( 'message' => $message ), $context );
+		$entry  = array( 'message' => $message ) + $context;
 		$logger = wc_get_logger();
-		$logger->log( $level, wp_json_encode( $entry ), array( 'source' => self::SOURCE ) );
+		$json   = wp_json_encode( $entry );
+		$logger->log( $level, false !== $json ? $json : $message, array( 'source' => self::SOURCE ) );
 	}
 
 	public static function info( $message, $context = array() ) {

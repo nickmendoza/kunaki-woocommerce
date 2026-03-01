@@ -90,4 +90,31 @@ class LoggerTest extends KunakiTestCase {
 
 		Kunaki_Logger::debug( 'API request.', array( 'body' => '<xml/>' ) );
 	}
+
+	public function test_context_message_key_does_not_overwrite_message() {
+		$logger = Mockery::mock( 'WC_Logger' );
+		$logger->shouldReceive( 'log' )
+			->once()
+			->with(
+				'info',
+				Mockery::on( function ( $json ) {
+					$data = json_decode( $json, true );
+					return 'Real message.' === $data['message'];
+				} ),
+				array( 'source' => 'kunaki-woocommerce' )
+			);
+		Functions\expect( 'wc_get_logger' )->once()->andReturn( $logger );
+
+		Kunaki_Logger::info( 'Real message.', array( 'message' => 'should be ignored' ) );
+	}
+
+	public function test_invalid_utf8_falls_back_to_plain_message() {
+		$logger = Mockery::mock( 'WC_Logger' );
+		$logger->shouldReceive( 'log' )
+			->once()
+			->with( 'error', 'Parse error.', array( 'source' => 'kunaki-woocommerce' ) );
+		Functions\expect( 'wc_get_logger' )->once()->andReturn( $logger );
+
+		Kunaki_Logger::error( 'Parse error.', array( 'body' => "\xc3\x28" ) );
+	}
 }
