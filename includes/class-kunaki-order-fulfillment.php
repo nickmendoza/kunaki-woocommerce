@@ -255,15 +255,14 @@ class Kunaki_Order_Fulfillment {
 	 * @param string   $error_code    WP_Error code (used to skip counting circuit-open rejections).
 	 */
 	private function record_failure( $order, $error_message, $error_code = '' ) {
-		// Don't count circuit-open rejections against the retry budget.
-		if ( 'kunaki_circuit_open' === $error_code ) {
-			return;
-		}
+		$skip_increment = ( 'kunaki_circuit_open' === $error_code );
 
 		$attempts = (int) $order->get_meta( self::META_FULFILLMENT_ATTEMPTS );
 		$order->update_meta_data( self::META_FULFILLMENT_ERROR, $error_message );
 		$order->update_meta_data( self::META_FULFILLMENT_FAILED, gmdate( 'c' ) );
-		$order->update_meta_data( self::META_FULFILLMENT_ATTEMPTS, $attempts + 1 );
+		if ( ! $skip_increment ) {
+			$order->update_meta_data( self::META_FULFILLMENT_ATTEMPTS, $attempts + 1 );
+		}
 		try {
 			$order->save_meta_data();
 		} catch ( \Throwable $e ) {
