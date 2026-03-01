@@ -415,6 +415,13 @@ class OrderStatusSyncTest extends KunakiTestCase {
 		$this->addToAssertionCount( 1 );
 	}
 
+	public function test_cron_fires_with_zero_accepted_args() {
+		Functions\expect( 'add_action' )->once()
+			->with( 'kunaki_wc_sync_order_status', Mockery::any(), 10, 0 );
+
+		$this->sync->init();
+	}
+
 	// --- Helpers ---
 
 	private function create_order_mock( $kunaki_order_id, $previous_status = '' ) {

@@ -4,7 +4,7 @@ defined( 'ABSPATH' ) || exit;
 class Kunaki_Order_Status_Sync {
 
 	public function init() {
-		add_action( 'kunaki_wc_sync_order_status', array( $this, 'sync_all_pending_orders' ) );
+		add_action( 'kunaki_wc_sync_order_status', array( $this, 'sync_all_pending_orders' ), 10, 0 );
 	}
 
 	/**
