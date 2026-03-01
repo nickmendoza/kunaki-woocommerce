@@ -9,15 +9,17 @@ class Kunaki_Order_Status_Sync {
 
 	/**
 	 * Query Kunaki for status updates on all submitted but not yet completed orders.
+	 *
+	 * @param int $limit Maximum orders to process per batch. Default 50.
 	 */
-	public function sync_all_pending_orders() {
+	public function sync_all_pending_orders( $limit = 50 ) {
 		Kunaki_Logger::info( 'Starting order status sync.' );
 
 		$orders = wc_get_orders( array(
 			'status'       => array( 'processing' ),
 			'meta_key'     => Kunaki_Order_Fulfillment::META_KUNAKI_ORDER_ID,
 			'meta_compare' => 'EXISTS',
-			'limit'        => 50,
+			'limit'        => $limit,
 			'orderby'      => 'date',
 			'order'        => 'ASC',
 		) );

@@ -393,6 +393,28 @@ class OrderStatusSyncTest extends KunakiTestCase {
 		$this->sync->sync_all_pending_orders();
 	}
 
+	public function test_sync_respects_custom_limit() {
+		Functions\expect( 'wc_get_orders' )->once()
+			->with( Mockery::on( function ( $args ) {
+				return 10 === $args['limit'];
+			} ) )
+			->andReturn( array() );
+
+		$this->sync->sync_all_pending_orders( 10 );
+		$this->addToAssertionCount( 1 );
+	}
+
+	public function test_sync_default_limit_is_50() {
+		Functions\expect( 'wc_get_orders' )->once()
+			->with( Mockery::on( function ( $args ) {
+				return 50 === $args['limit'];
+			} ) )
+			->andReturn( array() );
+
+		$this->sync->sync_all_pending_orders();
+		$this->addToAssertionCount( 1 );
+	}
+
 	// --- Helpers ---
 
 	private function create_order_mock( $kunaki_order_id, $previous_status = '' ) {
