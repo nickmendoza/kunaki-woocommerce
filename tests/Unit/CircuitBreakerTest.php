@@ -187,13 +187,35 @@ class CircuitBreakerTest extends KunakiTestCase {
 		$this->assertArrayNotHasKey( Kunaki_Circuit_Breaker::OPTION_KEY, $this->updated_options );
 	}
 
-	public function test_api_business_error_does_not_reset_failures() {
+	public function test_api_business_error_resets_failure_streak() {
 		$this->set_circuit_state( 'closed', 3 );
 
 		$cb = new Kunaki_Circuit_Breaker();
 		$cb->post_request( new WP_Error( 'kunaki_api_error', 'Bad request', array( 'error_code' => 2 ) ) );
 
-		$this->assertArrayNotHasKey( Kunaki_Circuit_Breaker::OPTION_KEY, $this->updated_options );
+		$saved = json_decode( $this->updated_options[ Kunaki_Circuit_Breaker::OPTION_KEY ], true );
+		$this->assertSame( 'closed', $saved['state'] );
+		$this->assertSame( 0, $saved['failure_count'] );
+	}
+
+	public function test_business_error_between_infra_failures_prevents_premature_trip() {
+		// 4 infra failures, then a business error (API is alive), then 1 more infra failure.
+		// Without the fix this would trip at failure_count=5. With the fix, the business
+		// error resets the counter so the final failure only reaches 1.
+		$this->set_circuit_state( 'closed', 4 );
+
+		$cb = new Kunaki_Circuit_Breaker();
+		$cb->post_request( new WP_Error( 'kunaki_api_error', 'Invalid Product' ) );
+
+		$saved = json_decode( $this->updated_options[ Kunaki_Circuit_Breaker::OPTION_KEY ], true );
+		$this->assertSame( 0, $saved['failure_count'] );
+
+		// Now one more infra failure — should NOT trip (count goes to 1, threshold is 5).
+		$cb->post_request( new WP_Error( 'http_request_failed', 'Timeout' ) );
+
+		$saved = json_decode( $this->updated_options[ Kunaki_Circuit_Breaker::OPTION_KEY ], true );
+		$this->assertSame( 'closed', $saved['state'] );
+		$this->assertSame( 1, $saved['failure_count'] );
 	}
 
 	public function test_uses_configured_threshold() {
@@ -229,27 +251,6 @@ class CircuitBreakerTest extends KunakiTestCase {
 
 		$saved = json_decode( $this->updated_options[ Kunaki_Circuit_Breaker::OPTION_KEY ], true );
 		$this->assertSame( 'open', $saved['state'] );
-	}
-
-	// ── is_available() ────────────────────────────────────────────────
-
-	public function test_is_available_true_when_closed() {
-		$cb = new Kunaki_Circuit_Breaker();
-		$this->assertTrue( $cb->is_available() );
-	}
-
-	public function test_is_available_true_when_half_open() {
-		$this->set_circuit_state( 'half_open', 5, time() - 400 );
-
-		$cb = new Kunaki_Circuit_Breaker();
-		$this->assertTrue( $cb->is_available() );
-	}
-
-	public function test_is_available_false_when_open() {
-		$this->set_circuit_state( 'open', 5, time() - 60 );
-
-		$cb = new Kunaki_Circuit_Breaker();
-		$this->assertFalse( $cb->is_available() );
 	}
 
 	// ── reset() ───────────────────────────────────────────────────────

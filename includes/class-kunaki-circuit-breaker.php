@@ -64,20 +64,11 @@ class Kunaki_Circuit_Breaker {
 	public function post_request( $result ) {
 		if ( is_wp_error( $result ) && $this->is_trippable_error( $result ) ) {
 			$this->record_failure();
-		} elseif ( ! is_wp_error( $result ) ) {
+		} else {
+			// Any non-infrastructure result (success or business logic error)
+			// proves the API is responsive and breaks the failure streak.
 			$this->record_success();
 		}
-		// API business logic errors: do nothing — API is working.
-	}
-
-	/**
-	 * Whether the circuit allows requests (not in open state).
-	 *
-	 * @return bool
-	 */
-	public function is_available() {
-		$state = $this->get_state();
-		return 'open' !== $state['state'];
 	}
 
 	/**

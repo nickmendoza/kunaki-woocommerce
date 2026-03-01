@@ -371,12 +371,6 @@ class Kunaki_Order_Fulfillment {
 	 * Cron handler: retry orders that failed submission and haven't exceeded max retries.
 	 */
 	public function retry_failed_orders() {
-		$circuit_breaker = new Kunaki_Circuit_Breaker();
-		if ( ! $circuit_breaker->is_available() ) {
-			Kunaki_Logger::info( 'Retry skipped: circuit breaker is open.' );
-			return;
-		}
-
 		$max_retries = absint( get_option( 'kunaki_wc_max_retries', 3 ) );
 		if ( $max_retries < 1 ) {
 			$max_retries = 3;
