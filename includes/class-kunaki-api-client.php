@@ -9,11 +9,13 @@ class Kunaki_API_Client {
 	private $user_id;
 	private $password;
 	private $mode;
+	private $circuit_breaker;
 
-	public function __construct( $user_id = '', $password = '', $mode = '' ) {
-		$this->user_id  = $user_id ?: get_option( 'kunaki_wc_user_id', '' );
-		$this->password = $password ?: get_option( 'kunaki_wc_password', '' );
-		$this->mode     = $mode ?: get_option( 'kunaki_wc_mode', 'TEST' );
+	public function __construct( $user_id = '', $password = '', $mode = '', $circuit_breaker = null ) {
+		$this->user_id         = $user_id ?: get_option( 'kunaki_wc_user_id', '' );
+		$this->password        = $password ?: get_option( 'kunaki_wc_password', '' );
+		$this->mode            = $mode ?: get_option( 'kunaki_wc_mode', 'TEST' );
+		$this->circuit_breaker = $circuit_breaker ?: new Kunaki_Circuit_Breaker();
 	}
 
 	/**
@@ -146,6 +148,12 @@ class Kunaki_API_Client {
 	 * @return SimpleXMLElement|WP_Error
 	 */
 	private function send_request( $xml ) {
+		$allowed = $this->circuit_breaker->pre_request();
+		if ( is_wp_error( $allowed ) ) {
+			Kunaki_Logger::error( 'Circuit breaker prevented request: ' . $allowed->get_error_message() );
+			return $allowed;
+		}
+
 		Kunaki_Logger::debug( 'API Request: ' . $this->redact_credentials( $xml ) );
 
 		$response = wp_remote_post( self::ENDPOINT, array(
@@ -158,6 +166,7 @@ class Kunaki_API_Client {
 
 		if ( is_wp_error( $response ) ) {
 			Kunaki_Logger::error( 'HTTP error: ' . $response->get_error_message() );
+			$this->circuit_breaker->post_request( $response );
 			return $response;
 		}
 
@@ -167,7 +176,7 @@ class Kunaki_API_Client {
 		Kunaki_Logger::debug( 'API Response (' . $status_code . '): ' . $body );
 
 		if ( 200 !== $status_code ) {
-			return new WP_Error(
+			$error = new WP_Error(
 				'kunaki_http_error',
 				sprintf(
 					/* translators: %d: HTTP status code */
@@ -175,6 +184,8 @@ class Kunaki_API_Client {
 					$status_code
 				)
 			);
+			$this->circuit_breaker->post_request( $error );
+			return $error;
 		}
 
 		// Kunaki sometimes wraps responses in HTML — extract the XML Response block.
@@ -189,19 +200,24 @@ class Kunaki_API_Client {
 
 		if ( false === $parsed ) {
 			Kunaki_Logger::error( 'XML parse error for body: ' . $body );
-			return new WP_Error(
+			$error = new WP_Error(
 				'kunaki_xml_error',
 				__( 'Failed to parse Kunaki API response.', 'kunaki-woocommerce' )
 			);
+			$this->circuit_breaker->post_request( $error );
+			return $error;
 		}
 
 		$error_code = (int) $parsed->ErrorCode;
 		if ( 0 !== $error_code ) {
 			$error_text = (string) $parsed->ErrorText;
 			Kunaki_Logger::error( "Kunaki API error [{$error_code}]: {$error_text}" );
-			return new WP_Error( 'kunaki_api_error', $error_text, array( 'error_code' => $error_code ) );
+			$error = new WP_Error( 'kunaki_api_error', $error_text, array( 'error_code' => $error_code ) );
+			$this->circuit_breaker->post_request( $error );
+			return $error;
 		}
 
+		$this->circuit_breaker->post_request( $parsed );
 		return $parsed;
 	}
 

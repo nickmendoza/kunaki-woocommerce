@@ -27,6 +27,7 @@ This plugin addresses these concerns through atomic locking, idempotent submissi
 - **Retry Queue** -- Admin page listing failed submissions with error details, attempt counts, and one-click retry buttons. Per-order retry on the order edit page.
 - **HPOS Compatible** -- Declares compatibility with WooCommerce High-Performance Order Storage.
 - **Automatic Retry** -- Failed submissions are retried automatically via cron with linear backoff and a configurable attempt limit.
+- **API Circuit Breaker** -- Detects sustained Kunaki API failures and temporarily halts outbound requests, preserving retry budgets and surfacing an admin notice. Automatically probes for recovery.
 - **Credential Encryption** -- Passwords encrypted at rest with AES-256-GCM.
 
 ## Requirements
@@ -68,10 +69,12 @@ This plugin addresses these concerns through atomic locking, idempotent submissi
 | Sync Interval | How often to poll Kunaki for status updates (default: 15 min, range: 5--1440 min) |
 | Max Retry Attempts | Maximum total attempts for a failed submission before requiring manual intervention (default: 3, range: 1--10) |
 | Debug Logging | Log full API requests/responses (credentials redacted) to WooCommerce > Status > Logs |
+| Failure Threshold | Number of consecutive API failures before the circuit breaker trips (default: 5, range: 2--20) |
+| Cooldown Period | Minutes to wait before allowing a probe request after the circuit trips (default: 5, range: 1--60 min) |
 
 ## Architecture Overview
 
-The plugin is organized into nine single-responsibility components, coordinated by a singleton orchestrator. No component performs direct SQL outside controlled locking primitives.
+The plugin is organized into ten single-responsibility components, coordinated by a singleton orchestrator. No component performs direct SQL outside controlled locking primitives.
 
 ```
 kunaki-woocommerce.php                   Bootstrap, constants, encryption filters, cron setup
@@ -84,6 +87,7 @@ includes/
   class-kunaki-retry-queue.php           Failed order admin page with manual retry
   class-kunaki-product-meta.php          Product editor field, validation, admin column
   class-kunaki-settings.php              WooCommerce settings tab
+  class-kunaki-circuit-breaker.php       API circuit breaker with state machine
   class-kunaki-logger.php                Log wrapper with debug gating
   encryption.php                         AES-256-GCM encrypt/decrypt helpers
 uninstall.php                            Option cleanup on plugin deletion
@@ -138,6 +142,18 @@ When the Kunaki API returns an error or the HTTP request fails, the plugin recor
 - **Durable failure markers** -- If failure metadata fails to persist (e.g., database instability), a `_kunaki_failed_{order_id}` marker is written to `wp_options`. The retry cron recovers these orphaned markers at the start of each run.
 - **Idempotent** -- Retries go through the same `handle_order_processing` path with its full locking and deduplication guarantees.
 
+### API Circuit Breaker
+
+When the Kunaki API suffers sustained outages, the circuit breaker prevents the plugin from hammering the endpoint with requests that will time out. It tracks consecutive infrastructure failures (HTTP errors, non-200 status codes, XML parse errors) across all API callers — order submission, status sync, and shipping rate lookups.
+
+- **Closed** (normal): all requests proceed. A counter tracks consecutive failures.
+- **Open** (tripped): after the configured failure threshold (default: 5), all API calls return immediately with a `WP_Error`. Cron handlers (retry queue, status sync) bail out at the top of each run. An admin notice alerts the store owner.
+- **Half-open** (probe): after the cooldown period (default: 5 minutes), one request is allowed through. If it succeeds, the circuit closes. If it fails, the circuit re-opens for another cooldown period.
+
+API business logic errors (Kunaki `ErrorCode != 0`) do not count toward the threshold — they indicate the API is responding, not that it's down.
+
+When the circuit is open, order submission failures do not increment the retry attempt counter, preserving the retry budget for when the API recovers.
+
 ### Email Duplication Prevention
 
 The status sync saves all meta and status changes via `$order->save()` before adding any customer-facing order notes. If `save()` fails, no notes are persisted and the next cron run retries from a clean state. To handle the crash window between a successful `save()` and `add_order_note()`, pending notes are stored in order meta atomically with the status change. If the process dies after save but before the note is sent, the next cron run detects the pending note, delivers it, and clears the flag.
@@ -166,7 +182,7 @@ The test suite runs entirely outside WordPress. No WordPress installation, no da
 
 This isolation strategy means tests execute in seconds, run in CI without infrastructure, and validate plugin logic without conflating it with WordPress behavior.
 
-138 unit tests cover:
+171 unit tests cover:
 
 | Area | What's Validated |
 |------|-----------------|
@@ -177,6 +193,7 @@ This isolation strategy means tests execute in seconds, run in CI without infras
 | Product Meta | 10-character alphanumeric validation, capability checks, admin column rendering, safe handling of absent POST fields |
 | Logger | Debug gating based on settings, log level routing |
 | Retry Queue | AJAX handler permission and input validation, `prepare_for_retry` guard clauses, admin page hook registration |
+| Circuit Breaker | State transitions (closed/open/half_open), threshold and cooldown configuration, error classification (infrastructure vs. business logic), probe recovery, admin state reporting |
 | Encryption | AES-256-GCM round-trip, AES-256-CBC legacy fallback, invalid/corrupt input handling |
 
 ```bash

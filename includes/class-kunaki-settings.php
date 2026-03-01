@@ -87,6 +87,44 @@ class Kunaki_Settings extends WC_Settings_Page {
 				'type' => 'sectionend',
 				'id'   => 'kunaki_wc_api_settings',
 			),
+			array(
+				'title' => __( 'Circuit Breaker', 'kunaki-woocommerce' ),
+				'type'  => 'title',
+				'desc'  => __( 'Automatically stops API requests when Kunaki is unresponsive, preventing wasted time and retries.', 'kunaki-woocommerce' ),
+				'id'    => 'kunaki_wc_circuit_breaker_settings',
+			),
+			array(
+				'title'    => __( 'Failure Threshold', 'kunaki-woocommerce' ),
+				'desc'     => __( 'Number of consecutive API failures before the circuit breaker trips.', 'kunaki-woocommerce' ),
+				'id'       => 'kunaki_wc_circuit_threshold',
+				'type'     => 'number',
+				'default'  => 5,
+				'desc_tip' => true,
+				'css'      => 'width: 80px;',
+				'custom_attributes' => array(
+					'min'  => 2,
+					'max'  => 20,
+					'step' => 1,
+				),
+			),
+			array(
+				'title'    => __( 'Cooldown Period (minutes)', 'kunaki-woocommerce' ),
+				'desc'     => __( 'How long to wait before allowing a probe request after the circuit trips.', 'kunaki-woocommerce' ),
+				'id'       => 'kunaki_wc_circuit_cooldown',
+				'type'     => 'number',
+				'default'  => 5,
+				'desc_tip' => true,
+				'css'      => 'width: 80px;',
+				'custom_attributes' => array(
+					'min'  => 1,
+					'max'  => 60,
+					'step' => 1,
+				),
+			),
+			array(
+				'type' => 'sectionend',
+				'id'   => 'kunaki_wc_circuit_breaker_settings',
+			),
 		);
 	}
 }

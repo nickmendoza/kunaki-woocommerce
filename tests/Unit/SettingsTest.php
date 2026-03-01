@@ -22,8 +22,8 @@ class SettingsTest extends KunakiTestCase {
 	public function test_settings_returns_expected_fields() {
 		$fields = $this->settings->get_settings_for_default_section();
 
-		// title + 6 fields + sectionend = 8
-		$this->assertCount( 8, $fields );
+		// (title + 6 fields + sectionend) + (title + 2 fields + sectionend) = 12
+		$this->assertCount( 12, $fields );
 	}
 
 	public function test_settings_field_ids() {
@@ -65,6 +65,26 @@ class SettingsTest extends KunakiTestCase {
 		$this->assertSame( 3, $retries['default'] );
 		$this->assertSame( 1, $retries['custom_attributes']['min'] );
 		$this->assertSame( 10, $retries['custom_attributes']['max'] );
+	}
+
+	public function test_circuit_threshold_constraints() {
+		$fields    = $this->settings->get_settings_for_default_section();
+		$threshold = $this->find_field( $fields, 'kunaki_wc_circuit_threshold' );
+
+		$this->assertSame( 'number', $threshold['type'] );
+		$this->assertSame( 5, $threshold['default'] );
+		$this->assertSame( 2, $threshold['custom_attributes']['min'] );
+		$this->assertSame( 20, $threshold['custom_attributes']['max'] );
+	}
+
+	public function test_circuit_cooldown_constraints() {
+		$fields   = $this->settings->get_settings_for_default_section();
+		$cooldown = $this->find_field( $fields, 'kunaki_wc_circuit_cooldown' );
+
+		$this->assertSame( 'number', $cooldown['type'] );
+		$this->assertSame( 5, $cooldown['default'] );
+		$this->assertSame( 1, $cooldown['custom_attributes']['min'] );
+		$this->assertSame( 60, $cooldown['custom_attributes']['max'] );
 	}
 
 	public function test_debug_log_defaults_to_no() {

@@ -87,6 +87,32 @@ add_action( 'admin_notices', function () {
 	echo '</p></div>';
 } );
 
+// Show admin notice when circuit breaker is open.
+add_action( 'admin_notices', function () {
+	if ( ! current_user_can( 'manage_woocommerce' ) ) {
+		return;
+	}
+	// Read option directly — class may not be loaded yet during early admin_notices.
+	$raw = get_option( 'kunaki_wc_circuit_breaker', '' );
+	if ( empty( $raw ) ) {
+		return;
+	}
+	$state = json_decode( $raw, true );
+	if ( ! is_array( $state ) || 'open' !== ( $state['state'] ?? '' ) ) {
+		return;
+	}
+	$settings_url = admin_url( 'admin.php?page=wc-settings&tab=kunaki' );
+	$opened_ago   = human_time_diff( $state['opened_at'] ?? time() );
+	echo '<div class="error"><p>';
+	echo wp_kses_post( sprintf(
+		/* translators: 1: time since circuit opened, 2: URL to settings page */
+		__( '<strong>Kunaki WooCommerce:</strong> The API circuit breaker has been open for %1$s — order submissions and status syncs are paused. The plugin will automatically probe for recovery. <a href="%2$s">View settings</a>', 'kunaki-woocommerce' ),
+		esc_html( $opened_ago ),
+		esc_url( $settings_url )
+	) );
+	echo '</p></div>';
+} );
+
 // Register custom cron schedule early so it exists during activation.
 add_filter( 'cron_schedules', function ( $schedules ) {
 	$interval = absint( get_option( 'kunaki_wc_sync_interval', 15 ) );
@@ -144,8 +170,9 @@ register_activation_hook( __FILE__, function () {
 	}
 } );
 
-// Deactivation: unschedule cron.
+// Deactivation: unschedule cron and reset circuit breaker.
 register_deactivation_hook( __FILE__, function () {
 	wp_clear_scheduled_hook( 'kunaki_wc_sync_order_status' );
 	wp_clear_scheduled_hook( 'kunaki_wc_retry_failed_orders' );
+	delete_option( 'kunaki_wc_circuit_breaker' );
 } );

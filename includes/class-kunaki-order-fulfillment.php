@@ -170,7 +170,7 @@ class Kunaki_Order_Fulfillment {
 
 		if ( is_wp_error( $result ) ) {
 			Kunaki_Logger::error( "Order #{$order_id}: Kunaki submission failed: " . $result->get_error_message() );
-			$this->record_failure( $order, $result->get_error_message() );
+			$this->record_failure( $order, $result->get_error_message(), $result->get_error_code() );
 			$wpdb->delete( $wpdb->options, array( 'option_name' => $lock_option ) );
 			return;
 		}
@@ -252,8 +252,14 @@ class Kunaki_Order_Fulfillment {
 	 *
 	 * @param WC_Order $order         WooCommerce order.
 	 * @param string   $error_message Human-readable error description.
+	 * @param string   $error_code    WP_Error code (used to skip counting circuit-open rejections).
 	 */
-	private function record_failure( $order, $error_message ) {
+	private function record_failure( $order, $error_message, $error_code = '' ) {
+		// Don't count circuit-open rejections against the retry budget.
+		if ( 'kunaki_circuit_open' === $error_code ) {
+			return;
+		}
+
 		$attempts = (int) $order->get_meta( self::META_FULFILLMENT_ATTEMPTS );
 		$order->update_meta_data( self::META_FULFILLMENT_ERROR, $error_message );
 		$order->update_meta_data( self::META_FULFILLMENT_FAILED, gmdate( 'c' ) );
@@ -366,6 +372,12 @@ class Kunaki_Order_Fulfillment {
 	 * Cron handler: retry orders that failed submission and haven't exceeded max retries.
 	 */
 	public function retry_failed_orders() {
+		$circuit_breaker = new Kunaki_Circuit_Breaker();
+		if ( ! $circuit_breaker->is_available() ) {
+			Kunaki_Logger::info( 'Retry skipped: circuit breaker is open.' );
+			return;
+		}
+
 		$max_retries = absint( get_option( 'kunaki_wc_max_retries', 3 ) );
 		if ( $max_retries < 1 ) {
 			$max_retries = 3;

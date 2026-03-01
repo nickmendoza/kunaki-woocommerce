@@ -204,6 +204,7 @@ if ( ! class_exists( 'WC_Settings_Page' ) ) {
 // ── Load plugin source files ─────────────────────────────────────────
 require_once KUNAKI_WC_PLUGIN_DIR . 'includes/encryption.php';
 require_once KUNAKI_WC_PLUGIN_DIR . 'includes/class-kunaki-logger.php';
+require_once KUNAKI_WC_PLUGIN_DIR . 'includes/class-kunaki-circuit-breaker.php';
 require_once KUNAKI_WC_PLUGIN_DIR . 'includes/class-kunaki-api-client.php';
 require_once KUNAKI_WC_PLUGIN_DIR . 'includes/class-kunaki-product-meta.php';
 require_once KUNAKI_WC_PLUGIN_DIR . 'includes/class-kunaki-shipping-method.php';

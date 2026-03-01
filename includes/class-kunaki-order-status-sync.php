@@ -11,6 +11,12 @@ class Kunaki_Order_Status_Sync {
 	 * Query Kunaki for status updates on all submitted but not yet completed orders.
 	 */
 	public function sync_all_pending_orders() {
+		$circuit_breaker = new Kunaki_Circuit_Breaker();
+		if ( ! $circuit_breaker->is_available() ) {
+			Kunaki_Logger::info( 'Status sync skipped: circuit breaker is open.' );
+			return;
+		}
+
 		Kunaki_Logger::info( 'Starting Kunaki order status sync.' );
 
 		$orders = wc_get_orders( array(
