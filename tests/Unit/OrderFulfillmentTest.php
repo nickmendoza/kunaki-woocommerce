@@ -745,6 +745,8 @@ class OrderFulfillmentTest extends KunakiTestCase {
 		$order->shouldReceive( 'update_meta_data' )
 			->with( '_kunaki_fulfillment_error', 'Connection timed out' )->once();
 		$order->shouldReceive( 'update_meta_data' )
+			->with( '_kunaki_fulfillment_failed_at', Mockery::type( 'string' ) )->once();
+		$order->shouldReceive( 'update_meta_data' )
 			->with( '_kunaki_fulfillment_attempts', 1 )->once();
 		$order->shouldReceive( 'save_meta_data' )->once();
 

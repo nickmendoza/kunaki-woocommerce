@@ -348,6 +348,7 @@ class Kunaki_Order_Fulfillment {
 			}
 
 			$order->update_meta_data( self::META_FULFILLMENT_ERROR, $row->option_value );
+			$order->update_meta_data( self::META_FULFILLMENT_FAILED, gmdate( 'c' ) );
 			$attempts = (int) $order->get_meta( self::META_FULFILLMENT_ATTEMPTS );
 			$order->update_meta_data( self::META_FULFILLMENT_ATTEMPTS, max( $attempts, 1 ) );
 			try {
