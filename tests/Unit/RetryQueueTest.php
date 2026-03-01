@@ -330,6 +330,57 @@ class RetryQueueTest extends KunakiTestCase {
 		$retry_queue->init();
 	}
 
+	public function test_render_page_empty_shows_no_failed_orders() {
+		$retry_queue = new Kunaki_Retry_Queue();
+
+		Functions\expect( 'wc_get_orders' )->once()->andReturn( array() );
+
+		ob_start();
+		$retry_queue->render_page();
+		$html = ob_get_clean();
+
+		$this->assertStringContainsString( '(0)', $html );
+		$this->assertStringContainsString( 'No failed orders found', $html );
+		$this->assertStringNotContainsString( '<table', $html );
+	}
+
+	public function test_render_page_lists_failed_orders() {
+		$retry_queue = new Kunaki_Retry_Queue();
+
+		$date_created = Mockery::mock( 'WC_DateTime' );
+		$date_created->shouldReceive( 'date_i18n' )->andReturn( '2026-01-15' );
+
+		$order = Mockery::mock( 'WC_Order' );
+		$order->shouldReceive( 'get_id' )->andReturn( 100 );
+		$order->shouldReceive( 'get_edit_order_url' )->andReturn( 'https://example.com/order/100' );
+		$order->shouldReceive( 'get_meta' )
+			->with( Kunaki_Order_Fulfillment::META_FULFILLMENT_ERROR )
+			->andReturn( 'Connection timed out' );
+		$order->shouldReceive( 'get_meta' )
+			->with( Kunaki_Order_Fulfillment::META_FULFILLMENT_ATTEMPTS )
+			->andReturn( '2' );
+		$order->shouldReceive( 'get_meta' )
+			->with( Kunaki_Order_Fulfillment::META_FULFILLMENT_FAILED )
+			->andReturn( '2026-01-15T10:00:00+00:00' );
+		$order->shouldReceive( 'get_date_created' )->andReturn( $date_created );
+		$order->shouldReceive( 'get_billing_first_name' )->andReturn( 'John' );
+		$order->shouldReceive( 'get_billing_last_name' )->andReturn( 'Doe' );
+
+		Functions\expect( 'wc_get_orders' )->once()->andReturn( array( $order ) );
+		Functions\when( 'get_option' )->justReturn( 'Y-m-d' );
+
+		ob_start();
+		$retry_queue->render_page();
+		$html = ob_get_clean();
+
+		$this->assertStringContainsString( '(1)', $html );
+		$this->assertStringContainsString( '<table', $html );
+		$this->assertStringContainsString( '#100', $html );
+		$this->assertStringContainsString( 'Connection timed out', $html );
+		$this->assertStringContainsString( 'John Doe', $html );
+		$this->assertStringContainsString( 'Retry', $html );
+	}
+
 	// --- Helpers ---
 
 	private function create_order_mock() {

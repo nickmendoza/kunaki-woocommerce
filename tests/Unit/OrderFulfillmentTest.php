@@ -953,6 +953,175 @@ class OrderFulfillmentTest extends KunakiTestCase {
 		);
 	}
 
+	public function test_display_order_info_returns_early_when_no_data() {
+		$order = Mockery::mock( 'WC_Order' );
+		$order->shouldReceive( 'get_meta' )->with( '_kunaki_order_id' )->andReturn( '' );
+		$order->shouldReceive( 'get_meta' )->with( '_kunaki_fulfillment_error' )->andReturn( '' );
+
+		ob_start();
+		$this->fulfillment->display_kunaki_order_info( $order );
+		$html = ob_get_clean();
+
+		$this->assertEmpty( $html );
+	}
+
+	public function test_display_order_info_shows_submitted_order_with_tracking() {
+		$order = Mockery::mock( 'WC_Order' );
+		$order->shouldReceive( 'get_meta' )->with( '_kunaki_order_id' )->andReturn( 'KUN555' );
+		$order->shouldReceive( 'get_meta' )->with( '_kunaki_fulfillment_error' )->andReturn( '' );
+		$order->shouldReceive( 'get_meta' )->with( '_kunaki_order_status' )->andReturn( 'SHIPPED' );
+		$order->shouldReceive( 'get_meta' )->with( '_kunaki_tracking_id' )->andReturn( '9400111' );
+		$order->shouldReceive( 'get_meta' )->with( '_kunaki_tracking_type' )->andReturn( 'USPS' );
+
+		ob_start();
+		$this->fulfillment->display_kunaki_order_info( $order );
+		$html = ob_get_clean();
+
+		$this->assertStringContainsString( 'KUN555', $html );
+		$this->assertStringContainsString( 'SHIPPED', $html );
+		$this->assertStringContainsString( 'USPS', $html );
+		$this->assertStringContainsString( '9400111', $html );
+		$this->assertStringNotContainsString( 'Retry', $html );
+	}
+
+	public function test_display_order_info_shows_failed_with_retry_button() {
+		$order = Mockery::mock( 'WC_Order' );
+		$order->shouldReceive( 'get_id' )->andReturn( 100 );
+		$order->shouldReceive( 'get_meta' )->with( '_kunaki_order_id' )->andReturn( '' );
+		$order->shouldReceive( 'get_meta' )->with( '_kunaki_fulfillment_error' )->andReturn( 'Connection timed out' );
+		$order->shouldReceive( 'get_meta' )->with( '_kunaki_fulfillment_attempts' )->andReturn( '2' );
+		$order->shouldReceive( 'get_meta' )->with( '_kunaki_fulfillment_failed_at' )->andReturn( '2026-01-15T10:00:00+00:00' );
+		$order->shouldReceive( 'get_status' )->andReturn( 'processing' );
+
+		ob_start();
+		$this->fulfillment->display_kunaki_order_info( $order );
+		$html = ob_get_clean();
+
+		$this->assertStringContainsString( 'Failed', $html );
+		$this->assertStringContainsString( 'Connection timed out', $html );
+		$this->assertStringContainsString( 'Retry Submission', $html );
+		$this->assertStringContainsString( 'data-order-id="100"', $html );
+	}
+
+	public function test_display_order_info_hides_retry_button_when_not_processing() {
+		$order = Mockery::mock( 'WC_Order' );
+		$order->shouldReceive( 'get_id' )->andReturn( 100 );
+		$order->shouldReceive( 'get_meta' )->with( '_kunaki_order_id' )->andReturn( '' );
+		$order->shouldReceive( 'get_meta' )->with( '_kunaki_fulfillment_error' )->andReturn( 'Connection timed out' );
+		$order->shouldReceive( 'get_meta' )->with( '_kunaki_fulfillment_attempts' )->andReturn( '2' );
+		$order->shouldReceive( 'get_meta' )->with( '_kunaki_fulfillment_failed_at' )->andReturn( '2026-01-15T10:00:00+00:00' );
+		$order->shouldReceive( 'get_status' )->andReturn( 'on-hold' );
+
+		ob_start();
+		$this->fulfillment->display_kunaki_order_info( $order );
+		$html = ob_get_clean();
+
+		$this->assertStringContainsString( 'Failed', $html );
+		$this->assertStringNotContainsString( 'Retry Submission', $html );
+	}
+
+	public function test_handle_order_processing_null_order_wc_get_order_returns_false() {
+		Functions\expect( 'wc_get_order' )->with( 999 )->once()->andReturn( false );
+		Functions\expect( 'get_option' )->zeroOrMoreTimes()->andReturn( 'no' );
+
+		// Should return silently — no exception, no further calls.
+		$this->fulfillment->handle_order_processing( 999, null );
+		$this->addToAssertionCount( 1 );
+	}
+
+	public function test_max_retries_zero_falls_back_to_three() {
+		$order = Mockery::mock( 'WC_Order' );
+		$order->shouldReceive( 'get_id' )->andReturn( 100 );
+		// Attempts = 2 — less than fallback of 3, so should NOT be exhausted.
+		$order->shouldReceive( 'get_meta' )->with( '_kunaki_fulfillment_attempts' )->andReturn( '2' );
+		$order->shouldReceive( 'get_meta' )->with( '_kunaki_fulfillment_failed_at' )
+			->andReturn( gmdate( 'c', time() - 7200 ) );
+		$order->shouldReceive( 'get_meta' )->with( '_kunaki_submitted' )->andReturn( '' );
+		$order->shouldReceive( 'get_items' )->andReturn( array() );
+		$order->shouldReceive( 'update_meta_data' )->withAnyArgs()->zeroOrMoreTimes();
+		$order->shouldReceive( 'save' )->zeroOrMoreTimes();
+		$order->shouldReceive( 'add_order_note' )->zeroOrMoreTimes();
+
+		// Should NOT be marked exhausted since fallback max_retries = 3 > 2.
+		$order->shouldNotReceive( 'update_meta_data' )->with( '_kunaki_fulfillment_exhausted', 'yes' );
+
+		Functions\expect( 'wc_get_orders' )->once()->andReturn( array( $order ) );
+		Functions\expect( 'wc_get_order' )->with( 100 )->andReturn( $order );
+		Functions\expect( 'get_option' )->with( 'kunaki_wc_max_retries', 3 )->andReturn( '0' );
+		Functions\expect( 'get_option' )->zeroOrMoreTimes()->andReturn( 'no' );
+
+		$this->mock_wpdb_lock( true );
+
+		$this->fulfillment->retry_failed_orders();
+	}
+
+	public function test_record_failure_add_order_note_throws_does_not_propagate() {
+		$order = $this->create_full_order_mock( 'PXZZ111111' );
+
+		Functions\expect( 'wp_remote_post' )->once()
+			->andReturn( new \WP_Error( 'timeout', 'Connection timed out' ) );
+		Functions\expect( 'get_option' )->zeroOrMoreTimes()->andReturn( 'no' );
+
+		$order->shouldReceive( 'get_meta' )->with( '_kunaki_fulfillment_attempts' )->andReturn( '' );
+		$order->shouldReceive( 'update_meta_data' )->withAnyArgs()->zeroOrMoreTimes();
+		$order->shouldReceive( 'save_meta_data' )->once();
+		// add_order_note throws — should be caught, not propagated.
+		$order->shouldReceive( 'add_order_note' )->once()
+			->andThrow( new \RuntimeException( 'Note save failed' ) );
+
+		$this->mock_wpdb_lock( true );
+		Functions\expect( 'wc_get_order' )->with( 100 )->andReturn( $order );
+
+		// Should complete without exception — lock is released by the caller.
+		$this->fulfillment->handle_order_processing( 100, $order );
+		$this->addToAssertionCount( 1 );
+	}
+
+	public function test_exhaustion_save_throws_does_not_halt_loop() {
+		$order1 = Mockery::mock( 'WC_Order' );
+		$order1->shouldReceive( 'get_id' )->andReturn( 100 );
+		$order1->shouldReceive( 'get_meta' )->with( '_kunaki_fulfillment_attempts' )->andReturn( '3' );
+		$order1->shouldReceive( 'update_meta_data' )->with( '_kunaki_fulfillment_exhausted', 'yes' )->once();
+		$order1->shouldReceive( 'save' )->once()->andThrow( new \RuntimeException( 'DB down' ) );
+		$order1->shouldReceive( 'add_order_note' )->once();
+
+		$order2 = Mockery::mock( 'WC_Order' );
+		$order2->shouldReceive( 'get_id' )->andReturn( 200 );
+		$order2->shouldReceive( 'get_meta' )->with( '_kunaki_fulfillment_attempts' )->andReturn( '3' );
+		$order2->shouldReceive( 'update_meta_data' )->with( '_kunaki_fulfillment_exhausted', 'yes' )->once();
+		$order2->shouldReceive( 'save' )->once();
+		$order2->shouldReceive( 'add_order_note' )->once();
+
+		Functions\expect( 'wc_get_orders' )->once()->andReturn( array( $order1, $order2 ) );
+		Functions\expect( 'get_option' )->with( 'kunaki_wc_max_retries', 3 )->andReturn( '3' );
+		Functions\expect( 'get_option' )->zeroOrMoreTimes()->andReturn( 'no' );
+
+		$this->mock_wpdb_recovery();
+
+		// order2 should still be processed even though order1's save() threw.
+		$this->fulfillment->retry_failed_orders();
+	}
+
+	public function test_exhaustion_add_order_note_throws_does_not_propagate() {
+		$order = Mockery::mock( 'WC_Order' );
+		$order->shouldReceive( 'get_id' )->andReturn( 100 );
+		$order->shouldReceive( 'get_meta' )->with( '_kunaki_fulfillment_attempts' )->andReturn( '3' );
+		$order->shouldReceive( 'update_meta_data' )->with( '_kunaki_fulfillment_exhausted', 'yes' )->once();
+		$order->shouldReceive( 'save' )->once();
+		$order->shouldReceive( 'add_order_note' )->once()
+			->andThrow( new \RuntimeException( 'Note save failed' ) );
+
+		Functions\expect( 'wc_get_orders' )->once()->andReturn( array( $order ) );
+		Functions\expect( 'get_option' )->with( 'kunaki_wc_max_retries', 3 )->andReturn( '3' );
+		Functions\expect( 'get_option' )->zeroOrMoreTimes()->andReturn( 'no' );
+
+		$this->mock_wpdb_recovery();
+
+		// Should complete without exception; logger is called as fallback.
+		$this->fulfillment->retry_failed_orders();
+		$this->addToAssertionCount( 1 );
+	}
+
 	private function mock_wpdb_lock( $acquired = true ) {
 		$wpdb = Mockery::mock( 'wpdb' );
 		$wpdb->options = 'wp_options';

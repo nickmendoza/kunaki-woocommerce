@@ -340,6 +340,59 @@ class OrderStatusSyncTest extends KunakiTestCase {
 		$this->sync->sync_all_pending_orders();
 	}
 
+	public function test_send_pending_notes_save_meta_throws_is_swallowed() {
+		$pending = wp_json_encode( array(
+			array( 'text' => 'Kunaki order shipped! Carrier: USPS, Tracking: 9400111', 'is_customer' => true ),
+		) );
+
+		$order = Mockery::mock( 'WC_Order' );
+		$order->shouldReceive( 'get_id' )->andReturn( 100 );
+		$order->shouldReceive( 'get_meta' )
+			->with( Kunaki_Order_Fulfillment::META_KUNAKI_ORDER_ID )
+			->andReturn( 'KUN123' );
+		$order->shouldReceive( 'get_meta' )
+			->with( '_kunaki_sync_note_pending' )
+			->andReturn( $pending );
+
+		$this->mock_wc_get_orders( array( $order ) );
+
+		// Notes should be sent even though save_meta_data will fail.
+		$order->shouldReceive( 'add_order_note' )
+			->with( Mockery::pattern( '/USPS.*9400111/' ), true )->once();
+		$order->shouldReceive( 'delete_meta_data' )->with( '_kunaki_sync_note_pending' )->once();
+		$order->shouldReceive( 'save_meta_data' )->once()
+			->andThrow( new \RuntimeException( 'DB down' ) );
+
+		// API should NOT be called — recovery returns early.
+		Functions\expect( 'wp_remote_post' )->never();
+
+		// Should complete without exception (documented tradeoff: possible duplicate on next run).
+		$this->sync->sync_all_pending_orders();
+		$this->addToAssertionCount( 1 );
+	}
+
+	public function test_all_items_are_kunaki_empty_items_returns_true() {
+		$order = $this->create_order_mock( 'KUN123', '' );
+
+		$this->mock_api_status( 'KUN123', 'SHIPPED', 'USPS', '9400111' );
+		$this->mock_wc_get_orders( array( $order ) );
+
+		$order->shouldReceive( 'update_meta_data' )->withAnyArgs()->zeroOrMoreTimes();
+		// No snapshot stored — triggers the fallback iteration.
+		$order->shouldReceive( 'get_meta' )->with( '_kunaki_all_items' )->andReturn( '' );
+		// Empty items list — loop never executes, returns true.
+		$order->shouldReceive( 'get_items' )->andReturn( array() );
+
+		// Should auto-complete (all_items_are_kunaki returns true for empty items).
+		$order->shouldReceive( 'set_status' )->with( 'completed', Mockery::type( 'string' ) )->once();
+		$order->shouldReceive( 'save' )->once()->ordered();
+		$order->shouldReceive( 'add_order_note' )->with( Mockery::any(), true )->once()->ordered();
+		$order->shouldReceive( 'delete_meta_data' )->with( '_kunaki_sync_note_pending' )->once();
+		$order->shouldReceive( 'save_meta_data' )->once();
+
+		$this->sync->sync_all_pending_orders();
+	}
+
 	// --- Helpers ---
 
 	private function create_order_mock( $kunaki_order_id, $previous_status = '' ) {
