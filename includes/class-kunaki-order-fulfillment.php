@@ -5,7 +5,6 @@ class Kunaki_Order_Fulfillment {
 
 	const META_KUNAKI_ORDER_ID      = '_kunaki_order_id';
 	const META_KUNAKI_SUBMITTED     = '_kunaki_submitted';
-	const META_KUNAKI_SHIPPING_DESC = '_kunaki_shipping_description';
 	const META_FULFILLMENT_ERROR     = '_kunaki_fulfillment_error';
 	const META_FULFILLMENT_FAILED    = '_kunaki_fulfillment_failed_at';
 	const META_FULFILLMENT_ATTEMPTS  = '_kunaki_fulfillment_attempts';
@@ -189,7 +188,6 @@ class Kunaki_Order_Fulfillment {
 		// Store Kunaki order ID and mark as submitted.
 		$order->update_meta_data( self::META_KUNAKI_ORDER_ID, $result );
 		$order->update_meta_data( self::META_KUNAKI_SUBMITTED, 'yes' );
-		$order->update_meta_data( self::META_KUNAKI_SHIPPING_DESC, $shipping_description );
 		$order->update_meta_data( '_kunaki_all_items', $has_non_kunaki ? 'no' : 'yes' );
 
 		// Clear any failure meta from previous attempts.
@@ -332,9 +330,10 @@ class Kunaki_Order_Fulfillment {
 	 */
 	private function recover_orphaned_failures() {
 		global $wpdb;
-		$rows = $wpdb->get_results(
-			"SELECT option_name, option_value FROM {$wpdb->options} WHERE option_name LIKE '_kunaki_failed_%'"
-		);
+		$rows = $wpdb->get_results( $wpdb->prepare(
+			"SELECT option_name, option_value FROM {$wpdb->options} WHERE option_name LIKE %s",
+			$wpdb->esc_like( '_kunaki_failed_' ) . '%'
+		) );
 
 		if ( empty( $rows ) ) {
 			return;

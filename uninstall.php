@@ -26,3 +26,17 @@ foreach ( $patterns as $pattern ) {
 		$pattern
 	) );
 }
+
+// Clean up transients (shipping rate cache + validation errors).
+$transient_patterns = array(
+	'_transient_kunaki_ship_',
+	'_transient_timeout_kunaki_ship_',
+	'_transient_kunaki_wc_product_meta_error_',
+	'_transient_timeout_kunaki_wc_product_meta_error_',
+);
+foreach ( $transient_patterns as $prefix ) {
+	$wpdb->query( $wpdb->prepare(
+		"DELETE FROM {$wpdb->options} WHERE option_name LIKE %s",
+		$wpdb->esc_like( $prefix ) . '%'
+	) );
+}

@@ -78,7 +78,6 @@ class OrderFulfillmentTest extends KunakiTestCase {
 
 		$order->shouldReceive( 'update_meta_data' )->with( '_kunaki_order_id', 'KUN999' )->once();
 		$order->shouldReceive( 'update_meta_data' )->with( '_kunaki_submitted', 'yes' )->once();
-		$order->shouldReceive( 'update_meta_data' )->with( '_kunaki_shipping_description', 'USPS Priority' )->once();
 		$order->shouldReceive( 'update_meta_data' )->with( '_kunaki_all_items', 'yes' )->once();
 		$order->shouldReceive( 'delete_meta_data' )->with( '_kunaki_fulfillment_error' )->once();
 		$order->shouldReceive( 'delete_meta_data' )->with( '_kunaki_fulfillment_failed_at' )->once();
@@ -756,6 +755,8 @@ class OrderFulfillmentTest extends KunakiTestCase {
 
 		$wpdb = Mockery::mock( 'wpdb' );
 		$wpdb->options = 'wp_options';
+		$wpdb->shouldReceive( 'prepare' )->andReturnUsing( function () { return 'prepared_query'; } );
+		$wpdb->shouldReceive( 'esc_like' )->andReturnUsing( function ( $text ) { return $text; } );
 		$wpdb->shouldReceive( 'get_results' )->once()->andReturn( array( $marker ) );
 		$wpdb->shouldReceive( 'delete' )
 			->with( 'wp_options', array( 'option_name' => '_kunaki_failed_100' ) )->once();
@@ -869,6 +870,8 @@ class OrderFulfillmentTest extends KunakiTestCase {
 
 		$wpdb = Mockery::mock( 'wpdb' );
 		$wpdb->options = 'wp_options';
+		$wpdb->shouldReceive( 'prepare' )->andReturnUsing( function () { return 'prepared_query'; } );
+		$wpdb->shouldReceive( 'esc_like' )->andReturnUsing( function ( $text ) { return $text; } );
 		$wpdb->shouldReceive( 'get_results' )->once()->andReturn( array( $marker ) );
 		// Marker should be cleaned up even though order doesn't exist.
 		$wpdb->shouldReceive( 'delete' )
@@ -898,6 +901,8 @@ class OrderFulfillmentTest extends KunakiTestCase {
 
 		$wpdb = Mockery::mock( 'wpdb' );
 		$wpdb->options = 'wp_options';
+		$wpdb->shouldReceive( 'prepare' )->andReturnUsing( function () { return 'prepared_query'; } );
+		$wpdb->shouldReceive( 'esc_like' )->andReturnUsing( function ( $text ) { return $text; } );
 		$wpdb->shouldReceive( 'get_results' )->once()->andReturn( array( $marker ) );
 		// Marker should NOT be deleted when save_meta_data() throws.
 		$wpdb->shouldNotReceive( 'delete' );
@@ -954,6 +959,7 @@ class OrderFulfillmentTest extends KunakiTestCase {
 		$wpdb->shouldReceive( 'get_var' )->andReturn( null );
 		$wpdb->shouldReceive( 'get_results' )->andReturn( array() );
 		$wpdb->shouldReceive( 'delete' )->andReturn( true );
+		$wpdb->shouldReceive( 'esc_like' )->andReturnUsing( function ( $text ) { return $text; } );
 
 		$GLOBALS['wpdb'] = $wpdb;
 	}
@@ -961,6 +967,8 @@ class OrderFulfillmentTest extends KunakiTestCase {
 	private function mock_wpdb_recovery() {
 		$wpdb = Mockery::mock( 'wpdb' );
 		$wpdb->options = 'wp_options';
+		$wpdb->shouldReceive( 'prepare' )->andReturnUsing( function () { return 'prepared_query'; } );
+		$wpdb->shouldReceive( 'esc_like' )->andReturnUsing( function ( $text ) { return $text; } );
 		$wpdb->shouldReceive( 'get_results' )->andReturn( array() );
 
 		$GLOBALS['wpdb'] = $wpdb;

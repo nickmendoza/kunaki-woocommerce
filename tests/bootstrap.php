@@ -26,6 +26,12 @@ if ( ! defined( 'KUNAKI_WC_PLUGIN_FILE' ) ) {
 if ( ! defined( 'KUNAKI_WC_VERSION' ) ) {
 	define( 'KUNAKI_WC_VERSION', '1.1.0' );
 }
+if ( ! defined( 'KUNAKI_WC_PLUGIN_BASENAME' ) ) {
+	define( 'KUNAKI_WC_PLUGIN_BASENAME', 'kunaki-woocommerce/kunaki-woocommerce.php' );
+}
+if ( ! defined( 'KUNAKI_WC_PLUGIN_URL' ) ) {
+	define( 'KUNAKI_WC_PLUGIN_URL', 'https://example.com/wp-content/plugins/kunaki-woocommerce/' );
+}
 
 // ── WP_Error stub ────────────────────────────────────────────────────
 if ( ! class_exists( 'WP_Error' ) ) {
@@ -204,3 +210,5 @@ require_once KUNAKI_WC_PLUGIN_DIR . 'includes/class-kunaki-shipping-method.php';
 require_once KUNAKI_WC_PLUGIN_DIR . 'includes/class-kunaki-order-fulfillment.php';
 require_once KUNAKI_WC_PLUGIN_DIR . 'includes/class-kunaki-order-status-sync.php';
 require_once KUNAKI_WC_PLUGIN_DIR . 'includes/class-kunaki-retry-queue.php';
+require_once KUNAKI_WC_PLUGIN_DIR . 'includes/class-kunaki-settings.php';
+require_once KUNAKI_WC_PLUGIN_DIR . 'includes/class-kunaki-woocommerce.php';

@@ -21,10 +21,6 @@ class Kunaki_Logger {
 		self::log( 'error', $message );
 	}
 
-	public static function warning( $message ) {
-		self::log( 'warning', $message );
-	}
-
 	public static function debug( $message ) {
 		if ( 'yes' !== get_option( 'kunaki_wc_debug_log', 'no' ) ) {
 			return;

@@ -26,15 +26,6 @@ class LoggerTest extends KunakiTestCase {
 		Kunaki_Logger::error( 'Something broke' );
 	}
 
-	public function test_warning() {
-		$logger = Mockery::mock( 'WC_Logger' );
-		$logger->shouldReceive( 'log' )
-			->once()->with( 'warning', 'Watch out', array( 'source' => 'kunaki-woocommerce' ) );
-		Functions\expect( 'wc_get_logger' )->once()->andReturn( $logger );
-
-		Kunaki_Logger::warning( 'Watch out' );
-	}
-
 	public function test_debug_suppressed_when_disabled() {
 		Functions\expect( 'get_option' )
 			->once()->with( 'kunaki_wc_debug_log', 'no' )->andReturn( 'no' );

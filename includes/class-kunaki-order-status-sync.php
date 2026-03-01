@@ -195,7 +195,14 @@ class Kunaki_Order_Status_Sync {
 		}
 
 		// Persist all meta and status changes before adding notes.
-		$order->save();
+		try {
+			$order->save();
+		} catch ( \Throwable $e ) {
+			Kunaki_Logger::error( "Order #{$order_id}: save() failed during sync — " . $e->getMessage() );
+			// Pending notes meta remains in memory (unsaved); next cron run will
+			// re-detect the status change, rebuild notes, and retry the save.
+			return;
+		}
 
 		// Now safe — meta is persisted, so the next cron run won't retry.
 		$this->send_pending_notes( $order, $notes_json );
