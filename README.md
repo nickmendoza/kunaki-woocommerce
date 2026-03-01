@@ -166,7 +166,7 @@ The test suite runs entirely outside WordPress. No WordPress installation, no da
 
 This isolation strategy means tests execute in seconds, run in CI without infrastructure, and validate plugin logic without conflating it with WordPress behavior.
 
-115 unit tests cover:
+125 unit tests cover:
 
 | Area | What's Validated |
 |------|-----------------|
