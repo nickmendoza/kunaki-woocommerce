@@ -111,6 +111,12 @@ add_action( 'plugins_loaded', function () {
 	}
 	require_once KUNAKI_WC_PLUGIN_DIR . 'includes/class-kunaki-woocommerce.php';
 	Kunaki_WooCommerce::instance();
+
+	// Register WP-CLI commands.
+	if ( defined( 'WP_CLI' ) && WP_CLI ) {
+		require_once KUNAKI_WC_PLUGIN_DIR . 'includes/class-kunaki-cli-command.php';
+		WP_CLI::add_command( 'kunaki', 'Kunaki_CLI_Command' );
+	}
 }, 10 );
 
 // Reschedule cron when sync interval changes.

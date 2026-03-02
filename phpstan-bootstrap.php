@@ -97,6 +97,17 @@ function sanitize_title( string $title ): string { return $title; }
 function esc_xml( string $text ): string { return $text; }
 function woocommerce_wp_text_input( array $args ): void {}
 
+// WP-CLI stub.
+class WP_CLI {
+	/** @param mixed $message */
+	public static function log( $message ): void {}
+	/** @param mixed $message */
+	public static function success( $message ): void {}
+	/** @param mixed $message */
+	public static function error( $message ): void {}
+	public static function add_command( string $name, string $class ): void {}
+}
+
 // WooCommerce stubs.
 function wc_get_order( int $id ) { return null; }
 /** @return \WC_Order[] */

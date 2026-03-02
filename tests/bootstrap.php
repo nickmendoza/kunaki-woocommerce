@@ -212,3 +212,4 @@ require_once KUNAKI_WC_PLUGIN_DIR . 'includes/class-kunaki-order-status-sync.php
 require_once KUNAKI_WC_PLUGIN_DIR . 'includes/class-kunaki-retry-queue.php';
 require_once KUNAKI_WC_PLUGIN_DIR . 'includes/class-kunaki-settings.php';
 require_once KUNAKI_WC_PLUGIN_DIR . 'includes/class-kunaki-woocommerce.php';
+require_once KUNAKI_WC_PLUGIN_DIR . 'includes/class-kunaki-cli-command.php';
