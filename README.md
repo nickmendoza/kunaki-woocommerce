@@ -28,6 +28,8 @@ This plugin addresses these concerns through atomic locking, idempotent submissi
 - **HPOS Compatible** -- Declares compatibility with WooCommerce High-Performance Order Storage.
 - **Automatic Retry** -- Failed submissions are retried automatically via cron with linear backoff and a configurable attempt limit.
 - **API Circuit Breaker** -- Detects sustained Kunaki API failures and temporarily halts outbound requests, preserving retry budgets and surfacing an admin notice. Automatically probes for recovery.
+- **Structured Logging** -- JSON-formatted log entries with contextual fields (order ID, error details) for machine-parseable log aggregation.
+- **WP-CLI Support** -- `wp kunaki sync` command for on-demand bulk status sync with `--dry-run` and `--limit` options.
 - **Credential Encryption** -- Passwords encrypted at rest with AES-256-GCM.
 
 ## Requirements
@@ -88,7 +90,8 @@ includes/
   class-kunaki-product-meta.php          Product editor field, validation, admin column
   class-kunaki-settings.php              WooCommerce settings tab
   class-kunaki-circuit-breaker.php       API circuit breaker with state machine
-  class-kunaki-logger.php                Log wrapper with debug gating
+  class-kunaki-cli-command.php           WP-CLI commands (bulk status sync)
+  class-kunaki-logger.php                Structured JSON log wrapper with debug gating
   encryption.php                         AES-256-GCM encrypt/decrypt helpers
 uninstall.php                            Option cleanup on plugin deletion
 ```
@@ -182,7 +185,7 @@ The test suite runs entirely outside WordPress. No WordPress installation, no da
 
 This isolation strategy means tests execute in seconds, run in CI without infrastructure, and validate plugin logic without conflating it with WordPress behavior.
 
-172 unit tests cover:
+182 unit tests cover:
 
 | Area | What's Validated |
 |------|-----------------|
@@ -191,9 +194,10 @@ This isolation strategy means tests execute in seconds, run in CI without infras
 | Order Status Sync | SHIPPED/DECLINED/PENDING transitions, tracking info extraction, auto-completion logic for pure-Kunaki vs. mixed orders, save-before-notify ordering |
 | Shipping Method | Rate calculation, Kunaki product filtering, transient cache hit/miss, state/province handling for US/CA vs. international, country name resolution |
 | Product Meta | 10-character alphanumeric validation, capability checks, admin column rendering, safe handling of absent POST fields |
-| Logger | Debug gating based on settings, log level routing |
+| Logger | Debug gating based on settings, log level routing, structured JSON context, invalid UTF-8 fallback |
 | Retry Queue | AJAX handler permission and input validation, `prepare_for_retry` guard clauses, admin page hook registration |
 | Circuit Breaker | State transitions (closed/open/half_open), threshold and cooldown configuration, error classification (infrastructure vs. business logic), probe recovery, admin state reporting |
+| CLI Command | Dry-run listing, limit enforcement, sync dispatch, empty-queue handling |
 | Encryption | AES-256-GCM round-trip, AES-256-CBC legacy fallback, invalid/corrupt input handling |
 
 ```bash
@@ -213,9 +217,7 @@ composer test -- --filter "shipped"
 These are planned or under consideration. No guarantees on timeline.
 
 - **Webhook receiver** -- If Kunaki adds push notifications for status changes, replace polling with a webhook endpoint to eliminate sync latency.
-- **Bulk status sync CLI command** -- WP-CLI command for on-demand sync of all pending orders, useful for debugging and migration recovery.
 - **Admin dashboard widget** -- Summary of pending, shipped, and declined Kunaki orders at a glance.
-- **Structured logging** -- JSON log format with order ID indexing for easier parsing in external log aggregators.
 
 ## Contributing
 
