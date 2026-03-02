@@ -1055,6 +1055,43 @@ class OrderFulfillmentTest extends KunakiTestCase {
 		$this->fulfillment->retry_failed_orders();
 	}
 
+	public function test_circuit_open_records_failure_without_incrementing_attempts() {
+		$order = $this->create_full_order_mock( 'PXZZ111111' );
+
+		// Circuit breaker in open state, cooldown not yet elapsed.
+		$open_state = wp_json_encode( array(
+			'state'           => 'open',
+			'failure_count'   => 5,
+			'last_failure_at' => time() - 60,
+			'opened_at'       => time() - 60,
+		) );
+		Functions\when( 'get_option' )->alias( function ( $key, $default = '' ) use ( $open_state ) {
+			if ( 'kunaki_wc_circuit_breaker' === $key ) {
+				return $open_state;
+			}
+			if ( 'kunaki_wc_circuit_cooldown' === $key ) {
+				return 5;
+			}
+			return $default;
+		} );
+
+		// Circuit blocks the request — wp_remote_post should never be called.
+		Functions\expect( 'wp_remote_post' )->never();
+
+		// Should record error and timestamp but NOT increment attempts.
+		$order->shouldReceive( 'get_meta' )->with( '_kunaki_fulfillment_attempts' )->andReturn( '1' );
+		$order->shouldReceive( 'update_meta_data' )
+			->with( '_kunaki_fulfillment_error', Mockery::type( 'string' ) )->once();
+		$order->shouldReceive( 'update_meta_data' )
+			->with( '_kunaki_fulfillment_failed_at', Mockery::type( 'string' ) )->once();
+		$order->shouldNotReceive( 'update_meta_data' )
+			->with( '_kunaki_fulfillment_attempts', Mockery::any() );
+		$order->shouldReceive( 'save_meta_data' )->once();
+		$order->shouldReceive( 'add_order_note' )->once();
+
+		$this->fulfillment->handle_order_processing( 100, $order );
+	}
+
 	public function test_record_failure_add_order_note_throws_does_not_propagate() {
 		$order = $this->create_full_order_mock( 'PXZZ111111' );
 

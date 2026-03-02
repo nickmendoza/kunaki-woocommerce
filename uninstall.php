@@ -8,6 +8,9 @@ delete_option( 'kunaki_wc_debug_log' );
 delete_option( 'kunaki_wc_sync_interval' );
 delete_option( 'kunaki_wc_decrypt_failed' );
 delete_option( 'kunaki_wc_max_retries' );
+delete_option( 'kunaki_wc_circuit_breaker' );
+delete_option( 'kunaki_wc_circuit_threshold' );
+delete_option( 'kunaki_wc_circuit_cooldown' );
 
 wp_clear_scheduled_hook( 'kunaki_wc_sync_order_status' );
 wp_clear_scheduled_hook( 'kunaki_wc_retry_failed_orders' );

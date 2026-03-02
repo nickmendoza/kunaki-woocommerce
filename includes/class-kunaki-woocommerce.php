@@ -19,6 +19,7 @@ class Kunaki_WooCommerce {
 
 	private function includes() {
 		require_once KUNAKI_WC_PLUGIN_DIR . 'includes/class-kunaki-logger.php';
+		require_once KUNAKI_WC_PLUGIN_DIR . 'includes/class-kunaki-circuit-breaker.php';
 		require_once KUNAKI_WC_PLUGIN_DIR . 'includes/class-kunaki-api-client.php';
 		require_once KUNAKI_WC_PLUGIN_DIR . 'includes/class-kunaki-product-meta.php';
 		require_once KUNAKI_WC_PLUGIN_DIR . 'includes/class-kunaki-order-fulfillment.php';

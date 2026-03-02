@@ -279,6 +279,67 @@ class APIClientTest extends KunakiTestCase {
 		$this->assertStringContainsString( '<Quantity>3</Quantity>', $captured_body );
 	}
 
+	public function test_send_request_blocked_by_circuit_breaker() {
+		$cb = Mockery::mock( 'Kunaki_Circuit_Breaker' );
+		$cb->shouldReceive( 'pre_request' )
+			->once()
+			->andReturn( new WP_Error( 'kunaki_circuit_open', 'Circuit open' ) );
+		$cb->shouldNotReceive( 'post_request' );
+
+		$this->mock_logger();
+
+		$client = new \Kunaki_API_Client( 'u', 'p', 'TEST', $cb );
+		$result = $client->get_shipping_options( 'United States', 'CA', '90210', array(
+			array( 'product_id' => 'PXZZ111111', 'quantity' => 1 ),
+		) );
+
+		$this->assertInstanceOf( WP_Error::class, $result );
+		$this->assertSame( 'kunaki_circuit_open', $result->get_error_code() );
+	}
+
+	public function test_send_request_records_success_on_circuit_breaker() {
+		$cb = Mockery::mock( 'Kunaki_Circuit_Breaker' );
+		$cb->shouldReceive( 'pre_request' )->once()->andReturn( true );
+		$cb->shouldReceive( 'post_request' )->once()->withArgs( function ( $arg ) {
+			return $arg instanceof \SimpleXMLElement;
+		} );
+
+		$this->mock_successful_http_response_with_cb(
+			'<Response><ErrorCode>0</ErrorCode><Option><Description>Test</Description><DeliveryTime>5d</DeliveryTime><Price>3.99</Price></Option></Response>',
+			$cb
+		);
+
+		$client = new \Kunaki_API_Client( 'u', 'p', 'TEST', $cb );
+		$client->get_shipping_options( 'United States', 'CA', '90210', array(
+			array( 'product_id' => 'PXZZ111111', 'quantity' => 1 ),
+		) );
+	}
+
+	public function test_send_request_records_failure_on_circuit_breaker() {
+		$cb = Mockery::mock( 'Kunaki_Circuit_Breaker' );
+		$cb->shouldReceive( 'pre_request' )->once()->andReturn( true );
+		$cb->shouldReceive( 'post_request' )->once()->withArgs( function ( $arg ) {
+			return $arg instanceof WP_Error && 'http_request_failed' === $arg->get_error_code();
+		} );
+
+		$this->mock_logger();
+		Functions\expect( 'wp_remote_post' )->once()
+			->andReturn( new WP_Error( 'http_request_failed', 'Timeout' ) );
+
+		$client = new \Kunaki_API_Client( 'u', 'p', 'TEST', $cb );
+		$client->get_shipping_options( 'United States', 'CA', '90210', array(
+			array( 'product_id' => 'PXZZ111111', 'quantity' => 1 ),
+		) );
+	}
+
+	private function mock_successful_http_response_with_cb( $body, $cb = null ) {
+		$this->mock_logger();
+
+		Functions\expect( 'wp_remote_post' )->once()->andReturn( array( 'body' => $body ) );
+		Functions\expect( 'wp_remote_retrieve_response_code' )->once()->andReturn( 200 );
+		Functions\expect( 'wp_remote_retrieve_body' )->once()->andReturn( $body );
+	}
+
 	private function mock_successful_http_response( $body ) {
 		$this->mock_logger();
 
@@ -294,5 +355,6 @@ class APIClientTest extends KunakiTestCase {
 		Functions\when( 'wc_get_logger' )->justReturn(
 			Mockery::mock( 'WC_Logger' )->shouldIgnoreMissing()
 		);
+		Functions\when( 'update_option' )->justReturn( true );
 	}
 }

@@ -91,6 +91,7 @@ function esc_attr__( string $text, string $domain = 'default' ): string { return
 function esc_url( string $url ): string { return $url; }
 function esc_attr( string $text ): string { return $text; }
 function __( string $text, string $domain = 'default' ): string { return $text; }
+function human_time_diff( int $from, int $to = 0 ): string { return ''; }
 function absint( $value ): int { return abs( (int) $value ); }
 function sanitize_text_field( string $str ): string { return $str; }
 function sanitize_title( string $title ): string { return $title; }
