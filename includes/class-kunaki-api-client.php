@@ -146,7 +146,7 @@ class Kunaki_API_Client {
 	 * @return SimpleXMLElement|WP_Error
 	 */
 	private function send_request( $xml ) {
-		Kunaki_Logger::debug( 'API Request: ' . $this->redact_credentials( $xml ) );
+		Kunaki_Logger::debug( 'API request.', array( 'body' => $this->redact_credentials( $xml ) ) );
 
 		$response = wp_remote_post( self::ENDPOINT, array(
 			'timeout' => self::TIMEOUT,
@@ -157,14 +157,14 @@ class Kunaki_API_Client {
 		) );
 
 		if ( is_wp_error( $response ) ) {
-			Kunaki_Logger::error( 'HTTP error: ' . $response->get_error_message() );
+			Kunaki_Logger::error( 'HTTP error.', array( 'error' => $response->get_error_message() ) );
 			return $response;
 		}
 
 		$status_code = wp_remote_retrieve_response_code( $response );
 		$body        = wp_remote_retrieve_body( $response );
 
-		Kunaki_Logger::debug( 'API Response (' . $status_code . '): ' . $body );
+		Kunaki_Logger::debug( 'API response.', array( 'status_code' => $status_code, 'body' => $body ) );
 
 		if ( 200 !== $status_code ) {
 			return new WP_Error(
@@ -188,7 +188,7 @@ class Kunaki_API_Client {
 		libxml_use_internal_errors( $prev_libxml );
 
 		if ( false === $parsed ) {
-			Kunaki_Logger::error( 'XML parse error for body: ' . $body );
+			Kunaki_Logger::error( 'XML parse error.', array( 'body' => $body ) );
 			return new WP_Error(
 				'kunaki_xml_error',
 				__( 'Failed to parse Kunaki API response.', 'kunaki-woocommerce' )
@@ -198,7 +198,7 @@ class Kunaki_API_Client {
 		$error_code = (int) $parsed->ErrorCode;
 		if ( 0 !== $error_code ) {
 			$error_text = (string) $parsed->ErrorText;
-			Kunaki_Logger::error( "Kunaki API error [{$error_code}]: {$error_text}" );
+			Kunaki_Logger::error( 'Kunaki API error.', array( 'error_code' => $error_code, 'error_text' => $error_text ) );
 			return new WP_Error( 'kunaki_api_error', $error_text, array( 'error_code' => $error_code ) );
 		}
 

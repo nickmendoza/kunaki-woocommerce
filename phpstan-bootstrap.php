@@ -56,7 +56,8 @@ function wp_remote_post( string $url, array $args = [] ) { return []; }
 function wp_remote_retrieve_response_code( $response ): int { return 200; }
 function wp_remote_retrieve_body( $response ): string { return ''; }
 function wp_salt( string $scheme = 'auth' ): string { return 'salt'; }
-function wp_json_encode( $data ): string { return json_encode( $data ); }
+/** @return string|false */
+function wp_json_encode( $data ) { return json_encode( $data ); }
 function wp_check_invalid_utf8( string $text ): string { return $text; }
 function wp_kses_post( string $text ): string { return $text; }
 function wp_unslash( $value ) { return $value; }

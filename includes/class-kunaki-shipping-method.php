@@ -93,7 +93,7 @@ class WC_Shipping_Kunaki extends WC_Shipping_Method {
 			$options = $api->get_shipping_options( $country, $state, $postal_code, array_values( $kunaki_products ) );
 
 			if ( is_wp_error( $options ) ) {
-				Kunaki_Logger::error( 'Shipping calculation failed: ' . $options->get_error_message() );
+				Kunaki_Logger::error( 'Shipping calculation failed.', array( 'error' => $options->get_error_message() ) );
 				return;
 			}
 
