@@ -56,7 +56,8 @@ function wp_remote_post( string $url, array $args = [] ) { return []; }
 function wp_remote_retrieve_response_code( $response ): int { return 200; }
 function wp_remote_retrieve_body( $response ): string { return ''; }
 function wp_salt( string $scheme = 'auth' ): string { return 'salt'; }
-function wp_json_encode( $data ): string { return json_encode( $data ); }
+/** @return string|false */
+function wp_json_encode( $data ) { return json_encode( $data ); }
 function wp_check_invalid_utf8( string $text ): string { return $text; }
 function wp_kses_post( string $text ): string { return $text; }
 function wp_unslash( $value ) { return $value; }
@@ -95,6 +96,17 @@ function sanitize_text_field( string $str ): string { return $str; }
 function sanitize_title( string $title ): string { return $title; }
 function esc_xml( string $text ): string { return $text; }
 function woocommerce_wp_text_input( array $args ): void {}
+
+// WP-CLI stub.
+class WP_CLI {
+	/** @param mixed $message */
+	public static function log( $message ): void {}
+	/** @param mixed $message */
+	public static function success( $message ): void {}
+	/** @param mixed $message */
+	public static function error( $message ): void {}
+	public static function add_command( string $name, string $class ): void {}
+}
 
 // WooCommerce stubs.
 function wc_get_order( int $id ) { return null; }

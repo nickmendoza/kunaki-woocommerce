@@ -33,6 +33,7 @@ class Kunaki_CLI_Command {
 		$dry_run = ! empty( $assoc_args['dry-run'] );
 		$limit   = isset( $assoc_args['limit'] ) ? (int) $assoc_args['limit'] : 0;
 
+		/** @var int[] $orders */
 		$orders = wc_get_orders( array(
 			'status'       => array( 'processing' ),
 			'meta_key'     => Kunaki_Order_Fulfillment::META_KUNAKI_ORDER_ID,
@@ -62,6 +63,7 @@ class Kunaki_CLI_Command {
 		$sync = new Kunaki_Order_Status_Sync();
 		$sync->sync_all_pending_orders( $sync_limit );
 
+		/** @var int[] $remaining */
 		$remaining = wc_get_orders( array(
 			'status'       => array( 'processing' ),
 			'meta_key'     => Kunaki_Order_Fulfillment::META_KUNAKI_ORDER_ID,
