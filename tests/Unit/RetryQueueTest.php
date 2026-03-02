@@ -164,6 +164,7 @@ class RetryQueueTest extends KunakiTestCase {
 		$order->shouldReceive( 'get_meta' )->with( '_kunaki_fulfillment_attempts' )->andReturn( '' );
 		$order->shouldReceive( 'get_meta' )->with( '_kunaki_fulfillment_error' )->andReturn( 'Some error' );
 		$order->shouldReceive( 'get_items' )->andReturn( array() );
+		$order->shouldReceive( 'delete_meta_data' )->withAnyArgs()->zeroOrMoreTimes();
 		$order->shouldReceive( 'update_meta_data' )->withAnyArgs()->zeroOrMoreTimes();
 		$order->shouldReceive( 'save' )->zeroOrMoreTimes();
 		$order->shouldReceive( 'add_order_note' )->zeroOrMoreTimes();
@@ -178,6 +179,35 @@ class RetryQueueTest extends KunakiTestCase {
 
 		$this->assertInstanceOf( WP_Error::class, $result );
 		$this->assertEquals( 'retry_failed', $result->get_error_code() );
+	}
+
+	public function test_prepare_for_retry_clears_exhausted_and_attempts() {
+		$deleted_meta = array();
+
+		$order = Mockery::mock( 'WC_Order' );
+		$order->shouldReceive( 'get_id' )->andReturn( 100 );
+		$order->shouldReceive( 'get_status' )->andReturn( 'processing' );
+		$order->shouldReceive( 'get_meta' )->with( '_kunaki_submitted' )->andReturn( '' );
+		$order->shouldReceive( 'get_meta' )->with( '_kunaki_fulfillment_attempts' )->andReturn( '3' );
+		$order->shouldReceive( 'get_meta' )->with( '_kunaki_fulfillment_error' )->andReturn( 'API down' );
+		$order->shouldReceive( 'get_items' )->andReturn( array() );
+		$order->shouldReceive( 'delete_meta_data' )->andReturnUsing( function ( $key ) use ( &$deleted_meta ) {
+			$deleted_meta[] = $key;
+		} );
+		$order->shouldReceive( 'update_meta_data' )->withAnyArgs()->zeroOrMoreTimes();
+		$order->shouldReceive( 'save' )->zeroOrMoreTimes();
+		$order->shouldReceive( 'add_order_note' )->zeroOrMoreTimes();
+
+		// Re-fetch returns same order (still not submitted — retry failed).
+		Functions\expect( 'wc_get_order' )->with( 100 )->andReturn( $order );
+		Functions\expect( 'get_option' )->zeroOrMoreTimes()->andReturn( 'no' );
+
+		$this->mock_wpdb_lock( true );
+
+		$this->fulfillment->prepare_for_retry( 100 );
+
+		$this->assertContains( '_kunaki_fulfillment_exhausted', $deleted_meta );
+		$this->assertContains( '_kunaki_fulfillment_attempts', $deleted_meta );
 	}
 
 	public function test_record_failure_save_throws_still_releases_lock() {

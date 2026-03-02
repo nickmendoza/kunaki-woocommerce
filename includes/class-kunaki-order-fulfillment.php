@@ -312,6 +312,12 @@ class Kunaki_Order_Fulfillment {
 			return new \WP_Error( 'already_submitted', __( 'Order already submitted to Kunaki.', 'kunaki-woocommerce' ) );
 		}
 
+		// Reset retry budget so the order gets a fresh start and doesn't
+		// immediately get re-exhausted by the cron if this attempt fails.
+		$order->delete_meta_data( self::META_FULFILLMENT_EXHAUSTED );
+		$order->delete_meta_data( self::META_FULFILLMENT_ATTEMPTS );
+		$order->save();
+
 		$this->handle_order_processing( $order_id, $order );
 
 		// Re-fetch to check result.
