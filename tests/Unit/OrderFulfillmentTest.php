@@ -57,7 +57,8 @@ class OrderFulfillmentTest extends KunakiTestCase {
 		$order->shouldReceive( 'get_meta' )->with( '_kunaki_fulfillment_attempts' )->andReturn( '' );
 		$order->shouldReceive( 'update_meta_data' )->with( '_kunaki_fulfillment_error', Mockery::type( 'string' ) )->once();
 		$order->shouldReceive( 'update_meta_data' )->with( '_kunaki_fulfillment_failed_at', Mockery::type( 'string' ) )->once();
-		$order->shouldReceive( 'update_meta_data' )->with( '_kunaki_fulfillment_attempts', 1 )->once();
+		$order->shouldReceive( 'update_meta_data' )->with( '_kunaki_fulfillment_exhausted', 'yes' )->once();
+		$order->shouldNotReceive( 'update_meta_data' )->with( '_kunaki_fulfillment_attempts', Mockery::any() );
 		$order->shouldReceive( 'save_meta_data' )->once();
 		$order->shouldReceive( 'add_order_note' )
 			->once()->with( Mockery::pattern( '/No matching Kunaki shipping/' ), false );
@@ -1155,6 +1156,129 @@ class OrderFulfillmentTest extends KunakiTestCase {
 		$this->mock_wpdb_recovery();
 
 		// Should complete without exception; logger is called as fallback.
+		$this->fulfillment->retry_failed_orders();
+		$this->addToAssertionCount( 1 );
+	}
+
+	public function test_credentials_invalid_records_failure_without_incrementing_attempts() {
+		$order = $this->create_full_order_mock( 'PXZZ111111' );
+
+		Functions\when( 'get_option' )->alias( function ( $key, $default = '' ) {
+			if ( 'kunaki_wc_decrypt_failed' === $key ) {
+				return 'yes';
+			}
+			return $default;
+		} );
+
+		// API should never be called.
+		Functions\expect( 'wp_remote_post' )->never();
+
+		$order->shouldReceive( 'get_meta' )->with( '_kunaki_fulfillment_attempts' )->andReturn( '1' );
+		$order->shouldReceive( 'update_meta_data' )
+			->with( '_kunaki_fulfillment_error', Mockery::type( 'string' ) )->once();
+		$order->shouldReceive( 'update_meta_data' )
+			->with( '_kunaki_fulfillment_failed_at', Mockery::type( 'string' ) )->once();
+		$order->shouldNotReceive( 'update_meta_data' )
+			->with( '_kunaki_fulfillment_attempts', Mockery::any() );
+		$order->shouldReceive( 'save_meta_data' )->once();
+		$order->shouldReceive( 'add_order_note' )->once();
+
+		$this->fulfillment->handle_order_processing( 100, $order );
+	}
+
+	public function test_credentials_invalid_retry_bails_early() {
+		Functions\when( 'get_option' )->alias( function ( $key, $default = '' ) {
+			if ( 'kunaki_wc_max_retries' === $key ) {
+				return 3;
+			}
+			if ( 'kunaki_wc_decrypt_failed' === $key ) {
+				return 'yes';
+			}
+			return $default;
+		} );
+
+		$this->mock_wpdb_recovery();
+
+		// wc_get_orders should never be called — bail before the query.
+		Functions\expect( 'wc_get_orders' )->never();
+
+		$this->fulfillment->retry_failed_orders();
+		$this->addToAssertionCount( 1 );
+	}
+
+	public function test_permanent_failure_immediately_exhausts() {
+		$order = $this->create_submittable_order();
+
+		Functions\expect( 'get_post_meta' )->with( 42, '_kunaki_product_id', true )->andReturn( 'PXZZ111111' );
+		Functions\expect( 'get_option' )->zeroOrMoreTimes()->andReturn( 'no' );
+
+		$order->shouldReceive( 'get_shipping_methods' )->andReturn( array() );
+		$order->shouldReceive( 'get_meta' )->with( '_kunaki_fulfillment_attempts' )->andReturn( '' );
+		$order->shouldReceive( 'update_meta_data' )
+			->with( '_kunaki_fulfillment_exhausted', 'yes' )->once();
+		$order->shouldNotReceive( 'update_meta_data' )
+			->with( '_kunaki_fulfillment_attempts', Mockery::any() );
+		$order->shouldReceive( 'update_meta_data' )->withAnyArgs()->zeroOrMoreTimes();
+		$order->shouldReceive( 'save_meta_data' )->once();
+		$order->shouldReceive( 'add_order_note' )->once();
+
+		$this->fulfillment->handle_order_processing( 100, $order );
+	}
+
+	public function test_success_path_add_order_note_throws_does_not_propagate() {
+		$order = $this->create_full_order_mock( 'PXZZ111111' );
+
+		Functions\expect( 'wp_remote_post' )->once()
+			->andReturn( array( 'body' => '<Response><ErrorCode>0</ErrorCode><OrderId>KUN999</OrderId></Response>' ) );
+		Functions\expect( 'wp_remote_retrieve_response_code' )->andReturn( 200 );
+		Functions\expect( 'wp_remote_retrieve_body' )->andReturn(
+			'<Response><ErrorCode>0</ErrorCode><OrderId>KUN999</OrderId></Response>'
+		);
+		Functions\expect( 'get_option' )->zeroOrMoreTimes()->andReturn( 'no' );
+
+		$order->shouldReceive( 'update_meta_data' )->withAnyArgs()->zeroOrMoreTimes();
+		$order->shouldReceive( 'delete_meta_data' )->withAnyArgs()->zeroOrMoreTimes();
+		$order->shouldReceive( 'save' )->once();
+		// Success-path note throws — should be caught, not propagated.
+		$order->shouldReceive( 'add_order_note' )->once()
+			->andThrow( new \RuntimeException( 'Note save failed' ) );
+
+		$this->fulfillment->handle_order_processing( 100, $order );
+		$this->addToAssertionCount( 1 );
+	}
+
+	public function test_retry_loop_breaks_when_circuit_opens() {
+		$order1 = Mockery::mock( 'WC_Order' );
+		$order1->shouldReceive( 'get_id' )->andReturn( 100 );
+		$order1->shouldReceive( 'get_meta' )->with( '_kunaki_fulfillment_attempts' )->andReturn( '1' );
+
+		$order2 = Mockery::mock( 'WC_Order' );
+		$order2->shouldReceive( 'get_id' )->andReturn( 200 );
+		$order2->shouldReceive( 'get_meta' )->with( '_kunaki_fulfillment_attempts' )->andReturn( '1' );
+
+		Functions\expect( 'wc_get_orders' )->once()->andReturn( array( $order1, $order2 ) );
+
+		$open_state = wp_json_encode( array(
+			'state'           => 'open',
+			'failure_count'   => 5,
+			'last_failure_at' => time() - 60,
+			'opened_at'       => time() - 60,
+		) );
+		Functions\when( 'get_option' )->alias( function ( $key, $default = '' ) use ( $open_state ) {
+			if ( 'kunaki_wc_max_retries' === $key ) {
+				return 3;
+			}
+			if ( 'kunaki_wc_circuit_breaker' === $key ) {
+				return $open_state;
+			}
+			return $default;
+		} );
+
+		$this->mock_wpdb_recovery();
+
+		// Neither order should attempt submission — circuit is open.
+		Functions\expect( 'wc_get_order' )->never();
+
 		$this->fulfillment->retry_failed_orders();
 		$this->addToAssertionCount( 1 );
 	}

@@ -46,7 +46,8 @@ class RetryQueueTest extends KunakiTestCase {
 		$order->shouldReceive( 'update_meta_data' )
 			->with( '_kunaki_fulfillment_failed_at', Mockery::type( 'string' ) )->once();
 		$order->shouldReceive( 'update_meta_data' )
-			->with( '_kunaki_fulfillment_attempts', 1 )->once();
+			->with( '_kunaki_fulfillment_exhausted', 'yes' )->once();
+		$order->shouldNotReceive( 'update_meta_data' )->with( '_kunaki_fulfillment_attempts', Mockery::any() );
 		$order->shouldReceive( 'save_meta_data' )->once();
 		$order->shouldReceive( 'add_order_note' )->once();
 
@@ -78,21 +79,22 @@ class RetryQueueTest extends KunakiTestCase {
 	}
 
 	public function test_attempt_counter_increments_on_repeated_failure() {
-		// First failure — attempts starts at 0.
-		$order1 = $this->create_submittable_order();
+		$order = $this->create_full_order_mock( 'PXZZ111111' );
 
-		Functions\expect( 'get_post_meta' )->with( 42, '_kunaki_product_id', true )->andReturn( 'PXZZ111111' );
+		// Simulate a transient API failure (non-permanent).
+		Functions\expect( 'wp_remote_post' )->once()
+			->andReturn( new WP_Error( 'http_request_failed', 'Connection timed out' ) );
 		Functions\expect( 'get_option' )->zeroOrMoreTimes()->andReturn( 'no' );
+		Functions\expect( 'update_option' )->zeroOrMoreTimes();
 
-		$order1->shouldReceive( 'get_shipping_methods' )->andReturn( array() );
-		$order1->shouldReceive( 'get_meta' )->with( '_kunaki_fulfillment_attempts' )->andReturn( '2' );
-		$order1->shouldReceive( 'update_meta_data' )
+		$order->shouldReceive( 'get_meta' )->with( '_kunaki_fulfillment_attempts' )->andReturn( '2' );
+		$order->shouldReceive( 'update_meta_data' )
 			->with( '_kunaki_fulfillment_attempts', 3 )->once();
-		$order1->shouldReceive( 'update_meta_data' )->withAnyArgs()->zeroOrMoreTimes();
-		$order1->shouldReceive( 'save_meta_data' )->once();
-		$order1->shouldReceive( 'add_order_note' )->once();
+		$order->shouldReceive( 'update_meta_data' )->withAnyArgs()->zeroOrMoreTimes();
+		$order->shouldReceive( 'save_meta_data' )->once();
+		$order->shouldReceive( 'add_order_note' )->once();
 
-		$this->fulfillment->handle_order_processing( 100, $order1 );
+		$this->fulfillment->handle_order_processing( 100, $order );
 	}
 
 	public function test_prepare_for_retry_rejects_non_processing_order() {

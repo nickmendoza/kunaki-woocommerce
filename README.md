@@ -77,7 +77,7 @@ This plugin addresses these concerns through atomic locking, idempotent submissi
 
 ## Architecture Overview
 
-The plugin is organized into eleven single-responsibility components, coordinated by a singleton orchestrator. No component performs direct SQL outside controlled locking primitives.
+The plugin is organized into twelve single-responsibility components, coordinated by a singleton orchestrator. No component performs direct SQL outside controlled locking primitives.
 
 ```
 kunaki-woocommerce.php                   Bootstrap, constants, encryption filters, cron setup
@@ -144,6 +144,8 @@ When the Kunaki API returns an error or the HTTP request fails, the plugin recor
 
 - **Linear backoff** -- Each retry waits `attempts * 15 minutes` since the last failure before retrying.
 - **Configurable limit** -- After the configured max attempts (default: 3), the order is marked exhausted and an order note alerts the admin.
+- **Permanent failure detection** -- Errors that will never self-resolve (e.g., missing Kunaki shipping method on the order) are immediately marked as exhausted without consuming retry attempts.
+- **Credential validation** -- If the stored password cannot be decrypted (e.g., after salt rotation), submission, retry, and status sync all bail early without making API calls or burning retry budgets.
 - **Durable failure markers** -- If failure metadata fails to persist (e.g., database instability), a `_kunaki_failed_{order_id}` marker is written to `wp_options`. The retry cron recovers these orphaned markers at the start of each run.
 - **Idempotent** -- Retries go through the same `handle_order_processing` path with its full locking and deduplication guarantees.
 
@@ -152,7 +154,7 @@ When the Kunaki API returns an error or the HTTP request fails, the plugin recor
 When the Kunaki API suffers sustained outages, the circuit breaker prevents the plugin from hammering the endpoint with requests that will time out. It tracks consecutive infrastructure failures (HTTP errors, non-200 status codes, XML parse errors) across all API callers — order submission, status sync, and shipping rate lookups.
 
 - **Closed** (normal): all requests proceed. A counter tracks consecutive failures.
-- **Open** (tripped): after the configured failure threshold (default: 5), all API calls return immediately with a `WP_Error`. Cron handlers (retry queue, status sync) bail out at the top of each run. An admin notice alerts the store owner.
+- **Open** (tripped): after the configured failure threshold (default: 5), all API calls return immediately with a `WP_Error`. Cron handlers (retry queue, status sync) break out of their batch loops as soon as they detect the open circuit, avoiding pointless lock churn. An admin notice alerts the store owner.
 - **Half-open** (probe): after the cooldown period (default: 5 minutes), one request is allowed through. If it succeeds, the circuit closes. If it fails, the circuit re-opens for another cooldown period.
 
 API business logic errors (Kunaki `ErrorCode != 0`) do not count toward the threshold — they indicate the API is responding, not that it's down.
@@ -187,7 +189,7 @@ The test suite runs entirely outside WordPress. No WordPress installation, no da
 
 This isolation strategy means tests execute in seconds, run in CI without infrastructure, and validate plugin logic without conflating it with WordPress behavior.
 
-193 unit tests cover:
+200 unit tests cover:
 
 | Area | What's Validated |
 |------|-----------------|
@@ -201,6 +203,8 @@ This isolation strategy means tests execute in seconds, run in CI without infras
 | Circuit Breaker | State transitions (closed/open/half_open), threshold and cooldown configuration, error classification (infrastructure vs. business logic), probe recovery, admin state reporting |
 | CLI Command | Dry-run listing, limit enforcement, sync dispatch, empty-queue handling |
 | Dashboard Widget | Hook registration, capability gating, zero/mixed-state count rendering, circuit breaker warning display, URL generation |
+| Settings | Settings field definitions, sanitization callbacks, defaults and range enforcement |
+| Bootstrap | Hook registration, component loading, cron scheduling, HPOS declaration |
 | Encryption | AES-256-GCM round-trip, AES-256-CBC legacy fallback, invalid/corrupt input handling |
 
 ```bash

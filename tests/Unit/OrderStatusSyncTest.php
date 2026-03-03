@@ -415,6 +415,50 @@ class OrderStatusSyncTest extends KunakiTestCase {
 		$this->addToAssertionCount( 1 );
 	}
 
+	public function test_credentials_invalid_sync_bails_early() {
+		// Override get_option to return 'yes' for the decrypt_failed flag.
+		Functions\when( 'get_option' )->alias( function ( $key, $default = '' ) {
+			if ( 'kunaki_wc_decrypt_failed' === $key ) {
+				return 'yes';
+			}
+			return 'kunaki_wc_debug_log' === $key ? 'no' : $default;
+		} );
+
+		// wc_get_orders should never be called — bail before the query.
+		Functions\expect( 'wc_get_orders' )->never();
+
+		$this->sync->sync_all_pending_orders();
+		$this->addToAssertionCount( 1 );
+	}
+
+	public function test_sync_loop_breaks_when_circuit_opens() {
+		$order1 = $this->create_order_mock( 'KUN111', 'PENDING' );
+		$order2 = $this->create_order_mock( 'KUN222', 'PENDING' );
+
+		$this->mock_wc_get_orders( array( $order1, $order2 ) );
+
+		$open_state = wp_json_encode( array(
+			'state'           => 'open',
+			'failure_count'   => 5,
+			'last_failure_at' => time() - 60,
+			'opened_at'       => time() - 60,
+		) );
+
+		// Override get_option to return circuit-open state.
+		Functions\when( 'get_option' )->alias( function ( $key, $default = '' ) use ( $open_state ) {
+			if ( 'kunaki_wc_circuit_breaker' === $key ) {
+				return $open_state;
+			}
+			return 'kunaki_wc_debug_log' === $key ? 'no' : $default;
+		} );
+
+		// API should never be called — circuit is open, loop breaks immediately.
+		Functions\expect( 'wp_remote_post' )->never();
+
+		$this->sync->sync_all_pending_orders();
+		$this->addToAssertionCount( 1 );
+	}
+
 	public function test_cron_fires_with_zero_accepted_args() {
 		Functions\expect( 'add_action' )->once()
 			->with( 'kunaki_wc_sync_order_status', Mockery::any(), 10, 0 );

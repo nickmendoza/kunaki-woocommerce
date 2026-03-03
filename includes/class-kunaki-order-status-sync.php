@@ -15,6 +15,12 @@ class Kunaki_Order_Status_Sync {
 	public function sync_all_pending_orders( $limit = 50 ) {
 		Kunaki_Logger::info( 'Starting order status sync.' );
 
+		// Bail if credentials are known-bad — status checks require authentication.
+		if ( 'yes' === get_option( 'kunaki_wc_decrypt_failed' ) ) {
+			Kunaki_Logger::info( 'Credentials invalid — skipping status sync.' );
+			return;
+		}
+
 		$orders = wc_get_orders( array(
 			'status'       => array( 'processing' ),
 			'meta_key'     => Kunaki_Order_Fulfillment::META_KUNAKI_ORDER_ID,
@@ -30,8 +36,13 @@ class Kunaki_Order_Status_Sync {
 		}
 
 		$api = new Kunaki_API_Client();
+		$cb  = new Kunaki_Circuit_Breaker();
 
 		foreach ( $orders as $order ) {
+			if ( 'open' === $cb->get_state()['state'] ) {
+				Kunaki_Logger::info( 'Circuit breaker is open — stopping sync batch.' );
+				break;
+			}
 			try {
 				$this->sync_single_order( $order, $api );
 			} catch ( \Throwable $e ) {

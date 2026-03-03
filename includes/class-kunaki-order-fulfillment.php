@@ -139,7 +139,9 @@ class Kunaki_Order_Fulfillment {
 			Kunaki_Logger::error( 'No Kunaki shipping description found.', array( 'order_id' => $order_id ) );
 			$this->record_failure(
 				$order,
-				__( 'No matching Kunaki shipping method found on this order.', 'kunaki-woocommerce' )
+				__( 'No matching Kunaki shipping method found on this order.', 'kunaki-woocommerce' ),
+				'',
+				true
 			);
 			return;
 		}
@@ -164,6 +166,17 @@ class Kunaki_Order_Fulfillment {
 			'postcode'  => $order->get_shipping_postcode(),
 			'country'   => $country_name,
 		);
+
+		// Bail if credentials are known-bad (e.g. after salt rotation).
+		if ( 'yes' === get_option( 'kunaki_wc_decrypt_failed' ) ) {
+			Kunaki_Logger::error( 'Credentials invalid — skipping submission.', array( 'order_id' => $order_id ) );
+			$this->record_failure(
+				$order,
+				__( 'Kunaki password could not be decrypted. Please re-enter your password in Kunaki settings.', 'kunaki-woocommerce' ),
+				'kunaki_credentials_invalid'
+			);
+			return;
+		}
 
 		// Submit to Kunaki.
 		$api    = new Kunaki_API_Client();
@@ -232,14 +245,18 @@ class Kunaki_Order_Fulfillment {
 		$wpdb->delete( $wpdb->options, array( 'option_name' => '_kunaki_submitted_' . $order_id ) );
 		$wpdb->delete( $wpdb->options, array( 'option_name' => '_kunaki_failed_' . $order_id ) );
 
-		$order->add_order_note(
-			sprintf(
-				/* translators: %s: Kunaki order ID */
-				__( 'Order submitted to Kunaki successfully. Kunaki Order ID: %s', 'kunaki-woocommerce' ),
-				$result
-			),
-			false
-		);
+		try {
+			$order->add_order_note(
+				sprintf(
+					/* translators: %s: Kunaki order ID */
+					__( 'Order submitted to Kunaki successfully. Kunaki Order ID: %s', 'kunaki-woocommerce' ),
+					$result
+				),
+				false
+			);
+		} catch ( \Throwable $_ ) {
+			// Order is already submitted and meta persisted — note is best effort.
+		}
 
 		Kunaki_Logger::info( 'Submitted to Kunaki.', array( 'order_id' => $order_id, 'kunaki_order_id' => $result ) );
 
@@ -256,15 +273,19 @@ class Kunaki_Order_Fulfillment {
 	 * @param WC_Order $order         WooCommerce order.
 	 * @param string   $error_message Human-readable error description.
 	 * @param string   $error_code    WP_Error code (used to skip counting circuit-open rejections).
+	 * @param bool     $permanent     Whether the error is permanent (immediately mark exhausted, skip retry).
 	 */
-	private function record_failure( $order, $error_message, $error_code = '' ) {
-		$skip_increment = ( 'kunaki_circuit_open' === $error_code );
+	private function record_failure( $order, $error_message, $error_code = '', $permanent = false ) {
+		$skip_increment = $permanent || in_array( $error_code, array( 'kunaki_circuit_open', 'kunaki_credentials_invalid' ), true );
 
 		$attempts = (int) $order->get_meta( self::META_FULFILLMENT_ATTEMPTS );
 		$order->update_meta_data( self::META_FULFILLMENT_ERROR, $error_message );
 		$order->update_meta_data( self::META_FULFILLMENT_FAILED, gmdate( 'c' ) );
 		if ( ! $skip_increment ) {
 			$order->update_meta_data( self::META_FULFILLMENT_ATTEMPTS, $attempts + 1 );
+		}
+		if ( $permanent ) {
+			$order->update_meta_data( self::META_FULFILLMENT_EXHAUSTED, 'yes' );
 		}
 		try {
 			$order->save_meta_data();
@@ -390,6 +411,12 @@ class Kunaki_Order_Fulfillment {
 		// Recover any orders orphaned by a save_meta_data() failure in record_failure().
 		$this->recover_orphaned_failures();
 
+		// Bail if credentials are known-bad — retrying would just burn time.
+		if ( 'yes' === get_option( 'kunaki_wc_decrypt_failed' ) ) {
+			Kunaki_Logger::info( 'Credentials invalid — skipping retry batch.' );
+			return;
+		}
+
 		$orders = wc_get_orders( array(
 			'status'     => array( 'processing' ),
 			'meta_query' => array(
@@ -417,6 +444,7 @@ class Kunaki_Order_Fulfillment {
 		}
 
 		$retried = 0;
+		$cb      = new Kunaki_Circuit_Breaker();
 
 		foreach ( $orders as $order ) {
 			$attempts = (int) $order->get_meta( self::META_FULFILLMENT_ATTEMPTS );
@@ -441,6 +469,11 @@ class Kunaki_Order_Fulfillment {
 				}
 				Kunaki_Logger::info( 'Max retries exhausted. Requires manual intervention.', array( 'order_id' => $order->get_id(), 'max_retries' => $max_retries ) );
 				continue;
+			}
+
+			if ( 'open' === $cb->get_state()['state'] ) {
+				Kunaki_Logger::info( 'Circuit breaker is open — stopping retry batch.' );
+				break;
 			}
 
 			// Linear backoff: wait $attempts * 15 minutes since the last failure.
