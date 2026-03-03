@@ -30,6 +30,9 @@ foreach ( $patterns as $prefix ) {
 	) );
 }
 
+// Clean up dashboard widget transient.
+delete_transient( 'kunaki_dashboard_counts' );
+
 // Clean up transients (shipping rate cache + validation errors).
 $transient_patterns = array(
 	'_transient_kunaki_ship_',
