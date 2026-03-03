@@ -25,6 +25,7 @@ class Kunaki_WooCommerce {
 		require_once KUNAKI_WC_PLUGIN_DIR . 'includes/class-kunaki-order-fulfillment.php';
 		require_once KUNAKI_WC_PLUGIN_DIR . 'includes/class-kunaki-order-status-sync.php';
 		require_once KUNAKI_WC_PLUGIN_DIR . 'includes/class-kunaki-retry-queue.php';
+		require_once KUNAKI_WC_PLUGIN_DIR . 'includes/class-kunaki-dashboard-widget.php';
 	}
 
 	private function init_hooks() {
@@ -50,6 +51,10 @@ class Kunaki_WooCommerce {
 		// Retry queue.
 		$retry_queue = new Kunaki_Retry_Queue();
 		$retry_queue->init();
+
+		// Dashboard widget.
+		$dashboard = new Kunaki_Dashboard_Widget();
+		$dashboard->init();
 
 		// Admin assets.
 		add_action( 'admin_enqueue_scripts', array( $this, 'enqueue_admin_assets' ) );

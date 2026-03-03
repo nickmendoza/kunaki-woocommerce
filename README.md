@@ -30,6 +30,7 @@ This plugin addresses these concerns through atomic locking, idempotent submissi
 - **API Circuit Breaker** -- Detects sustained Kunaki API failures and temporarily halts outbound requests, preserving retry budgets and surfacing an admin notice. Automatically probes for recovery.
 - **Structured Logging** -- JSON-formatted log entries with contextual fields (order ID, error details) for machine-parseable log aggregation.
 - **WP-CLI Support** -- `wp kunaki sync` command for on-demand bulk status sync with `--dry-run` and `--limit` options.
+- **Dashboard Widget** -- At-a-glance Kunaki order summary on the WordPress dashboard: fulfilling, action needed, and retrying counts with circuit breaker status.
 - **Credential Encryption** -- Passwords encrypted at rest with AES-256-GCM.
 
 ## Requirements
@@ -76,7 +77,7 @@ This plugin addresses these concerns through atomic locking, idempotent submissi
 
 ## Architecture Overview
 
-The plugin is organized into ten single-responsibility components, coordinated by a singleton orchestrator. No component performs direct SQL outside controlled locking primitives.
+The plugin is organized into eleven single-responsibility components, coordinated by a singleton orchestrator. No component performs direct SQL outside controlled locking primitives.
 
 ```
 kunaki-woocommerce.php                   Bootstrap, constants, encryption filters, cron setup
@@ -90,6 +91,7 @@ includes/
   class-kunaki-product-meta.php          Product editor field, validation, admin column
   class-kunaki-settings.php              WooCommerce settings tab
   class-kunaki-circuit-breaker.php       API circuit breaker with state machine
+  class-kunaki-dashboard-widget.php      Dashboard widget (order summary counts)
   class-kunaki-cli-command.php           WP-CLI commands (bulk status sync)
   class-kunaki-logger.php                Structured JSON log wrapper with debug gating
   encryption.php                         AES-256-GCM encrypt/decrypt helpers
@@ -185,7 +187,7 @@ The test suite runs entirely outside WordPress. No WordPress installation, no da
 
 This isolation strategy means tests execute in seconds, run in CI without infrastructure, and validate plugin logic without conflating it with WordPress behavior.
 
-182 unit tests cover:
+193 unit tests cover:
 
 | Area | What's Validated |
 |------|-----------------|
@@ -198,6 +200,7 @@ This isolation strategy means tests execute in seconds, run in CI without infras
 | Retry Queue | AJAX handler permission and input validation, `prepare_for_retry` guard clauses, admin page hook registration |
 | Circuit Breaker | State transitions (closed/open/half_open), threshold and cooldown configuration, error classification (infrastructure vs. business logic), probe recovery, admin state reporting |
 | CLI Command | Dry-run listing, limit enforcement, sync dispatch, empty-queue handling |
+| Dashboard Widget | Hook registration, capability gating, zero/mixed-state count rendering, circuit breaker warning display, URL generation |
 | Encryption | AES-256-GCM round-trip, AES-256-CBC legacy fallback, invalid/corrupt input handling |
 
 ```bash
@@ -217,7 +220,6 @@ composer test -- --filter "shipped"
 These are planned or under consideration. No guarantees on timeline.
 
 - **Webhook receiver** -- If Kunaki adds push notifications for status changes, replace polling with a webhook endpoint to eliminate sync latency.
-- **Admin dashboard widget** -- Summary of pending, shipped, and declined Kunaki orders at a glance.
 
 ## Contributing
 

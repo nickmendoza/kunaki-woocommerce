@@ -195,7 +195,7 @@ class Kunaki_API_Client {
 		$body = trim( $body );
 
 		$prev_libxml = libxml_use_internal_errors( true );
-		$parsed      = simplexml_load_string( $body );
+		$parsed      = simplexml_load_string( $body, 'SimpleXMLElement', LIBXML_NONET );
 		libxml_use_internal_errors( $prev_libxml );
 
 		if ( false === $parsed ) {

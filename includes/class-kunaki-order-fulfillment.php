@@ -94,10 +94,13 @@ class Kunaki_Order_Fulfillment {
 			return;
 		}
 
+		$retain_lock = false;
+
+		try {
+
 		// Re-check after acquiring lock in case another process submitted before we locked.
 		$order = wc_get_order( $order_id );
 		if ( ! $order || 'yes' === $order->get_meta( self::META_KUNAKI_SUBMITTED ) ) {
-			$wpdb->delete( $wpdb->options, array( 'option_name' => $lock_option ) );
 			return;
 		}
 
@@ -126,7 +129,6 @@ class Kunaki_Order_Fulfillment {
 
 		if ( empty( $kunaki_products ) ) {
 			Kunaki_Logger::debug( 'No Kunaki products found, skipping.', array( 'order_id' => $order_id ) );
-			$wpdb->delete( $wpdb->options, array( 'option_name' => $lock_option ) );
 			return;
 		}
 
@@ -139,7 +141,6 @@ class Kunaki_Order_Fulfillment {
 				$order,
 				__( 'No matching Kunaki shipping method found on this order.', 'kunaki-woocommerce' )
 			);
-			$wpdb->delete( $wpdb->options, array( 'option_name' => $lock_option ) );
 			return;
 		}
 
@@ -171,7 +172,6 @@ class Kunaki_Order_Fulfillment {
 		if ( is_wp_error( $result ) ) {
 			Kunaki_Logger::error( 'Kunaki submission failed.', array( 'order_id' => $order_id, 'error' => $result->get_error_message() ) );
 			$this->record_failure( $order, $result->get_error_message(), $result->get_error_code() );
-			$wpdb->delete( $wpdb->options, array( 'option_name' => $lock_option ) );
 			return;
 		}
 
@@ -181,7 +181,6 @@ class Kunaki_Order_Fulfillment {
 				$order,
 				__( 'API returned success but no Order ID.', 'kunaki-woocommerce' )
 			);
-			$wpdb->delete( $wpdb->options, array( 'option_name' => $lock_option ) );
 			return;
 		}
 
@@ -217,10 +216,10 @@ class Kunaki_Order_Fulfillment {
 					// Nothing persisted — keep the lock so the order can't be
 					// resubmitted until it expires and someone intervenes.
 					Kunaki_Logger::error( 'CATASTROPHIC — Could not write durable marker. Lock retained.', array( 'order_id' => $order_id ) );
+					$retain_lock = true;
 					return;
 				}
 			}
-			$wpdb->delete( $wpdb->options, array( 'option_name' => $lock_option ) );
 			Kunaki_Logger::error( 'CRITICAL — Kunaki order created but save failed. Manual reconciliation required.', array(
 				'order_id'        => $order_id,
 				'kunaki_order_id' => $result,
@@ -229,7 +228,6 @@ class Kunaki_Order_Fulfillment {
 			return;
 		}
 
-		$wpdb->delete( $wpdb->options, array( 'option_name' => $lock_option ) );
 		// Clean up any fallback markers from previous failed attempts.
 		$wpdb->delete( $wpdb->options, array( 'option_name' => '_kunaki_submitted_' . $order_id ) );
 		$wpdb->delete( $wpdb->options, array( 'option_name' => '_kunaki_failed_' . $order_id ) );
@@ -244,6 +242,12 @@ class Kunaki_Order_Fulfillment {
 		);
 
 		Kunaki_Logger::info( 'Submitted to Kunaki.', array( 'order_id' => $order_id, 'kunaki_order_id' => $result ) );
+
+		} finally {
+			if ( ! $retain_lock ) {
+				$wpdb->delete( $wpdb->options, array( 'option_name' => $lock_option ) );
+			}
+		}
 	}
 
 	/**
