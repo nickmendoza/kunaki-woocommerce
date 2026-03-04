@@ -173,7 +173,7 @@ All critical state transitions are deterministic and replay-safe.
 
 The Kunaki password is encrypted using AES-256-GCM before storage in `wp_options`. The encryption key is derived from WordPress's `AUTH_SALT` via SHA-256. Each encryption generates a fresh 12-byte random nonce. The stored value is `base64(nonce || tag || ciphertext)`.
 
-A legacy AES-256-CBC decryption path exists for passwords encrypted before the GCM upgrade. If both decryption methods fail (typically after salt rotation during site migration), the plugin sets a persistent flag and displays an admin notice prompting the user to re-enter their password.
+If decryption fails (typically after salt rotation during site migration), the plugin sets a persistent flag and displays an admin notice prompting the user to re-enter their password.
 
 Encryption and decryption are applied transparently via `pre_update_option` and `option_{name}` filters. No plaintext password is stored in the database at any point after initial save.
 
@@ -189,7 +189,7 @@ The test suite runs entirely outside WordPress. No WordPress installation, no da
 
 This isolation strategy means tests execute in seconds, run in CI without infrastructure, and validate plugin logic without conflating it with WordPress behavior.
 
-210 unit tests cover:
+229 unit tests cover:
 
 | Area | What's Validated |
 |------|-----------------|
@@ -204,7 +204,7 @@ This isolation strategy means tests execute in seconds, run in CI without infras
 | CLI Command | Dry-run listing, limit enforcement, sync dispatch, empty-queue handling |
 | Dashboard Widget | Hook registration, capability gating, zero/mixed-state count rendering, circuit breaker warning display, URL generation |
 | Settings | Settings field definitions, sanitization callbacks, defaults and range enforcement |
-| Shipping Packages | Mixed cart splitting, per-package rate filtering, destination preservation, package naming |
+| Shipping Packages | Mixed cart splitting, per-package rate filtering, destination preservation, package naming, contents_cost recalculation, multi-package splitting |
 | Bootstrap | Hook registration, component loading, cron scheduling, HPOS declaration |
 | Encryption | AES-256-GCM round-trip, AES-256-CBC legacy fallback, invalid/corrupt input handling |
 
