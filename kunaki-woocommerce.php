@@ -76,6 +76,24 @@ add_filter( 'pre_update_option_kunaki_wc_circuit_cooldown', function ( $value ) 
 	return kunaki_wc_clamp_option( $value, 1, 60, 5 );
 } );
 
+// Show admin notice when Kunaki is in test mode.
+add_action( 'admin_notices', function () {
+	if ( 'TEST' !== strtoupper( get_option( 'kunaki_wc_mode', 'TEST' ) ) ) {
+		return;
+	}
+	if ( ! current_user_can( 'manage_woocommerce' ) ) {
+		return;
+	}
+	$settings_url = admin_url( 'admin.php?page=wc-settings&tab=kunaki' );
+	echo '<div class="notice notice-warning"><p>';
+	echo wp_kses_post( sprintf(
+		/* translators: %s: URL to Kunaki settings page */
+		__( '<strong>Kunaki WooCommerce:</strong> Test mode is active — orders will not be manufactured. Make sure your payment gateway is also in test mode to avoid real charges. <a href="%s">Change mode</a>', 'kunaki-woocommerce' ),
+		esc_url( $settings_url )
+	) );
+	echo '</p></div>';
+} );
+
 // Show admin notice when password decryption fails (e.g. after salt rotation).
 add_action( 'admin_notices', function () {
 	if ( 'yes' !== get_option( 'kunaki_wc_decrypt_failed' ) ) {
