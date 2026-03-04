@@ -33,6 +33,44 @@ foreach ( $patterns as $prefix ) {
 // Clean up dashboard widget transient.
 delete_transient( 'kunaki_dashboard_counts' );
 
+// Clean up order meta (postmeta and HPOS custom order tables).
+$order_meta_keys = array(
+	'_kunaki_order_id',
+	'_kunaki_submitted',
+	'_kunaki_fulfillment_error',
+	'_kunaki_fulfillment_failed_at',
+	'_kunaki_fulfillment_attempts',
+	'_kunaki_fulfillment_exhausted',
+	'_kunaki_all_items',
+	'_kunaki_order_status',
+	'_kunaki_tracking_type',
+	'_kunaki_tracking_id',
+	'_kunaki_sync_note_pending',
+);
+foreach ( $order_meta_keys as $meta_key ) {
+	$wpdb->query( $wpdb->prepare(
+		"DELETE FROM {$wpdb->postmeta} WHERE meta_key = %s",
+		$meta_key
+	) );
+}
+
+// HPOS custom order meta table (if WooCommerce created it).
+$hpos_meta_table = $wpdb->prefix . 'wc_orders_meta';
+if ( $wpdb->get_var( $wpdb->prepare( 'SHOW TABLES LIKE %s', $hpos_meta_table ) ) === $hpos_meta_table ) {
+	foreach ( $order_meta_keys as $meta_key ) {
+		$wpdb->query( $wpdb->prepare(
+			"DELETE FROM {$hpos_meta_table} WHERE meta_key = %s",
+			$meta_key
+		) );
+	}
+}
+
+// Clean up product meta.
+$wpdb->query( $wpdb->prepare(
+	"DELETE FROM {$wpdb->postmeta} WHERE meta_key = %s",
+	'_kunaki_product_id'
+) );
+
 // Clean up transients (shipping rate cache + validation errors).
 $transient_patterns = array(
 	'_transient_kunaki_ship_',

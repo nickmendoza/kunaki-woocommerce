@@ -63,17 +63,4 @@ class EncryptionTest extends KunakiTestCase {
 		kunaki_wc_encrypt_password( 'NewPassword' );
 	}
 
-	public function test_legacy_cbc_value_can_be_decrypted() {
-		Functions\when( 'wp_salt' )->justReturn( 'test-salt-for-legacy' );
-
-		// Encrypt using the old AES-256-CBC format (16-byte IV + ciphertext).
-		$key       = hash( 'sha256', 'test-salt-for-legacy', true );
-		$iv        = openssl_random_pseudo_bytes( 16 );
-		$encrypted = openssl_encrypt( 'LegacyPassword', 'aes-256-cbc', $key, OPENSSL_RAW_DATA, $iv );
-		// phpcs:ignore WordPress.PHP.DiscouragedPHPFunctions.obfuscation_base64_encode
-		$stored = base64_encode( $iv . $encrypted );
-
-		$this->assertSame( 'LegacyPassword', kunaki_wc_decrypt_password( $stored ) );
-	}
-
 }

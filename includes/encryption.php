@@ -49,7 +49,7 @@ if ( ! function_exists( 'kunaki_wc_encrypt_password' ) ) {
 
 		$key = hash( 'sha256', wp_salt( 'auth' ), true );
 
-		// Try AES-256-GCM first (current format: 12-byte IV + 16-byte tag + ciphertext).
+		// AES-256-GCM format: 12-byte IV + 16-byte tag + ciphertext.
 		if ( strlen( $data ) > 28 ) {
 			$iv        = substr( $data, 0, 12 );
 			$tag       = substr( $data, 12, 16 );
@@ -61,19 +61,7 @@ if ( ! function_exists( 'kunaki_wc_encrypt_password' ) ) {
 			}
 		}
 
-		// Legacy fallback: AES-256-CBC (16-byte IV + ciphertext, no tag).
-		$cbc_iv_length = 16;
-		if ( strlen( $data ) > $cbc_iv_length ) {
-			$iv        = substr( $data, 0, $cbc_iv_length );
-			$encrypted = substr( $data, $cbc_iv_length );
-
-			$decrypted = openssl_decrypt( $encrypted, 'aes-256-cbc', $key, OPENSSL_RAW_DATA, $iv );
-			if ( false !== $decrypted ) {
-				return $decrypted;
-			}
-		}
-
-		// Both failed — flag for admin notice.
+		// Decryption failed — flag for admin notice.
 		update_option( 'kunaki_wc_decrypt_failed', 'yes', 'no' );
 
 		if ( function_exists( 'wc_get_logger' ) ) {
