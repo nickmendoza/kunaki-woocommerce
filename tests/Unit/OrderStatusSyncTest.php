@@ -144,6 +144,32 @@ class OrderStatusSyncTest extends KunakiTestCase {
 		);
 	}
 
+	/**
+	 * @dataProvider unknown_statuses
+	 */
+	public function test_unknown_status_updates_meta_without_notes( $status ) {
+		$order = $this->create_order_mock( 'KUN123', '' );
+
+		$this->mock_api_status( 'KUN123', $status, '', '' );
+		$this->mock_wc_get_orders( array( $order ) );
+
+		$order->shouldReceive( 'update_meta_data' )->with( '_kunaki_order_status', $status )->once();
+		$order->shouldNotReceive( 'update_meta_data' )->with( '_kunaki_sync_note_pending', Mockery::any() );
+		$order->shouldNotReceive( 'set_status' );
+		$order->shouldReceive( 'save' )->once();
+		$order->shouldNotReceive( 'add_order_note' );
+
+		$this->sync->sync_all_pending_orders();
+	}
+
+	public function unknown_statuses() {
+		return array(
+			'backordered' => array( 'BACKORDERED' ),
+			'cancelled'   => array( 'CANCELLED' ),
+			'unknown'     => array( 'UNKNOWN_FUTURE_STATUS' ),
+		);
+	}
+
 	public function test_unchanged_status_is_skipped() {
 		$order = $this->create_order_mock( 'KUN123', 'PROCESSING' );
 

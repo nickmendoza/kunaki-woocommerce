@@ -238,6 +238,90 @@ class APIClientTest extends KunakiTestCase {
 		$this->assertInstanceOf( WP_Error::class, $result );
 	}
 
+	public function test_order_status_non_200() {
+		$this->mock_logger();
+
+		Functions\expect( 'wp_remote_post' )->once()
+			->andReturn( array( 'response' => array( 'code' => 503 ), 'body' => 'Service Unavailable' ) );
+		Functions\expect( 'wp_remote_retrieve_response_code' )->once()->andReturn( 503 );
+		Functions\expect( 'wp_remote_retrieve_body' )->once()->andReturn( 'Service Unavailable' );
+
+		$client = new Kunaki_API_Client( 'u', 'p', 'TEST' );
+		$result = $client->get_order_status( 'KUN123456' );
+
+		$this->assertInstanceOf( WP_Error::class, $result );
+		$this->assertSame( 'kunaki_http_error', $result->get_error_code() );
+	}
+
+	public function test_order_status_malformed_xml() {
+		$this->mock_logger();
+
+		Functions\expect( 'wp_remote_post' )->once()
+			->andReturn( array( 'body' => '<<not xml' ) );
+		Functions\expect( 'wp_remote_retrieve_response_code' )->once()->andReturn( 200 );
+		Functions\expect( 'wp_remote_retrieve_body' )->once()->andReturn( '<<not xml' );
+
+		$client = new Kunaki_API_Client( 'u', 'p', 'TEST' );
+		$result = $client->get_order_status( 'KUN123456' );
+
+		$this->assertInstanceOf( WP_Error::class, $result );
+		$this->assertSame( 'kunaki_xml_error', $result->get_error_code() );
+	}
+
+	public function test_order_status_api_error_code() {
+		$xml = '<Response><ErrorCode>2</ErrorCode><ErrorText>Order not found</ErrorText></Response>';
+		$this->mock_logger();
+
+		Functions\expect( 'wp_remote_post' )->once()->andReturn( array( 'body' => $xml ) );
+		Functions\expect( 'wp_remote_retrieve_response_code' )->once()->andReturn( 200 );
+		Functions\expect( 'wp_remote_retrieve_body' )->once()->andReturn( $xml );
+
+		$client = new Kunaki_API_Client( 'u', 'p', 'TEST' );
+		$result = $client->get_order_status( 'KUN123456' );
+
+		$this->assertInstanceOf( WP_Error::class, $result );
+		$this->assertSame( 'kunaki_api_error', $result->get_error_code() );
+		$this->assertSame( 'Order not found', $result->get_error_message() );
+	}
+
+	public function test_submit_order_api_error_code() {
+		$xml = '<Response><ErrorCode>3</ErrorCode><ErrorText>Invalid shipping</ErrorText></Response>';
+		$this->mock_logger();
+
+		Functions\expect( 'wp_remote_post' )->once()->andReturn( array( 'body' => $xml ) );
+		Functions\expect( 'wp_remote_retrieve_response_code' )->once()->andReturn( 200 );
+		Functions\expect( 'wp_remote_retrieve_body' )->once()->andReturn( $xml );
+
+		$client = new Kunaki_API_Client( 'u', 'p', 'TEST' );
+		$result = $client->submit_order(
+			array(
+				'name' => 'Jane', 'address_1' => '1 St', 'city' => 'LA',
+				'state' => 'CA', 'postcode' => '90210', 'country' => 'US',
+			),
+			'BadMethod',
+			array( array( 'product_id' => 'PXZZ111111', 'quantity' => 1 ) )
+		);
+
+		$this->assertInstanceOf( WP_Error::class, $result );
+		$this->assertSame( 'kunaki_api_error', $result->get_error_code() );
+		$this->assertSame( 'Invalid shipping', $result->get_error_message() );
+	}
+
+	public function test_redact_credentials() {
+		$client = new Kunaki_API_Client( 'u', 'p', 'TEST' );
+		$ref    = new \ReflectionMethod( Kunaki_API_Client::class, 'redact_credentials' );
+		$ref->setAccessible( true );
+
+		$xml    = '<Order><UserId>me@example.com</UserId><Password>s3cr3t</Password><Mode>LIVE</Mode></Order>';
+		$result = $ref->invoke( $client, $xml );
+
+		$this->assertStringContainsString( '<UserId>[REDACTED]</UserId>', $result );
+		$this->assertStringContainsString( '<Password>[REDACTED]</Password>', $result );
+		$this->assertStringNotContainsString( 'me@example.com', $result );
+		$this->assertStringNotContainsString( 's3cr3t', $result );
+		$this->assertStringContainsString( '<Mode>LIVE</Mode>', $result );
+	}
+
 	public function test_product_image_url_default_view() {
 		$url = Kunaki_API_Client::get_product_image_url( 'PXZZ111111' );
 		$this->assertSame( 'https://kunaki.com/ProductImage.ASP?T=I&ST=BX&PID=PXZZ111111', $url );

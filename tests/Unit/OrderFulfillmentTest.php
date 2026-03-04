@@ -90,6 +90,57 @@ class OrderFulfillmentTest extends KunakiTestCase {
 		$this->fulfillment->handle_order_processing( 100, $order );
 	}
 
+	public function test_country_name_strips_parenthetical_code() {
+		$order = $this->create_submittable_order();
+
+		Functions\expect( 'get_post_meta' )
+			->with( 42, '_kunaki_product_id', true )
+			->andReturn( 'PXZZ111111' );
+
+		$this->setup_shipping_methods_on_order( $order );
+
+		// Override countries to include parenthetical codes.
+		$countries_obj = Mockery::mock( 'WC_Countries' );
+		$countries_obj->shouldReceive( 'get_countries' )->andReturn( array(
+			'US' => 'United States (US)', 'CA' => 'Canada (CA)',
+		) );
+		$wc = Mockery::mock( 'WooCommerce' );
+		$wc->countries = $countries_obj;
+		Functions\when( 'WC' )->justReturn( $wc );
+
+		$order->shouldReceive( 'get_shipping_country' )->andReturn( 'US' );
+		$order->shouldReceive( 'get_shipping_state' )->andReturn( 'CA' );
+		$order->shouldReceive( 'get_shipping_first_name' )->andReturn( 'John' );
+		$order->shouldReceive( 'get_shipping_last_name' )->andReturn( 'Doe' );
+		$order->shouldReceive( 'get_shipping_company' )->andReturn( '' );
+		$order->shouldReceive( 'get_shipping_address_1' )->andReturn( '123 Main St' );
+		$order->shouldReceive( 'get_shipping_address_2' )->andReturn( '' );
+		$order->shouldReceive( 'get_shipping_city' )->andReturn( 'Beverly Hills' );
+		$order->shouldReceive( 'get_shipping_postcode' )->andReturn( '90210' );
+
+		$captured_body = null;
+		Functions\expect( 'wp_remote_post' )->once()
+			->andReturnUsing( function ( $url, $args ) use ( &$captured_body ) {
+				$captured_body = $args['body'];
+				return array( 'body' => '<Response><ErrorCode>0</ErrorCode><OrderId>KUN999</OrderId></Response>' );
+			} );
+		Functions\expect( 'wp_remote_retrieve_response_code' )->andReturn( 200 );
+		Functions\expect( 'wp_remote_retrieve_body' )->andReturn(
+			'<Response><ErrorCode>0</ErrorCode><OrderId>KUN999</OrderId></Response>'
+		);
+		Functions\expect( 'get_option' )->zeroOrMoreTimes()->andReturn( 'no' );
+
+		$order->shouldReceive( 'update_meta_data' )->withAnyArgs()->zeroOrMoreTimes();
+		$order->shouldReceive( 'delete_meta_data' )->withAnyArgs()->zeroOrMoreTimes();
+		$order->shouldReceive( 'save' )->once();
+		$order->shouldReceive( 'add_order_note' )->withAnyArgs()->once();
+
+		$this->fulfillment->handle_order_processing( 100, $order );
+
+		$this->assertStringContainsString( '<Country>United States</Country>', $captured_body );
+		$this->assertStringNotContainsString( '(US)', $captured_body );
+	}
+
 	public function test_api_failure_adds_error_note() {
 		$order = $this->create_full_order_mock( 'PXZZ111111' );
 

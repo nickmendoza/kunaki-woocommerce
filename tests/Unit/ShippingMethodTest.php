@@ -203,6 +203,41 @@ class ShippingMethodTest extends KunakiTestCase {
 		$this->assertSame( '1 day', $rates[0]['meta_data']['kunaki_delivery_time'] );
 	}
 
+	public function test_country_name_strips_parenthetical_code() {
+		Functions\when( 'get_post_meta' )->justReturn( 'PXZZ111111' );
+		Functions\expect( 'get_transient' )->once()->andReturn( false );
+		Functions\expect( 'set_transient' )->once();
+
+		$wc_countries = Mockery::mock( 'WC_Countries' );
+		$wc_countries->shouldReceive( 'get_countries' )->andReturn( array(
+			'US' => 'United States (US)', 'CA' => 'Canada (CA)', 'GB' => 'United Kingdom (GB)',
+		) );
+		$wc = Mockery::mock( 'WooCommerce' );
+		$wc->countries = $wc_countries;
+		Functions\when( 'WC' )->justReturn( $wc );
+
+		$captured_xml = null;
+		$xml = '<Response><ErrorCode>0</ErrorCode>
+			<Option><Description>Standard</Description><DeliveryTime>5 days</DeliveryTime><Price>5.00</Price></Option>
+		</Response>';
+
+		Functions\expect( 'wp_remote_post' )->once()
+			->andReturnUsing( function ( $url, $args ) use ( &$captured_xml, $xml ) {
+				$captured_xml = $args['body'];
+				return array( 'body' => $xml );
+			} );
+		Functions\expect( 'wp_remote_retrieve_response_code' )->andReturn( 200 );
+		Functions\expect( 'wp_remote_retrieve_body' )->andReturn( $xml );
+
+		$shipping = new WC_Shipping_Kunaki();
+		$shipping->calculate_shipping( $this->build_package( array(
+			array( 'product_id' => 10, 'quantity' => 1 ),
+		) ) );
+
+		$this->assertStringContainsString( '<Country>United States</Country>', $captured_xml );
+		$this->assertStringNotContainsString( '(US)', $captured_xml );
+	}
+
 	public function test_api_error_yields_no_rates() {
 		Functions\when( 'get_post_meta' )->justReturn( 'PXZZ111111' );
 		Functions\expect( 'get_transient' )->once()->andReturn( false );
