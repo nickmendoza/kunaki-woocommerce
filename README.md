@@ -23,7 +23,7 @@ This plugin addresses these concerns through atomic locking, idempotent submissi
 - **Idempotent Order Submission** -- Orders are submitted to Kunaki exactly once, protected by atomic locks and multi-layer duplicate prevention.
 - **Order Tracking** -- Cron-based polling syncs Kunaki status and emails customers their tracking number.
 - **Product Linking** -- Link any WooCommerce product to a Kunaki disc via its 10-character Product ID.
-- **Mixed Cart Handling** -- Submits only Kunaki items; defers order completion when non-Kunaki items are present.
+- **Mixed Cart Handling** -- Splits checkout into separate shipments for Kunaki and non-Kunaki products, each with its own shipping method selection. Submits only Kunaki items to Kunaki; defers order completion when non-Kunaki items are present.
 - **Retry Queue** -- Admin page listing failed submissions with error details, attempt counts, and one-click retry buttons. Per-order retry on the order edit page.
 - **HPOS Compatible** -- Declares compatibility with WooCommerce High-Performance Order Storage.
 - **Automatic Retry** -- Failed submissions are retried automatically via cron with linear backoff and a configurable attempt limit.
@@ -189,7 +189,7 @@ The test suite runs entirely outside WordPress. No WordPress installation, no da
 
 This isolation strategy means tests execute in seconds, run in CI without infrastructure, and validate plugin logic without conflating it with WordPress behavior.
 
-200 unit tests cover:
+210 unit tests cover:
 
 | Area | What's Validated |
 |------|-----------------|
@@ -204,6 +204,7 @@ This isolation strategy means tests execute in seconds, run in CI without infras
 | CLI Command | Dry-run listing, limit enforcement, sync dispatch, empty-queue handling |
 | Dashboard Widget | Hook registration, capability gating, zero/mixed-state count rendering, circuit breaker warning display, URL generation |
 | Settings | Settings field definitions, sanitization callbacks, defaults and range enforcement |
+| Shipping Packages | Mixed cart splitting, per-package rate filtering, destination preservation, package naming |
 | Bootstrap | Hook registration, component loading, cron scheduling, HPOS declaration |
 | Encryption | AES-256-GCM round-trip, AES-256-CBC legacy fallback, invalid/corrupt input handling |
 
