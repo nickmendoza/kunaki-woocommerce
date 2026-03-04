@@ -147,6 +147,68 @@ class ShippingPackageTest extends KunakiTestCase {
 		$this->assertArrayNotHasKey( 'kunaki_shipping:usps', $result );
 	}
 
+	public function test_split_packages_recalculate_contents_cost() {
+		Functions\when( 'get_post_meta' )->alias( function ( $id, $key, $single ) {
+			return 10 === $id ? 'PX00ZJTM4R' : '';
+		} );
+
+		$packages = array( $this->build_package( array(
+			array( 'product_id' => 10, 'quantity' => 1, 'line_total' => 15.00 ),
+			array( 'product_id' => 20, 'quantity' => 2, 'line_total' => 40.00 ),
+		), 'US', 'CA', '90210', 55.00 ) );
+
+		$result = $this->instance->split_shipping_packages( $packages );
+
+		$this->assertCount( 2, $result );
+		$this->assertSame( 15.00, $result[0]['contents_cost'] );
+		$this->assertSame( 40.00, $result[1]['contents_cost'] );
+	}
+
+	public function test_unsplit_package_preserves_original_contents_cost() {
+		Functions\when( 'get_post_meta' )->justReturn( 'PX00ZJTM4R' );
+
+		$packages = array( $this->build_package( array(
+			array( 'product_id' => 10, 'quantity' => 1, 'line_total' => 15.00 ),
+			array( 'product_id' => 20, 'quantity' => 1, 'line_total' => 25.00 ),
+		), 'US', 'CA', '90210', 40.00 ) );
+
+		$result = $this->instance->split_shipping_packages( $packages );
+
+		$this->assertCount( 1, $result );
+		$this->assertSame( 40.00, $result[0]['contents_cost'] );
+	}
+
+	public function test_multiple_input_packages_each_split_independently() {
+		Functions\when( 'get_post_meta' )->alias( function ( $id, $key, $single ) {
+			return in_array( $id, array( 10, 30 ), true ) ? 'PX00ZJTM4R' : '';
+		} );
+
+		$packages = array(
+			$this->build_package( array(
+				array( 'product_id' => 10, 'quantity' => 1, 'line_total' => 10.00 ),
+				array( 'product_id' => 20, 'quantity' => 1, 'line_total' => 20.00 ),
+			), 'US', 'CA', '90210', 30.00 ),
+			$this->build_package( array(
+				array( 'product_id' => 30, 'quantity' => 1, 'line_total' => 5.00 ),
+				array( 'product_id' => 40, 'quantity' => 1, 'line_total' => 8.00 ),
+			), 'US', 'TX', '77377', 13.00 ),
+		);
+
+		$result = $this->instance->split_shipping_packages( $packages );
+
+		$this->assertCount( 4, $result );
+		// First package split.
+		$this->assertSame( 10.00, $result[0]['contents_cost'] );
+		$this->assertSame( 'CA', $result[0]['destination']['state'] );
+		$this->assertSame( 20.00, $result[1]['contents_cost'] );
+		$this->assertSame( 'CA', $result[1]['destination']['state'] );
+		// Second package split.
+		$this->assertSame( 5.00, $result[2]['contents_cost'] );
+		$this->assertSame( 'TX', $result[2]['destination']['state'] );
+		$this->assertSame( 8.00, $result[3]['contents_cost'] );
+		$this->assertSame( 'TX', $result[3]['destination']['state'] );
+	}
+
 	public function test_mixed_package_keeps_all_rates() {
 		Functions\when( 'get_post_meta' )->alias( function ( $id, $key, $single ) {
 			return 10 === $id ? 'PX00ZJTM4R' : '';
@@ -174,14 +236,19 @@ class ShippingPackageTest extends KunakiTestCase {
 		return $rate;
 	}
 
-	private function build_package( $items, $country = 'US', $state = 'CA', $postcode = '90210' ) {
+	private function build_package( $items, $country = 'US', $state = 'CA', $postcode = '90210', $contents_cost = null ) {
 		$contents = array();
 		foreach ( $items as $index => $item ) {
+			$item += array( 'line_total' => 0 );
 			$contents[ $index ] = $item;
 		}
+		if ( null === $contents_cost ) {
+			$contents_cost = array_sum( wp_list_pluck( $contents, 'line_total' ) );
+		}
 		return array(
-			'contents'    => $contents,
-			'destination' => array( 'country' => $country, 'state' => $state, 'postcode' => $postcode ),
+			'contents'      => $contents,
+			'contents_cost' => $contents_cost,
+			'destination'   => array( 'country' => $country, 'state' => $state, 'postcode' => $postcode ),
 		);
 	}
 

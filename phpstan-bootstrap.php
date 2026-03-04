@@ -98,6 +98,8 @@ function sanitize_title( string $title ): string { return $title; }
 function esc_xml( string $text ): string { return $text; }
 function woocommerce_wp_text_input( array $args ): void {}
 function wp_add_dashboard_widget( string $widget_id, string $widget_name, callable $callback ): void {}
+/** @return array<int|string, mixed> */
+function wp_list_pluck( array $list, string $field ): array { return array_column( $list, $field ); }
 
 // WP-CLI stub.
 class WP_CLI {

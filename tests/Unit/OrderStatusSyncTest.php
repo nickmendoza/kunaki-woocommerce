@@ -485,6 +485,32 @@ class OrderStatusSyncTest extends KunakiTestCase {
 		$this->addToAssertionCount( 1 );
 	}
 
+	public function test_corrupt_pending_note_json_does_not_crash() {
+		$order = Mockery::mock( 'WC_Order' );
+		$order->shouldReceive( 'get_id' )->andReturn( 100 );
+		$order->shouldReceive( 'get_meta' )
+			->with( Kunaki_Order_Fulfillment::META_KUNAKI_ORDER_ID )
+			->andReturn( 'KUN123' );
+		$order->shouldReceive( 'get_meta' )
+			->with( '_kunaki_sync_note_pending' )
+			->andReturn( '{corrupt json!!!' );
+
+		$this->mock_wc_get_orders( array( $order ) );
+
+		// Should not send any notes (JSON is unparseable).
+		$order->shouldNotReceive( 'add_order_note' );
+
+		// Should still clean up the pending flag.
+		$order->shouldReceive( 'delete_meta_data' )->with( '_kunaki_sync_note_pending' )->once();
+		$order->shouldReceive( 'save_meta_data' )->once();
+
+		// API should NOT be called — recovery path returns early.
+		Functions\expect( 'wp_remote_post' )->never();
+
+		$this->sync->sync_all_pending_orders();
+		$this->addToAssertionCount( 1 );
+	}
+
 	public function test_cron_fires_with_zero_accepted_args() {
 		Functions\expect( 'add_action' )->once()
 			->with( 'kunaki_wc_sync_order_status', Mockery::any(), 10, 0 );

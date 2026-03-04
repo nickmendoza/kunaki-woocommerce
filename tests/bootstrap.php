@@ -157,6 +157,14 @@ if ( ! function_exists( 'wp_check_invalid_utf8' ) ) {
 	}
 }
 
+if ( ! function_exists( 'wp_list_pluck' ) ) {
+	function wp_list_pluck( $list, $field ) {
+		return array_map( function ( $item ) use ( $field ) {
+			return is_object( $item ) ? $item->$field : $item[ $field ];
+		}, $list );
+	}
+}
+
 // ── WooCommerce base class stubs ─────────────────────────────────────
 if ( ! class_exists( 'WC_Shipping_Method' ) ) {
 	class WC_Shipping_Method {

@@ -147,11 +147,13 @@ class Kunaki_WooCommerce {
 			if ( ! empty( $kunaki_items ) && ! empty( $non_kunaki_items ) ) {
 				$kunaki_package             = $package;
 				$kunaki_package['contents'] = $kunaki_items;
+				$kunaki_package['contents_cost'] = array_sum( wp_list_pluck( $kunaki_items, 'line_total' ) );
 				$kunaki_package['package_name'] = __( 'Disc Shipping', 'kunaki-woocommerce' );
 				$split[] = $kunaki_package;
 
 				$other_package             = $package;
 				$other_package['contents'] = $non_kunaki_items;
+				$other_package['contents_cost'] = array_sum( wp_list_pluck( $non_kunaki_items, 'line_total' ) );
 				$other_package['package_name'] = __( 'Other Items', 'kunaki-woocommerce' );
 				$split[] = $other_package;
 			} else {
