@@ -6,7 +6,4 @@ parameters:
         - uninstall.php
     bootstrapFiles:
         - phpstan-bootstrap.php
-    ignoreErrors:
-        # Intentional redundant guard: strlen > 16 is always true here due to
-        # earlier <= 16 return, but kept for readability as the CBC path guard.
-        - identifier: greater.alwaysTrue
+    ignoreErrors: []
