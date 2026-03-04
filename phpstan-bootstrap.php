@@ -5,7 +5,7 @@
 
 // WordPress constants.
 define( 'ABSPATH', __DIR__ . '/' );
-define( 'KUNAKI_WC_VERSION', '1.1.0' );
+define( 'KUNAKI_WC_VERSION', '1.3.0' );
 define( 'KUNAKI_WC_PLUGIN_FILE', __DIR__ . '/kunaki-woocommerce.php' );
 define( 'KUNAKI_WC_PLUGIN_DIR', __DIR__ . '/' );
 define( 'KUNAKI_WC_PLUGIN_URL', 'https://example.com/wp-content/plugins/kunaki-woocommerce/' );

@@ -40,3 +40,27 @@
 	margin-left: 8px;
 	font-weight: 600;
 }
+
+.kunaki-dashboard-summary {
+	margin: 0;
+	list-style: none;
+}
+
+.kunaki-dashboard-summary li {
+	display: flex;
+	justify-content: space-between;
+	padding: 6px 0;
+	border-bottom: 1px solid #f0f0f1;
+}
+
+.kunaki-dashboard-summary li:last-child {
+	border-bottom: none;
+}
+
+.kunaki-count {
+	font-weight: 600;
+}
+
+.kunaki-count-alert {
+	color: #d63638;
+}

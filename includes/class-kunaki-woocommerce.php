@@ -86,7 +86,7 @@ class Kunaki_WooCommerce {
 			return;
 		}
 
-		$css_screens = array( 'product', 'woocommerce_page_wc-settings', 'shop_order', 'woocommerce_page_kunaki-failed-orders' );
+		$css_screens = array( 'product', 'woocommerce_page_wc-settings', 'shop_order', 'woocommerce_page_kunaki-failed-orders', 'dashboard' );
 		if ( function_exists( 'wc_get_page_screen_id' ) ) {
 			$css_screens[] = wc_get_page_screen_id( 'shop-order' );
 		}

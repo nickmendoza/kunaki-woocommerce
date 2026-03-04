@@ -48,20 +48,6 @@ function kunaki_wc_check_woocommerce() {
 	return true;
 }
 
-// esc_xml polyfill for WordPress < 5.5.
-if ( ! function_exists( 'esc_xml' ) ) {
-	function esc_xml( $text ) {
-		$safe_text = wp_check_invalid_utf8( $text );
-		$safe_text = preg_replace( '/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/', '', $safe_text );
-		$safe_text = str_replace(
-			array( '&', '<', '>', '"', "'" ),
-			array( '&amp;', '&lt;', '&gt;', '&quot;', '&apos;' ),
-			$safe_text
-		);
-		return $safe_text;
-	}
-}
-
 // Load password encrypt/decrypt helpers.
 require_once __DIR__ . '/includes/encryption.php';
 
