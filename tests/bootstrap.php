@@ -24,7 +24,7 @@ if ( ! defined( 'KUNAKI_WC_PLUGIN_FILE' ) ) {
 	define( 'KUNAKI_WC_PLUGIN_FILE', dirname( __DIR__ ) . '/kunaki-woocommerce.php' );
 }
 if ( ! defined( 'KUNAKI_WC_VERSION' ) ) {
-	define( 'KUNAKI_WC_VERSION', '1.3.1' );
+	define( 'KUNAKI_WC_VERSION', '1.3.2' );
 }
 if ( ! defined( 'KUNAKI_WC_PLUGIN_BASENAME' ) ) {
 	define( 'KUNAKI_WC_PLUGIN_BASENAME', 'kunaki-woocommerce/kunaki-woocommerce.php' );
