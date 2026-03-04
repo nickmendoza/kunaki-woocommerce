@@ -343,7 +343,11 @@ class Kunaki_Order_Fulfillment {
 		// immediately get re-exhausted by the cron if this attempt fails.
 		$order->delete_meta_data( self::META_FULFILLMENT_EXHAUSTED );
 		$order->delete_meta_data( self::META_FULFILLMENT_ATTEMPTS );
-		$order->save();
+		try {
+			$order->save();
+		} catch ( \Throwable $e ) {
+			return new \WP_Error( 'save_failed', __( 'Failed to reset retry budget.', 'kunaki-woocommerce' ) );
+		}
 
 		$this->handle_order_processing( $order_id, $order );
 

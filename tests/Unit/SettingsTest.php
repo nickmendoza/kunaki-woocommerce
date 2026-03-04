@@ -95,6 +95,25 @@ class SettingsTest extends KunakiTestCase {
 		$this->assertSame( 'no', $debug['default'] );
 	}
 
+	/**
+	 * @dataProvider clamp_option_provider
+	 */
+	public function test_clamp_option( $value, $min, $max, $default, $expected ) {
+		$this->assertSame( $expected, kunaki_wc_clamp_option( $value, $min, $max, $default ) );
+	}
+
+	public static function clamp_option_provider() {
+		return array(
+			'within range'    => array( 10, 5, 1440, 15, 10 ),
+			'at minimum'      => array( 5, 5, 1440, 15, 5 ),
+			'at maximum'      => array( 1440, 5, 1440, 15, 1440 ),
+			'below minimum'   => array( 0, 5, 1440, 15, 15 ),
+			'above maximum'   => array( 9999, 5, 1440, 15, 15 ),
+			'negative value'  => array( -1, 1, 10, 3, 1 ),
+			'string value'    => array( 'abc', 1, 10, 3, 3 ),
+		);
+	}
+
 	private function find_field( $fields, $id ) {
 		foreach ( $fields as $field ) {
 			if ( isset( $field['id'] ) && $field['id'] === $id ) {

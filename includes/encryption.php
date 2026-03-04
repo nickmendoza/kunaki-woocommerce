@@ -13,7 +13,13 @@ defined( 'ABSPATH' ) || exit;
 if ( ! function_exists( 'kunaki_wc_encrypt_password' ) ) {
 
 	function kunaki_wc_encrypt_password( $value ) {
-		if ( '' === $value || ! function_exists( 'openssl_encrypt' ) ) {
+		if ( '' === $value ) {
+			return $value;
+		}
+		if ( ! function_exists( 'openssl_encrypt' ) ) {
+			if ( function_exists( 'wc_get_logger' ) ) {
+				wc_get_logger()->warning( 'OpenSSL not available — Kunaki password stored unencrypted.', array( 'source' => 'kunaki-woocommerce' ) );
+			}
 			return $value;
 		}
 		$key = hash( 'sha256', wp_salt( 'auth' ), true );
@@ -22,6 +28,9 @@ if ( ! function_exists( 'kunaki_wc_encrypt_password' ) ) {
 
 		$encrypted = openssl_encrypt( $value, 'aes-256-gcm', $key, OPENSSL_RAW_DATA, $iv, $tag );
 		if ( false === $encrypted ) {
+			if ( function_exists( 'wc_get_logger' ) ) {
+				wc_get_logger()->warning( 'openssl_encrypt failed — Kunaki password stored unencrypted.', array( 'source' => 'kunaki-woocommerce' ) );
+			}
 			return $value;
 		}
 

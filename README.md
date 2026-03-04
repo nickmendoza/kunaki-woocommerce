@@ -189,7 +189,7 @@ The test suite runs entirely outside WordPress. No WordPress installation, no da
 
 This isolation strategy means tests execute in seconds, run in CI without infrastructure, and validate plugin logic without conflating it with WordPress behavior.
 
-229 unit tests cover:
+238 unit tests cover:
 
 | Area | What's Validated |
 |------|-----------------|
@@ -206,7 +206,7 @@ This isolation strategy means tests execute in seconds, run in CI without infras
 | Settings | Settings field definitions, sanitization callbacks, defaults and range enforcement |
 | Shipping Packages | Mixed cart splitting, per-package rate filtering, destination preservation, package naming, contents_cost recalculation, multi-package splitting |
 | Bootstrap | Hook registration, component loading, cron scheduling, HPOS declaration |
-| Encryption | AES-256-GCM round-trip, AES-256-CBC legacy fallback, invalid/corrupt input handling |
+| Encryption | AES-256-GCM round-trip, invalid/corrupt input handling, salt rotation detection |
 
 ```bash
 composer install

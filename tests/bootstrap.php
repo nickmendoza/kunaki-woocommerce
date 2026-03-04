@@ -165,6 +165,17 @@ if ( ! function_exists( 'wp_list_pluck' ) ) {
 	}
 }
 
+// ── Plugin helper functions ──────────────────────────────────────────
+if ( ! function_exists( 'kunaki_wc_clamp_option' ) ) {
+	function kunaki_wc_clamp_option( $value, $min, $max, $default ) {
+		$value = absint( $value );
+		if ( $value < $min || $value > $max ) {
+			return $default;
+		}
+		return $value;
+	}
+}
+
 // ── WooCommerce base class stubs ─────────────────────────────────────
 if ( ! class_exists( 'WC_Shipping_Method' ) ) {
 	class WC_Shipping_Method {

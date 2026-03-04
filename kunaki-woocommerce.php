@@ -55,6 +55,27 @@ require_once __DIR__ . '/includes/encryption.php';
 add_filter( 'pre_update_option_kunaki_wc_password', 'kunaki_wc_encrypt_password', 10, 1 );
 add_filter( 'option_kunaki_wc_password', 'kunaki_wc_decrypt_password', 10, 1 );
 
+// Server-side clamping for numeric settings (HTML min/max is client-side only).
+function kunaki_wc_clamp_option( $value, $min, $max, $default ) {
+	$value = absint( $value );
+	if ( $value < $min || $value > $max ) {
+		return $default;
+	}
+	return $value;
+}
+add_filter( 'pre_update_option_kunaki_wc_sync_interval', function ( $value ) {
+	return kunaki_wc_clamp_option( $value, 5, 1440, 15 );
+} );
+add_filter( 'pre_update_option_kunaki_wc_max_retries', function ( $value ) {
+	return kunaki_wc_clamp_option( $value, 1, 10, 3 );
+} );
+add_filter( 'pre_update_option_kunaki_wc_circuit_threshold', function ( $value ) {
+	return kunaki_wc_clamp_option( $value, 2, 20, 5 );
+} );
+add_filter( 'pre_update_option_kunaki_wc_circuit_cooldown', function ( $value ) {
+	return kunaki_wc_clamp_option( $value, 1, 60, 5 );
+} );
+
 // Show admin notice when password decryption fails (e.g. after salt rotation).
 add_action( 'admin_notices', function () {
 	if ( 'yes' !== get_option( 'kunaki_wc_decrypt_failed' ) ) {

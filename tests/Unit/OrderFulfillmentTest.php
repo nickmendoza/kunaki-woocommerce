@@ -26,6 +26,17 @@ class OrderFulfillmentTest extends KunakiTestCase {
 		parent::tear_down();
 	}
 
+	public function test_init_registers_hooks() {
+		Functions\expect( 'add_action' )
+			->once()->with( 'woocommerce_order_status_processing', Mockery::type( 'array' ), 10, 2 );
+		Functions\expect( 'add_action' )
+			->once()->with( 'woocommerce_admin_order_data_after_shipping_address', Mockery::type( 'array' ) );
+		Functions\expect( 'add_action' )
+			->once()->with( 'kunaki_wc_retry_failed_orders', Mockery::type( 'array' ) );
+
+		$this->fulfillment->init();
+	}
+
 	public function test_skips_already_submitted_order() {
 		$order = $this->create_order_mock();
 		$order->shouldReceive( 'get_meta' )->with( '_kunaki_submitted' )->andReturn( 'yes' );
@@ -1332,6 +1343,21 @@ class OrderFulfillmentTest extends KunakiTestCase {
 
 		$this->fulfillment->retry_failed_orders();
 		$this->addToAssertionCount( 1 );
+	}
+
+	public function test_prepare_for_retry_save_throws_returns_wp_error() {
+		$order = $this->create_order_mock();
+		$order->shouldReceive( 'get_status' )->andReturn( 'processing' );
+		$order->shouldReceive( 'get_meta' )->with( '_kunaki_submitted' )->andReturn( '' );
+		$order->shouldReceive( 'delete_meta_data' )->twice();
+		$order->shouldReceive( 'save' )->andThrow( new \Exception( 'DB error' ) );
+
+		Functions\expect( 'wc_get_order' )->with( 100 )->andReturn( $order );
+
+		$result = $this->fulfillment->prepare_for_retry( 100 );
+
+		$this->assertInstanceOf( WP_Error::class, $result );
+		$this->assertSame( 'save_failed', $result->get_error_code() );
 	}
 
 	private function mock_wpdb_lock( $acquired = true ) {
