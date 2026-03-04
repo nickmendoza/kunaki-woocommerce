@@ -24,13 +24,17 @@ class Kunaki_Retry_Queue {
 			'status'       => 'processing',
 			'meta_query'   => array(
 				array( 'key' => Kunaki_Order_Fulfillment::META_FULFILLMENT_ERROR, 'compare' => 'EXISTS' ),
-				array( 'key' => Kunaki_Order_Fulfillment::META_KUNAKI_SUBMITTED, 'compare' => 'NOT EXISTS' ),
-				array( 'key' => Kunaki_Order_Fulfillment::META_FULFILLMENT_EXHAUSTED, 'compare' => 'NOT EXISTS' ),
 			),
 			'limit'        => 50,
 			'orderby'      => 'date',
 			'order'        => 'DESC',
 		) );
+
+		// Filter in PHP — HPOS NOT EXISTS meta queries can return false positives.
+		$failed_orders = array_values( array_filter( $failed_orders, function ( $order ) {
+			return 'yes' !== $order->get_meta( Kunaki_Order_Fulfillment::META_KUNAKI_SUBMITTED )
+				&& 'yes' !== $order->get_meta( Kunaki_Order_Fulfillment::META_FULFILLMENT_EXHAUSTED );
+		} ) );
 
 		$count = count( $failed_orders );
 

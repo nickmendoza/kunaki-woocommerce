@@ -386,6 +386,12 @@ class RetryQueueTest extends KunakiTestCase {
 		$order->shouldReceive( 'get_id' )->andReturn( 100 );
 		$order->shouldReceive( 'get_edit_order_url' )->andReturn( 'https://example.com/order/100' );
 		$order->shouldReceive( 'get_meta' )
+			->with( Kunaki_Order_Fulfillment::META_KUNAKI_SUBMITTED )
+			->andReturn( '' );
+		$order->shouldReceive( 'get_meta' )
+			->with( Kunaki_Order_Fulfillment::META_FULFILLMENT_EXHAUSTED )
+			->andReturn( '' );
+		$order->shouldReceive( 'get_meta' )
 			->with( Kunaki_Order_Fulfillment::META_FULFILLMENT_ERROR )
 			->andReturn( 'Connection timed out' );
 		$order->shouldReceive( 'get_meta' )

@@ -553,6 +553,7 @@ class OrderFulfillmentTest extends KunakiTestCase {
 		$order->shouldReceive( 'get_meta' )->with( '_kunaki_fulfillment_failed_at' )
 			->andReturn( gmdate( 'c', time() - 7200 ) );
 		$order->shouldReceive( 'get_meta' )->with( '_kunaki_submitted' )->andReturn( '' );
+		$order->shouldReceive( 'get_meta' )->with( '_kunaki_fulfillment_exhausted' )->andReturn( '' );
 		$order->shouldReceive( 'get_items' )->andReturn( array() );
 		$order->shouldReceive( 'update_meta_data' )->withAnyArgs()->zeroOrMoreTimes();
 		$order->shouldReceive( 'save' )->zeroOrMoreTimes();
@@ -571,13 +572,16 @@ class OrderFulfillmentTest extends KunakiTestCase {
 	public function test_retry_cron_skips_order_at_max_attempts() {
 		$order = Mockery::mock( 'WC_Order' );
 		$order->shouldReceive( 'get_id' )->andReturn( 100 );
+		$order->shouldReceive( 'get_meta' )->with( '_kunaki_submitted' )->andReturn( '' );
+		$order->shouldReceive( 'get_meta' )->with( '_kunaki_fulfillment_exhausted' )->andReturn( '' );
 		$order->shouldReceive( 'get_meta' )->with( '_kunaki_fulfillment_attempts' )->andReturn( '3' );
 
 		// Should never attempt submission (3 >= 3: exhausted).
 		$order->shouldNotReceive( 'get_items' );
 
-		// Should mark exhausted, add order note, and save.
+		// Should mark exhausted, clear error meta, add order note, and save.
 		$order->shouldReceive( 'update_meta_data' )->with( '_kunaki_fulfillment_exhausted', 'yes' )->once();
+		$order->shouldReceive( 'delete_meta_data' )->with( '_kunaki_fulfillment_error' )->once();
 		$order->shouldReceive( 'save' )->once();
 		$order->shouldReceive( 'add_order_note' )
 			->once()->with( Mockery::pattern( '/retries exhausted/' ), false );
@@ -598,6 +602,7 @@ class OrderFulfillmentTest extends KunakiTestCase {
 		$order1->shouldReceive( 'get_meta' )->with( '_kunaki_fulfillment_failed_at' )
 			->andReturn( gmdate( 'c', time() - 7200 ) );
 		$order1->shouldReceive( 'get_meta' )->with( '_kunaki_submitted' )->andReturn( '' );
+		$order1->shouldReceive( 'get_meta' )->with( '_kunaki_fulfillment_exhausted' )->andReturn( '' );
 		$order1->shouldReceive( 'get_items' )->andReturn( array() );
 		$order1->shouldReceive( 'update_meta_data' )->withAnyArgs()->zeroOrMoreTimes();
 		$order1->shouldReceive( 'save' )->zeroOrMoreTimes();
@@ -609,6 +614,7 @@ class OrderFulfillmentTest extends KunakiTestCase {
 		$order2->shouldReceive( 'get_meta' )->with( '_kunaki_fulfillment_failed_at' )
 			->andReturn( gmdate( 'c', time() - 7200 ) );
 		$order2->shouldReceive( 'get_meta' )->with( '_kunaki_submitted' )->andReturn( '' );
+		$order2->shouldReceive( 'get_meta' )->with( '_kunaki_fulfillment_exhausted' )->andReturn( '' );
 		$order2->shouldReceive( 'get_items' )->andReturn( array() );
 		$order2->shouldReceive( 'update_meta_data' )->withAnyArgs()->zeroOrMoreTimes();
 		$order2->shouldReceive( 'save' )->zeroOrMoreTimes();
@@ -631,6 +637,8 @@ class OrderFulfillmentTest extends KunakiTestCase {
 	public function test_retry_cron_skips_order_within_backoff_window() {
 		$order = Mockery::mock( 'WC_Order' );
 		$order->shouldReceive( 'get_id' )->andReturn( 100 );
+		$order->shouldReceive( 'get_meta' )->with( '_kunaki_submitted' )->andReturn( '' );
+		$order->shouldReceive( 'get_meta' )->with( '_kunaki_fulfillment_exhausted' )->andReturn( '' );
 		$order->shouldReceive( 'get_meta' )->with( '_kunaki_fulfillment_attempts' )->andReturn( '2' );
 		// Failed 5 minutes ago — backoff for attempts=2 is 30 min, so too recent.
 		$order->shouldReceive( 'get_meta' )->with( '_kunaki_fulfillment_failed_at' )
@@ -656,6 +664,7 @@ class OrderFulfillmentTest extends KunakiTestCase {
 		$order->shouldReceive( 'get_meta' )->with( '_kunaki_fulfillment_failed_at' )
 			->andReturn( gmdate( 'c', time() - 20 * MINUTE_IN_SECONDS ) );
 		$order->shouldReceive( 'get_meta' )->with( '_kunaki_submitted' )->andReturn( '' );
+		$order->shouldReceive( 'get_meta' )->with( '_kunaki_fulfillment_exhausted' )->andReturn( '' );
 		$order->shouldReceive( 'get_items' )->andReturn( array() );
 		$order->shouldReceive( 'update_meta_data' )->withAnyArgs()->zeroOrMoreTimes();
 		$order->shouldReceive( 'save' )->zeroOrMoreTimes();
@@ -783,11 +792,14 @@ class OrderFulfillmentTest extends KunakiTestCase {
 	public function test_retry_cron_respects_max_retries_setting() {
 		$order = Mockery::mock( 'WC_Order' );
 		$order->shouldReceive( 'get_id' )->andReturn( 100 );
+		$order->shouldReceive( 'get_meta' )->with( '_kunaki_submitted' )->andReturn( '' );
+		$order->shouldReceive( 'get_meta' )->with( '_kunaki_fulfillment_exhausted' )->andReturn( '' );
 		$order->shouldReceive( 'get_meta' )->with( '_kunaki_fulfillment_attempts' )->andReturn( '5' );
 
 		// With max_retries=5, attempts=5 >= 5 means exhausted.
 		$order->shouldNotReceive( 'get_items' );
 		$order->shouldReceive( 'update_meta_data' )->with( '_kunaki_fulfillment_exhausted', 'yes' )->once();
+		$order->shouldReceive( 'delete_meta_data' )->with( '_kunaki_fulfillment_error' )->once();
 		$order->shouldReceive( 'save' )->once();
 		$order->shouldReceive( 'add_order_note' )
 			->once()->with( Mockery::pattern( '/retries exhausted/' ), false );
@@ -1100,6 +1112,7 @@ class OrderFulfillmentTest extends KunakiTestCase {
 		$order->shouldReceive( 'get_meta' )->with( '_kunaki_fulfillment_failed_at' )
 			->andReturn( gmdate( 'c', time() - 7200 ) );
 		$order->shouldReceive( 'get_meta' )->with( '_kunaki_submitted' )->andReturn( '' );
+		$order->shouldReceive( 'get_meta' )->with( '_kunaki_fulfillment_exhausted' )->andReturn( '' );
 		$order->shouldReceive( 'get_items' )->andReturn( array() );
 		$order->shouldReceive( 'update_meta_data' )->withAnyArgs()->zeroOrMoreTimes();
 		$order->shouldReceive( 'save' )->zeroOrMoreTimes();
@@ -1180,15 +1193,21 @@ class OrderFulfillmentTest extends KunakiTestCase {
 	public function test_exhaustion_save_throws_does_not_halt_loop() {
 		$order1 = Mockery::mock( 'WC_Order' );
 		$order1->shouldReceive( 'get_id' )->andReturn( 100 );
+		$order1->shouldReceive( 'get_meta' )->with( '_kunaki_submitted' )->andReturn( '' );
+		$order1->shouldReceive( 'get_meta' )->with( '_kunaki_fulfillment_exhausted' )->andReturn( '' );
 		$order1->shouldReceive( 'get_meta' )->with( '_kunaki_fulfillment_attempts' )->andReturn( '3' );
 		$order1->shouldReceive( 'update_meta_data' )->with( '_kunaki_fulfillment_exhausted', 'yes' )->once();
+		$order1->shouldReceive( 'delete_meta_data' )->with( '_kunaki_fulfillment_error' )->once();
 		$order1->shouldReceive( 'save' )->once()->andThrow( new \RuntimeException( 'DB down' ) );
 		$order1->shouldReceive( 'add_order_note' )->once();
 
 		$order2 = Mockery::mock( 'WC_Order' );
 		$order2->shouldReceive( 'get_id' )->andReturn( 200 );
+		$order2->shouldReceive( 'get_meta' )->with( '_kunaki_submitted' )->andReturn( '' );
+		$order2->shouldReceive( 'get_meta' )->with( '_kunaki_fulfillment_exhausted' )->andReturn( '' );
 		$order2->shouldReceive( 'get_meta' )->with( '_kunaki_fulfillment_attempts' )->andReturn( '3' );
 		$order2->shouldReceive( 'update_meta_data' )->with( '_kunaki_fulfillment_exhausted', 'yes' )->once();
+		$order2->shouldReceive( 'delete_meta_data' )->with( '_kunaki_fulfillment_error' )->once();
 		$order2->shouldReceive( 'save' )->once();
 		$order2->shouldReceive( 'add_order_note' )->once();
 
@@ -1205,8 +1224,11 @@ class OrderFulfillmentTest extends KunakiTestCase {
 	public function test_exhaustion_add_order_note_throws_does_not_propagate() {
 		$order = Mockery::mock( 'WC_Order' );
 		$order->shouldReceive( 'get_id' )->andReturn( 100 );
+		$order->shouldReceive( 'get_meta' )->with( '_kunaki_submitted' )->andReturn( '' );
+		$order->shouldReceive( 'get_meta' )->with( '_kunaki_fulfillment_exhausted' )->andReturn( '' );
 		$order->shouldReceive( 'get_meta' )->with( '_kunaki_fulfillment_attempts' )->andReturn( '3' );
 		$order->shouldReceive( 'update_meta_data' )->with( '_kunaki_fulfillment_exhausted', 'yes' )->once();
+		$order->shouldReceive( 'delete_meta_data' )->with( '_kunaki_fulfillment_error' )->once();
 		$order->shouldReceive( 'save' )->once();
 		$order->shouldReceive( 'add_order_note' )->once()
 			->andThrow( new \RuntimeException( 'Note save failed' ) );
@@ -1312,10 +1334,14 @@ class OrderFulfillmentTest extends KunakiTestCase {
 	public function test_retry_loop_breaks_when_circuit_opens() {
 		$order1 = Mockery::mock( 'WC_Order' );
 		$order1->shouldReceive( 'get_id' )->andReturn( 100 );
+		$order1->shouldReceive( 'get_meta' )->with( '_kunaki_submitted' )->andReturn( '' );
+		$order1->shouldReceive( 'get_meta' )->with( '_kunaki_fulfillment_exhausted' )->andReturn( '' );
 		$order1->shouldReceive( 'get_meta' )->with( '_kunaki_fulfillment_attempts' )->andReturn( '1' );
 
 		$order2 = Mockery::mock( 'WC_Order' );
 		$order2->shouldReceive( 'get_id' )->andReturn( 200 );
+		$order2->shouldReceive( 'get_meta' )->with( '_kunaki_submitted' )->andReturn( '' );
+		$order2->shouldReceive( 'get_meta' )->with( '_kunaki_fulfillment_exhausted' )->andReturn( '' );
 		$order2->shouldReceive( 'get_meta' )->with( '_kunaki_fulfillment_attempts' )->andReturn( '1' );
 
 		Functions\expect( 'wc_get_orders' )->once()->andReturn( array( $order1, $order2 ) );

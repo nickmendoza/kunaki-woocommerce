@@ -127,17 +127,17 @@ class Kunaki_Dashboard_Widget {
 		) );
 
 		// Failed submissions awaiting automatic retry.
-		/** @var int[] $retrying */
-		$retrying = wc_get_orders( array(
+		// Computed via array_diff — HPOS NOT EXISTS meta queries can return false positives.
+		/** @var int[] $with_error */
+		$with_error = wc_get_orders( array(
 			'status'     => 'processing',
 			'meta_query' => array(
 				array( 'key' => Kunaki_Order_Fulfillment::META_FULFILLMENT_ERROR, 'compare' => 'EXISTS' ),
-				array( 'key' => Kunaki_Order_Fulfillment::META_KUNAKI_SUBMITTED, 'compare' => 'NOT EXISTS' ),
-				array( 'key' => Kunaki_Order_Fulfillment::META_FULFILLMENT_EXHAUSTED, 'compare' => 'NOT EXISTS' ),
 			),
 			'limit'  => -1,
 			'return' => 'ids',
 		) );
+		$retrying = array_diff( $with_error, $submitted, $exhausted );
 
 		return array(
 			'fulfilling'    => count( array_diff( $submitted, $shipped ) ),
