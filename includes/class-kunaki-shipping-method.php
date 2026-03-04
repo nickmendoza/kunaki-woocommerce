@@ -1,4 +1,5 @@
 <?php
+
 defined( 'ABSPATH' ) || exit;
 
 class WC_Shipping_Kunaki extends WC_Shipping_Method {
@@ -123,6 +124,8 @@ class WC_Shipping_Kunaki extends WC_Shipping_Method {
 	 */
 	private function get_kunaki_country_name( $country_code ) {
 		$countries = WC()->countries->get_countries();
-		return isset( $countries[ $country_code ] ) ? $countries[ $country_code ] : '';
+		$name      = isset( $countries[ $country_code ] ) ? $countries[ $country_code ] : '';
+		// Strip parenthetical codes like "(US)" that some WooCommerce installs append.
+		return preg_replace( '/\s*\([A-Z]{2}\)$/', '', $name );
 	}
 }

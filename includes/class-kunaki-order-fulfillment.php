@@ -150,6 +150,8 @@ class Kunaki_Order_Fulfillment {
 		$countries    = WC()->countries->get_countries();
 		$country_code = $order->get_shipping_country();
 		$country_name = isset( $countries[ $country_code ] ) ? $countries[ $country_code ] : $country_code;
+		// Strip parenthetical codes like "(US)" that some WooCommerce installs append.
+		$country_name = preg_replace( '/\s*\([A-Z]{2}\)$/', '', $country_name );
 
 		// Kunaki only accepts state/province for US and CA.
 		$state = in_array( $country_code, array( 'US', 'CA' ), true )

@@ -32,6 +32,8 @@ class Kunaki_WooCommerce {
 		// Shipping method.
 		add_action( 'woocommerce_shipping_init', array( $this, 'load_shipping_method' ) );
 		add_filter( 'woocommerce_shipping_methods', array( $this, 'register_shipping_method' ) );
+		add_filter( 'woocommerce_cart_shipping_packages', array( $this, 'split_shipping_packages' ) );
+		add_filter( 'woocommerce_package_rates', array( $this, 'filter_package_rates' ), 10, 2 );
 
 		// Settings tab.
 		add_filter( 'woocommerce_get_settings_pages', array( $this, 'add_settings_page' ) );
@@ -119,6 +121,86 @@ class Kunaki_WooCommerce {
 				),
 			) );
 		}
+	}
+
+	/**
+	 * Split cart into separate shipping packages for Kunaki and non-Kunaki items.
+	 *
+	 * @param array $packages Default shipping packages.
+	 * @return array Modified packages.
+	 */
+	public function split_shipping_packages( $packages ) {
+		$split = array();
+
+		foreach ( $packages as $package ) {
+			$kunaki_items     = array();
+			$non_kunaki_items = array();
+
+			foreach ( $package['contents'] as $key => $item ) {
+				if ( Kunaki_Product_Meta::is_kunaki_product( $item['product_id'] ) ) {
+					$kunaki_items[ $key ] = $item;
+				} else {
+					$non_kunaki_items[ $key ] = $item;
+				}
+			}
+
+			if ( ! empty( $kunaki_items ) && ! empty( $non_kunaki_items ) ) {
+				$kunaki_package             = $package;
+				$kunaki_package['contents'] = $kunaki_items;
+				$kunaki_package['package_name'] = __( 'Disc Shipping', 'kunaki-woocommerce' );
+				$split[] = $kunaki_package;
+
+				$other_package             = $package;
+				$other_package['contents'] = $non_kunaki_items;
+				$other_package['package_name'] = __( 'Other Items', 'kunaki-woocommerce' );
+				$split[] = $other_package;
+			} else {
+				$split[] = $package;
+			}
+		}
+
+		return $split;
+	}
+
+	/**
+	 * Remove non-Kunaki shipping rates from packages that only contain Kunaki products,
+	 * and remove Kunaki rates from packages with no Kunaki products.
+	 *
+	 * @param array $rates   Available shipping rates for this package.
+	 * @param array $package The shipping package.
+	 * @return array Filtered rates.
+	 */
+	public function filter_package_rates( $rates, $package ) {
+		$has_kunaki     = false;
+		$has_non_kunaki = false;
+
+		foreach ( $package['contents'] as $item ) {
+			if ( Kunaki_Product_Meta::is_kunaki_product( $item['product_id'] ) ) {
+				$has_kunaki = true;
+			} else {
+				$has_non_kunaki = true;
+			}
+		}
+
+		// Pure Kunaki package — remove non-Kunaki rates.
+		if ( $has_kunaki && ! $has_non_kunaki ) {
+			foreach ( $rates as $rate_id => $rate ) {
+				if ( 'kunaki_shipping' !== $rate->method_id ) {
+					unset( $rates[ $rate_id ] );
+				}
+			}
+		}
+
+		// Pure non-Kunaki package — remove Kunaki rates.
+		if ( $has_non_kunaki && ! $has_kunaki ) {
+			foreach ( $rates as $rate_id => $rate ) {
+				if ( 'kunaki_shipping' === $rate->method_id ) {
+					unset( $rates[ $rate_id ] );
+				}
+			}
+		}
+
+		return $rates;
 	}
 
 	public function plugin_action_links( $links ) {

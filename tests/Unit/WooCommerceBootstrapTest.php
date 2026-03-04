@@ -40,6 +40,27 @@ class WooCommerceBootstrapTest extends KunakiTestCase {
 		$this->assertStringContainsString( 'wc-settings&tab=kunaki', $result[0] );
 	}
 
+	public function test_registers_shipping_package_split_filter() {
+		Functions\expect( 'add_filter' )
+			->atLeast()
+			->once()
+			->with( 'woocommerce_cart_shipping_packages', \Mockery::type( 'array' ) )
+			->andReturn( true );
+		Functions\expect( 'add_filter' )
+			->zeroOrMoreTimes()
+			->andReturn( true );
+		Functions\expect( 'add_action' )
+			->zeroOrMoreTimes()
+			->andReturn( true );
+
+		$ref = new \ReflectionClass( Kunaki_WooCommerce::class );
+		$prop = $ref->getProperty( 'instance' );
+		$prop->setAccessible( true );
+		$prop->setValue( null, null );
+
+		Kunaki_WooCommerce::instance();
+	}
+
 	public function test_instance_returns_singleton() {
 		$a = $this->create_instance();
 		$b = Kunaki_WooCommerce::instance();
