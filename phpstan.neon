@@ -6,4 +6,5 @@ parameters:
         - uninstall.php
     bootstrapFiles:
         - phpstan-bootstrap.php
-    ignoreErrors: []
+    ignoreErrors:
+        - '#Call to an undefined method .+\\Vcs\\Api::enableReleaseAssets#'

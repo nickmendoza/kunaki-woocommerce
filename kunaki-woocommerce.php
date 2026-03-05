@@ -24,6 +24,17 @@ define( 'KUNAKI_WC_PLUGIN_DIR', plugin_dir_path( __FILE__ ) );
 define( 'KUNAKI_WC_PLUGIN_URL', plugin_dir_url( __FILE__ ) );
 define( 'KUNAKI_WC_PLUGIN_BASENAME', plugin_basename( __FILE__ ) );
 
+// GitHub update checker — enables WordPress dashboard update notifications.
+if ( file_exists( __DIR__ . '/vendor/yahnis-elsts/plugin-update-checker/load-v5p6.php' ) ) {
+	require_once __DIR__ . '/vendor/yahnis-elsts/plugin-update-checker/load-v5p6.php';
+	$kunaki_wc_update_checker = \YahnisElsts\PluginUpdateChecker\v5\PucFactory::buildUpdateChecker(
+		'https://github.com/nickmendoza/kunaki-woocommerce/',
+		__FILE__,
+		'kunaki-woocommerce'
+	);
+	$kunaki_wc_update_checker->getVcsApi()->enableReleaseAssets();
+}
+
 // Declare HPOS compatibility.
 add_action( 'before_woocommerce_init', function () {
 	if ( class_exists( \Automattic\WooCommerce\Utilities\FeaturesUtil::class ) ) {
