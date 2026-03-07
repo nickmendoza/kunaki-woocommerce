@@ -52,6 +52,7 @@ function update_post_meta( int $post_id, string $key, $value ): bool { return tr
 function get_transient( string $key ) { return false; }
 function set_transient( string $key, $value, int $expiration = 0 ): bool { return true; }
 function delete_transient( string $key ): bool { return true; }
+function delete_site_transient( string $key ): bool { return true; }
 function wp_remote_post( string $url, array $args = [] ) { return []; }
 function wp_remote_retrieve_response_code( $response ): int { return 200; }
 function wp_remote_retrieve_body( $response ): string { return ''; }
