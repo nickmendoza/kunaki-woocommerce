@@ -1,0 +1,55 @@
+name: Release
+
+on:
+  push:
+    tags: [ 'v*.*.*', '*.*.*' ]
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up PHP
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.2'
+          coverage: none
+
+      - name: Install production dependencies
+        run: composer install --no-dev --no-interaction --prefer-dist --optimize-autoloader
+
+      - name: Build release ZIP
+        run: |
+          RELEASE_DIR=$(mktemp -d)
+          rsync -a \
+            --exclude='.git' \
+            --exclude='.github' \
+            --exclude='.gitignore' \
+            --exclude='.gitattributes' \
+            --exclude='.DS_Store' \
+            --exclude='.idea' \
+            --exclude='.phpunit.cache' \
+            --exclude='.phpunit.result.cache' \
+            --exclude='.claude' \
+            --exclude='tests' \
+            --exclude='phpunit.xml.dist' \
+            --exclude='phpstan.neon' \
+            --exclude='phpstan-bootstrap.php' \
+            --exclude='composer.json' \
+            --exclude='composer.lock' \
+            ./ "$RELEASE_DIR/kunaki-woocommerce/"
+          cd "$RELEASE_DIR"
+          zip -r "$GITHUB_WORKSPACE/kunaki-woocommerce-${TAG}.zip" kunaki-woocommerce/
+        env:
+          TAG: ${{ github.ref_name }}
+
+      - name: Create GitHub release
+        run: gh release create "$TAG" "kunaki-woocommerce-${TAG}.zip" --generate-notes
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ github.ref_name }}
