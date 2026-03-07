@@ -15,7 +15,7 @@ class Kunaki_Settings extends WC_Settings_Page {
 			array(
 				'title' => __( 'Kunaki API Settings', 'kunaki-woocommerce' ),
 				'type'  => 'title',
-				'desc'  => __( 'Configure your Kunaki publisher account credentials and integration behavior.', 'kunaki-woocommerce' ),
+				'desc'  => __( 'Configure your Kunaki publisher account credentials and integration behavior. Orders placed via the XML API require payment on your <a href="https://kunaki.com/accounting/XMLBilling.ASP" target="_blank">Kunaki billing page</a>. You can prepay your account balance so orders ship immediately.', 'kunaki-woocommerce' ),
 				'id'    => 'kunaki_wc_api_settings',
 			),
 			array(
