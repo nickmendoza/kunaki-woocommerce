@@ -547,6 +547,13 @@ class Kunaki_Order_Fulfillment {
 			$status = $order->get_meta( '_kunaki_order_status' );
 			if ( ! empty( $status ) ) {
 				echo '<p><strong>' . esc_html__( 'Kunaki Status:', 'kunaki-woocommerce' ) . '</strong> ' . esc_html( $status ) . '</p>';
+				if ( 'PENDING' === $status ) {
+					echo '<p class="description">' . wp_kses_post( sprintf(
+						/* translators: %s: Kunaki billing URL */
+						__( 'Order may be awaiting payment. <a href="%s" target="_blank">Check Kunaki billing</a>.', 'kunaki-woocommerce' ),
+						'https://kunaki.com/accounting/XMLBilling.ASP'
+					) ) . '</p>';
+				}
 			}
 
 			$tracking_id   = $order->get_meta( '_kunaki_tracking_id' );

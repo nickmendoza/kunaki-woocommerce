@@ -181,11 +181,19 @@ class Kunaki_Order_Status_Sync {
 
 			case 'PROCESSING':
 			case 'APPROVED':
-			case 'PENDING':
 				$admin_note = sprintf(
 					/* translators: %s: Kunaki order status */
 					__( 'Kunaki order status update: %s', 'kunaki-woocommerce' ),
 					$kunaki_status
+				);
+				break;
+
+			case 'PENDING':
+				$admin_note = sprintf(
+					/* translators: 1: Kunaki order status, 2: Kunaki billing URL */
+					__( 'Kunaki order status update: %1$s — if this persists, check your <a href="%2$s" target="_blank">Kunaki XML billing page</a> for unpaid orders.', 'kunaki-woocommerce' ),
+					$kunaki_status,
+					'https://kunaki.com/accounting/XMLBilling.ASP'
 				);
 				break;
 		}
