@@ -30,6 +30,10 @@ foreach ( $patterns as $prefix ) {
 	) );
 }
 
+// Clean up Plugin Update Checker data.
+delete_option( 'external_updates-kunaki-woocommerce' );
+delete_site_transient( 'puc_manual_check_errors-kunaki-woocommerce' );
+
 // Clean up dashboard widget transient.
 delete_transient( 'kunaki_dashboard_counts' );
 

@@ -140,8 +140,29 @@ class OrderStatusSyncTest extends KunakiTestCase {
 		return array(
 			'processing' => array( 'PROCESSING' ),
 			'approved'   => array( 'APPROVED' ),
-			'pending'    => array( 'PENDING' ),
 		);
+	}
+
+	public function test_pending_status_adds_note_with_billing_url() {
+		$order = $this->create_order_mock( 'KUN123', '' );
+
+		$this->mock_api_status( 'KUN123', 'PENDING', '', '' );
+		$this->mock_wc_get_orders( array( $order ) );
+
+		$order->shouldReceive( 'update_meta_data' )->with( '_kunaki_order_status', 'PENDING' )->once();
+		$order->shouldReceive( 'update_meta_data' )->with( '_kunaki_sync_note_pending', Mockery::type( 'string' ) )->once();
+		$order->shouldNotReceive( 'set_status' );
+		$order->shouldReceive( 'save' )->once()->ordered();
+		$order->shouldReceive( 'add_order_note' )
+			->with( Mockery::on( function ( $note ) {
+				return false !== strpos( $note, 'PENDING' )
+					&& false !== strpos( $note, 'https://kunaki.com/accounting/XMLBilling.ASP' );
+			} ), false )
+			->once()->ordered();
+		$order->shouldReceive( 'delete_meta_data' )->with( '_kunaki_sync_note_pending' )->once();
+		$order->shouldReceive( 'save_meta_data' )->once();
+
+		$this->sync->sync_all_pending_orders();
 	}
 
 	/**
