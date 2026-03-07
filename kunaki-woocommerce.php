@@ -3,7 +3,7 @@
  * Plugin Name: Kunaki WooCommerce
  * Plugin URI:  https://github.com/nickmendoza/kunaki-woocommerce
  * Description: Integrates Kunaki CD/DVD manufacturing and fulfillment with WooCommerce — live shipping rates, automatic order submission, and order status tracking.
- * Version:     1.3.3
+ * Version:     1.3.4
  * Author:      MobileCodeMedia
  * Author URI:  https://mobilecodemedia.com
  * License:     GPL-2.0-or-later
@@ -18,7 +18,7 @@
 
 defined( 'ABSPATH' ) || exit;
 
-define( 'KUNAKI_WC_VERSION', '1.3.3' );
+define( 'KUNAKI_WC_VERSION', '1.3.4' );
 define( 'KUNAKI_WC_PLUGIN_FILE', __FILE__ );
 define( 'KUNAKI_WC_PLUGIN_DIR', plugin_dir_path( __FILE__ ) );
 define( 'KUNAKI_WC_PLUGIN_URL', plugin_dir_url( __FILE__ ) );
