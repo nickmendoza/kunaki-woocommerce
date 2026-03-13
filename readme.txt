@@ -32,6 +32,18 @@ Kunaki Fulfillment connects your WooCommerce store to [Kunaki's](https://kunaki.
 
 Kunaki has no order deduplication — every order submitted is manufactured, and there is no undo. This plugin uses atomic database locking and multi-layer duplicate prevention to ensure each order is submitted exactly once, even under concurrent cron executions or webhook retries.
 
+**Third-Party Service: Kunaki**
+
+This plugin connects to the [Kunaki](https://kunaki.com) API to submit orders for disc manufacturing, retrieve shipping rates, and check order status. The following data is sent to Kunaki's servers:
+
+* Your Kunaki account credentials (email and password) for authenticated requests
+* Customer shipping address for shipping rate quotes and order fulfillment
+* Product IDs and quantities for order submission
+
+No customer data is sent to Kunaki until an order is placed or shipping rates are requested at checkout. Shipping rate lookups do not require authentication and do not include customer identity.
+
+Kunaki's website: [https://kunaki.com](https://kunaki.com)
+
 == Installation ==
 
 1. Upload the `kunaki-woocommerce` folder to `/wp-content/plugins/`, or install directly through the WordPress plugin screen.
