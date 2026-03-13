@@ -1,4 +1,4 @@
-=== Kunaki Fulfillment ===
+=== Kunaki WooCommerce ===
 Contributors: mobilecodemedia
 Tags: kunaki, woocommerce, fulfillment, cd, shipping
 Requires at least: 5.8
@@ -12,7 +12,7 @@ Integrates Kunaki CD/DVD manufacturing and fulfillment with WooCommerce — live
 
 == Description ==
 
-Kunaki Fulfillment connects your WooCommerce store to [Kunaki's](https://kunaki.com) on-demand disc manufacturing service. When a customer places an order containing a Kunaki-linked product, the plugin automatically submits it to Kunaki for manufacturing and shipping, then tracks the order and emails your customer their tracking number.
+Kunaki WooCommerce connects your WooCommerce store to [Kunaki's](https://kunaki.com) on-demand disc manufacturing service. When a customer places an order containing a Kunaki-linked product, the plugin automatically submits it to Kunaki for manufacturing and shipping, then tracks the order and emails your customer their tracking number.
 
 **Key Features:**
 

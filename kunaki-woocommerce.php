@@ -1,6 +1,6 @@
 <?php
 /**
- * Plugin Name: Kunaki Fulfillment
+ * Plugin Name: Kunaki WooCommerce
  * Plugin URI:  https://github.com/nickmendoza/kunaki-woocommerce
  * Description: Integrates Kunaki CD/DVD manufacturing and fulfillment with WooCommerce — live shipping rates, automatic order submission, and order status tracking.
  * Version:     1.3.4
