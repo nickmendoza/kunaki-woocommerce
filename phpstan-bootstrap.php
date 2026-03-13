@@ -95,6 +95,9 @@ function __( string $text, string $domain = 'default' ): string { return $text; 
 function human_time_diff( int $from, int $to = 0 ): string { return ''; }
 function absint( $value ): int { return abs( (int) $value ); }
 function sanitize_text_field( string $str ): string { return $str; }
+function sanitize_key( $key ): string { return (string) $key; }
+function wp_verify_nonce( string $nonce, $action = -1 ) { return 1; }
+function esc_sql( $data ) { return $data; }
 function sanitize_title( string $title ): string { return $title; }
 function esc_xml( string $text ): string { return $text; }
 function woocommerce_wp_text_input( array $args ): void {}

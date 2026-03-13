@@ -21,7 +21,7 @@
 	"scripts": {
 		"test": "phpunit",
 		"test:unit": "phpunit --testsuite unit",
-		"analyse": "phpstan analyse"
+		"analyse": "phpstan analyse --memory-limit=256M"
 	},
 	"config": {
 		"sort-packages": true
