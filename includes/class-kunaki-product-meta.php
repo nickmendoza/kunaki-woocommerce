@@ -42,6 +42,10 @@ class Kunaki_Product_Meta {
 			return;
 		}
 
+		if ( ! isset( $_POST['woocommerce_meta_nonce'] ) || ! wp_verify_nonce( sanitize_key( $_POST['woocommerce_meta_nonce'] ), 'woocommerce_save_data' ) ) {
+			return;
+		}
+
 		if ( ! isset( $_POST[ self::META_KEY ] ) ) {
 			return;
 		}

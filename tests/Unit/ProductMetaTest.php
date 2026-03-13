@@ -9,8 +9,14 @@ use Kunaki_Product_Meta;
 class ProductMetaTest extends KunakiTestCase {
 
 	protected function tear_down() {
-		unset( $_POST['_kunaki_product_id'] );
+		unset( $_POST['_kunaki_product_id'], $_POST['woocommerce_meta_nonce'] );
 		parent::tear_down();
+	}
+
+	private function stub_nonce() {
+		$_POST['woocommerce_meta_nonce'] = 'test_nonce';
+		Functions\expect( 'sanitize_key' )->with( 'test_nonce' )->andReturn( 'test_nonce' );
+		Functions\expect( 'wp_verify_nonce' )->with( 'test_nonce', 'woocommerce_save_data' )->andReturn( 1 );
 	}
 
 	public function test_get_product_id() {
@@ -43,6 +49,7 @@ class ProductMetaTest extends KunakiTestCase {
 
 	public function test_save_valid_id() {
 		Functions\expect( 'current_user_can' )->with( 'edit_product', 42 )->andReturn( true );
+		$this->stub_nonce();
 		$_POST['_kunaki_product_id'] = 'PXZZ111111';
 
 		Functions\expect( 'update_post_meta' )
@@ -54,6 +61,7 @@ class ProductMetaTest extends KunakiTestCase {
 
 	public function test_save_empty_clears_id() {
 		Functions\expect( 'current_user_can' )->with( 'edit_product', 42 )->andReturn( true );
+		$this->stub_nonce();
 		$_POST['_kunaki_product_id'] = '';
 
 		Functions\expect( 'update_post_meta' )
@@ -65,6 +73,7 @@ class ProductMetaTest extends KunakiTestCase {
 
 	public function test_save_rejects_short_id() {
 		Functions\expect( 'current_user_can' )->with( 'edit_product', 42 )->andReturn( true );
+		$this->stub_nonce();
 		Functions\expect( 'get_current_user_id' )->once()->andReturn( 1 );
 		Functions\expect( 'set_transient' )->once()
 			->with( 'kunaki_wc_product_meta_error_1', Mockery::pattern( '/exactly 10 alphanumeric/' ), 30 );
@@ -77,6 +86,7 @@ class ProductMetaTest extends KunakiTestCase {
 
 	public function test_save_rejects_special_chars() {
 		Functions\expect( 'current_user_can' )->with( 'edit_product', 42 )->andReturn( true );
+		$this->stub_nonce();
 		Functions\expect( 'get_current_user_id' )->once()->andReturn( 1 );
 		Functions\expect( 'set_transient' )->once();
 		Functions\expect( 'update_post_meta' )->never();
@@ -88,6 +98,7 @@ class ProductMetaTest extends KunakiTestCase {
 
 	public function test_save_rejects_long_id() {
 		Functions\expect( 'current_user_can' )->with( 'edit_product', 42 )->andReturn( true );
+		$this->stub_nonce();
 		Functions\expect( 'get_current_user_id' )->once()->andReturn( 1 );
 		Functions\expect( 'set_transient' )->once();
 		Functions\expect( 'update_post_meta' )->never();
@@ -99,6 +110,7 @@ class ProductMetaTest extends KunakiTestCase {
 
 	public function test_save_skips_when_field_not_in_post() {
 		Functions\expect( 'current_user_can' )->with( 'edit_product', 42 )->andReturn( true );
+		$this->stub_nonce();
 		Functions\expect( 'update_post_meta' )->never();
 
 		unset( $_POST['_kunaki_product_id'] );

@@ -17,16 +17,16 @@ wp_clear_scheduled_hook( 'kunaki_wc_retry_failed_orders' );
 
 // Clean up dynamic per-order options (locks, durable markers).
 global $wpdb;
-$patterns = array(
+$kunaki_wc_patterns = array(
 	'_kunaki_lock_',
 	'_kunaki_sync_lock_',
 	'_kunaki_submitted_',
 	'_kunaki_failed_',
 );
-foreach ( $patterns as $prefix ) {
+foreach ( $kunaki_wc_patterns as $kunaki_wc_prefix ) {
 	$wpdb->query( $wpdb->prepare(
 		"DELETE FROM {$wpdb->options} WHERE option_name LIKE %s",
-		$wpdb->esc_like( $prefix ) . '%'
+		$wpdb->esc_like( $kunaki_wc_prefix ) . '%'
 	) );
 }
 
@@ -38,7 +38,7 @@ delete_site_transient( 'puc_manual_check_errors-kunaki-woocommerce' );
 delete_transient( 'kunaki_dashboard_counts' );
 
 // Clean up order meta (postmeta and HPOS custom order tables).
-$order_meta_keys = array(
+$kunaki_wc_order_meta_keys = array(
 	'_kunaki_order_id',
 	'_kunaki_submitted',
 	'_kunaki_fulfillment_error',
@@ -51,20 +51,22 @@ $order_meta_keys = array(
 	'_kunaki_tracking_id',
 	'_kunaki_sync_note_pending',
 );
-foreach ( $order_meta_keys as $meta_key ) {
+foreach ( $kunaki_wc_order_meta_keys as $kunaki_wc_meta_key ) {
 	$wpdb->query( $wpdb->prepare(
 		"DELETE FROM {$wpdb->postmeta} WHERE meta_key = %s",
-		$meta_key
+		$kunaki_wc_meta_key
 	) );
 }
 
 // HPOS custom order meta table (if WooCommerce created it).
-$hpos_meta_table = $wpdb->prefix . 'wc_orders_meta';
-if ( $wpdb->get_var( $wpdb->prepare( 'SHOW TABLES LIKE %s', $hpos_meta_table ) ) === $hpos_meta_table ) {
-	foreach ( $order_meta_keys as $meta_key ) {
+$kunaki_wc_hpos_table = $wpdb->prefix . 'wc_orders_meta';
+// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
+if ( $wpdb->get_var( $wpdb->prepare( 'SHOW TABLES LIKE %s', $kunaki_wc_hpos_table ) ) === $kunaki_wc_hpos_table ) {
+	foreach ( $kunaki_wc_order_meta_keys as $kunaki_wc_meta_key ) {
+		// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
 		$wpdb->query( $wpdb->prepare(
-			"DELETE FROM {$hpos_meta_table} WHERE meta_key = %s",
-			$meta_key
+			'DELETE FROM `' . esc_sql( $kunaki_wc_hpos_table ) . '` WHERE meta_key = %s',
+			$kunaki_wc_meta_key
 		) );
 	}
 }
@@ -76,15 +78,15 @@ $wpdb->query( $wpdb->prepare(
 ) );
 
 // Clean up transients (shipping rate cache + validation errors).
-$transient_patterns = array(
+$kunaki_wc_transient_patterns = array(
 	'_transient_kunaki_ship_',
 	'_transient_timeout_kunaki_ship_',
 	'_transient_kunaki_wc_product_meta_error_',
 	'_transient_timeout_kunaki_wc_product_meta_error_',
 );
-foreach ( $transient_patterns as $prefix ) {
+foreach ( $kunaki_wc_transient_patterns as $kunaki_wc_prefix ) {
 	$wpdb->query( $wpdb->prepare(
 		"DELETE FROM {$wpdb->options} WHERE option_name LIKE %s",
-		$wpdb->esc_like( $prefix ) . '%'
+		$wpdb->esc_like( $kunaki_wc_prefix ) . '%'
 	) );
 }
