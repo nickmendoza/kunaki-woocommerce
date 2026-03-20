@@ -25,6 +25,7 @@ class Kunaki_WooCommerce {
 		require_once KUNAKI_WC_PLUGIN_DIR . 'includes/class-kunaki-order-fulfillment.php';
 		require_once KUNAKI_WC_PLUGIN_DIR . 'includes/class-kunaki-order-status-sync.php';
 		require_once KUNAKI_WC_PLUGIN_DIR . 'includes/class-kunaki-retry-queue.php';
+		require_once KUNAKI_WC_PLUGIN_DIR . 'includes/class-kunaki-delivery-estimator.php';
 		require_once KUNAKI_WC_PLUGIN_DIR . 'includes/class-kunaki-dashboard-widget.php';
 	}
 

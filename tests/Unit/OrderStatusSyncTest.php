@@ -45,6 +45,7 @@ class OrderStatusSyncTest extends KunakiTestCase {
 		$this->mock_wc_get_orders( array( $order ) );
 
 		$order->shouldReceive( 'update_meta_data' )->with( '_kunaki_order_status', 'SHIPPED' )->once();
+		$order->shouldReceive( 'update_meta_data' )->with( '_kunaki_shipped_at', Mockery::type( 'string' ) )->once();
 		$order->shouldReceive( 'update_meta_data' )->with( '_kunaki_tracking_type', 'USPS' )->once();
 		$order->shouldReceive( 'update_meta_data' )->with( '_kunaki_tracking_id', '9400111' )->once();
 		$order->shouldReceive( 'update_meta_data' )->with( '_kunaki_sync_note_pending', Mockery::type( 'string' ) )->once();
@@ -66,6 +67,7 @@ class OrderStatusSyncTest extends KunakiTestCase {
 		$this->mock_wc_get_orders( array( $order ) );
 
 		$order->shouldReceive( 'update_meta_data' )->with( '_kunaki_order_status', 'SHIPPED' )->once();
+		$order->shouldReceive( 'update_meta_data' )->with( '_kunaki_shipped_at', Mockery::type( 'string' ) )->once();
 		$order->shouldReceive( 'update_meta_data' )->with( '_kunaki_sync_note_pending', Mockery::type( 'string' ) )->once();
 		$order->shouldNotReceive( 'update_meta_data' )->with( '_kunaki_tracking_type', Mockery::any() );
 		$order->shouldReceive( 'get_meta' )->with( '_kunaki_all_items' )->andReturn( 'yes' );

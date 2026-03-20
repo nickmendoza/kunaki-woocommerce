@@ -17,6 +17,12 @@ if ( ! defined( 'ABSPATH' ) ) {
 if ( ! defined( 'MINUTE_IN_SECONDS' ) ) {
 	define( 'MINUTE_IN_SECONDS', 60 );
 }
+if ( ! defined( 'HOUR_IN_SECONDS' ) ) {
+	define( 'HOUR_IN_SECONDS', 3600 );
+}
+if ( ! defined( 'DAY_IN_SECONDS' ) ) {
+	define( 'DAY_IN_SECONDS', 86400 );
+}
 if ( ! defined( 'KUNAKI_WC_PLUGIN_DIR' ) ) {
 	define( 'KUNAKI_WC_PLUGIN_DIR', dirname( __DIR__ ) . '/' );
 }
@@ -157,6 +163,12 @@ if ( ! function_exists( 'wp_check_invalid_utf8' ) ) {
 	}
 }
 
+if ( ! function_exists( 'number_format_i18n' ) ) {
+	function number_format_i18n( $number, $decimals = 0 ) {
+		return number_format( (float) $number, $decimals, '.', ',' );
+	}
+}
+
 if ( ! function_exists( 'wp_list_pluck' ) ) {
 	function wp_list_pluck( $list, $field ) {
 		return array_map( function ( $item ) use ( $field ) {
@@ -226,6 +238,7 @@ require_once KUNAKI_WC_PLUGIN_DIR . 'includes/class-kunaki-logger.php';
 require_once KUNAKI_WC_PLUGIN_DIR . 'includes/class-kunaki-circuit-breaker.php';
 require_once KUNAKI_WC_PLUGIN_DIR . 'includes/class-kunaki-api-client.php';
 require_once KUNAKI_WC_PLUGIN_DIR . 'includes/class-kunaki-product-meta.php';
+require_once KUNAKI_WC_PLUGIN_DIR . 'includes/class-kunaki-delivery-estimator.php';
 require_once KUNAKI_WC_PLUGIN_DIR . 'includes/class-kunaki-shipping-method.php';
 require_once KUNAKI_WC_PLUGIN_DIR . 'includes/class-kunaki-order-fulfillment.php';
 require_once KUNAKI_WC_PLUGIN_DIR . 'includes/class-kunaki-order-status-sync.php';

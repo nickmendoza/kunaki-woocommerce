@@ -11,6 +11,8 @@ define( 'KUNAKI_WC_PLUGIN_DIR', __DIR__ . '/' );
 define( 'KUNAKI_WC_PLUGIN_URL', 'https://example.com/wp-content/plugins/kunaki-woocommerce/' );
 define( 'KUNAKI_WC_PLUGIN_BASENAME', 'kunaki-woocommerce/kunaki-woocommerce.php' );
 define( 'MINUTE_IN_SECONDS', 60 );
+define( 'HOUR_IN_SECONDS', 3600 );
+define( 'DAY_IN_SECONDS', 86400 );
 define( 'WP_UNINSTALL_PLUGIN', true );
 // OPENSSL_RAW_DATA is already defined by PHP's OpenSSL extension.
 
@@ -93,6 +95,9 @@ function esc_url( string $url ): string { return $url; }
 function esc_attr( string $text ): string { return $text; }
 function __( string $text, string $domain = 'default' ): string { return $text; }
 function human_time_diff( int $from, int $to = 0 ): string { return ''; }
+/** @return string|false */
+function wp_date( string $format, ?int $timestamp = null, ?\DateTimeZone $timezone = null ) { return date( $format, $timestamp ?? time() ); }
+function number_format_i18n( float $number, int $decimals = 0 ): string { return number_format( $number, $decimals, '.', ',' ); }
 function absint( $value ): int { return abs( (int) $value ); }
 function sanitize_text_field( string $str ): string { return $str; }
 function sanitize_key( $key ): string { return (string) $key; }

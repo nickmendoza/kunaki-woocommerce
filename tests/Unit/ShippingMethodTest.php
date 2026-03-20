@@ -18,6 +18,9 @@ class ShippingMethodTest extends KunakiTestCase {
 		Functions\when( 'get_option' )->alias( function ( $key, $default = '' ) {
 			return 'kunaki_wc_debug_log' === $key ? 'no' : $default;
 		} );
+
+		// Delivery estimator: no historical data available → estimates disabled.
+		Functions\when( 'wc_get_orders' )->justReturn( array() );
 	}
 
 	public function test_no_kunaki_products_yields_no_rates() {
@@ -35,8 +38,8 @@ class ShippingMethodTest extends KunakiTestCase {
 		Functions\when( 'get_post_meta' )->alias( function ( $id, $key, $single ) {
 			return ( '_kunaki_product_id' === $key && 10 === $id ) ? 'PXZZ111111' : '';
 		} );
-		Functions\expect( 'get_transient' )->once()->andReturn( false );
-		Functions\expect( 'set_transient' )->once();
+		Functions\when( 'get_transient' )->justReturn( false );
+		Functions\when( 'set_transient' )->justReturn( true );
 		$this->mock_wc_countries();
 
 		$captured = null;
@@ -67,9 +70,15 @@ class ShippingMethodTest extends KunakiTestCase {
 
 	public function test_cache_hit_skips_api_call() {
 		Functions\when( 'get_post_meta' )->justReturn( 'PXZZ111111' );
-		Functions\expect( 'get_transient' )->once()->andReturn( array(
+		$shipping_cache = array(
 			array( 'description' => 'Cached Rate', 'delivery_time' => '2 days', 'price' => 3.50 ),
-		) );
+		);
+		Functions\when( 'get_transient' )->alias( function ( $key ) use ( $shipping_cache ) {
+			if ( 0 === strpos( $key, 'kunaki_ship_' ) ) {
+				return $shipping_cache;
+			}
+			return false;
+		} );
 		$this->mock_wc_countries();
 
 		Functions\expect( 'wp_remote_post' )->never();
@@ -86,7 +95,7 @@ class ShippingMethodTest extends KunakiTestCase {
 
 	public function test_cache_miss_stores_transient() {
 		Functions\when( 'get_post_meta' )->justReturn( 'PXZZ111111' );
-		Functions\expect( 'get_transient' )->once()->andReturn( false );
+		Functions\when( 'get_transient' )->justReturn( false );
 		$this->mock_wc_countries();
 
 		$xml = '<Response><ErrorCode>0</ErrorCode>
@@ -96,13 +105,25 @@ class ShippingMethodTest extends KunakiTestCase {
 		Functions\expect( 'wp_remote_retrieve_response_code' )->andReturn( 200 );
 		Functions\expect( 'wp_remote_retrieve_body' )->andReturn( $xml );
 
-		Functions\expect( 'set_transient' )->once()
-			->with( Mockery::type( 'string' ), Mockery::type( 'array' ), 30 * MINUTE_IN_SECONDS );
+		$set_transient_calls = array();
+		Functions\when( 'set_transient' )->alias( function ( $key, $value, $expiration ) use ( &$set_transient_calls ) {
+			$set_transient_calls[ $key ] = array( 'value' => $value, 'expiration' => $expiration );
+			return true;
+		} );
 
 		$shipping = new WC_Shipping_Kunaki();
 		$shipping->calculate_shipping( $this->build_package( array(
 			array( 'product_id' => 10, 'quantity' => 1 ),
 		) ) );
+
+		// Verify the shipping cache transient was stored with correct TTL.
+		$shipping_keys = array_filter( array_keys( $set_transient_calls ), function ( $k ) {
+			return 0 === strpos( $k, 'kunaki_ship_' );
+		} );
+		$this->assertCount( 1, $shipping_keys );
+		$shipping_key = reset( $shipping_keys );
+		$this->assertIsArray( $set_transient_calls[ $shipping_key ]['value'] );
+		$this->assertSame( 30 * MINUTE_IN_SECONDS, $set_transient_calls[ $shipping_key ]['expiration'] );
 	}
 
 	public function test_empty_country_yields_no_rates() {
@@ -124,8 +145,8 @@ class ShippingMethodTest extends KunakiTestCase {
 
 	public function test_empty_postcode_still_queries_api() {
 		Functions\when( 'get_post_meta' )->justReturn( 'PXZZ111111' );
-		Functions\expect( 'get_transient' )->once()->andReturn( false );
-		Functions\expect( 'set_transient' )->once();
+		Functions\when( 'get_transient' )->justReturn( false );
+		Functions\when( 'set_transient' )->justReturn( true );
 		$this->mock_wc_countries();
 
 		$xml = '<Response><ErrorCode>0</ErrorCode>
@@ -145,7 +166,8 @@ class ShippingMethodTest extends KunakiTestCase {
 
 	public function test_non_us_ca_sends_empty_state() {
 		Functions\when( 'get_post_meta' )->justReturn( 'PXZZ111111' );
-		Functions\expect( 'get_transient' )->andReturn( false );
+		Functions\when( 'get_transient' )->justReturn( false );
+		Functions\when( 'set_transient' )->justReturn( true );
 		$this->mock_wc_countries();
 
 		$captured_xml = null;
@@ -160,7 +182,6 @@ class ShippingMethodTest extends KunakiTestCase {
 			} );
 		Functions\expect( 'wp_remote_retrieve_response_code' )->andReturn( 200 );
 		Functions\expect( 'wp_remote_retrieve_body' )->andReturn( $xml );
-		Functions\expect( 'set_transient' )->once();
 
 		$shipping = new WC_Shipping_Kunaki();
 		$shipping->calculate_shipping( $this->build_package(
@@ -172,9 +193,12 @@ class ShippingMethodTest extends KunakiTestCase {
 
 	public function test_rate_label_format() {
 		Functions\when( 'get_post_meta' )->justReturn( 'PXZZ111111' );
-		Functions\expect( 'get_transient' )->andReturn( array(
+		$shipping_cache = array(
 			array( 'description' => 'Priority Mail', 'delivery_time' => '2-3 days', 'price' => 9.99 ),
-		) );
+		);
+		Functions\when( 'get_transient' )->alias( function ( $key ) use ( $shipping_cache ) {
+			return 0 === strpos( $key, 'kunaki_ship_' ) ? $shipping_cache : false;
+		} );
 		$this->mock_wc_countries();
 
 		$shipping = new WC_Shipping_Kunaki();
@@ -188,9 +212,12 @@ class ShippingMethodTest extends KunakiTestCase {
 
 	public function test_rate_meta_has_shipping_description() {
 		Functions\when( 'get_post_meta' )->justReturn( 'PXZZ111111' );
-		Functions\expect( 'get_transient' )->andReturn( array(
+		$shipping_cache = array(
 			array( 'description' => 'Express', 'delivery_time' => '1 day', 'price' => 15.00 ),
-		) );
+		);
+		Functions\when( 'get_transient' )->alias( function ( $key ) use ( $shipping_cache ) {
+			return 0 === strpos( $key, 'kunaki_ship_' ) ? $shipping_cache : false;
+		} );
 		$this->mock_wc_countries();
 
 		$shipping = new WC_Shipping_Kunaki();
@@ -205,8 +232,8 @@ class ShippingMethodTest extends KunakiTestCase {
 
 	public function test_country_name_strips_parenthetical_code() {
 		Functions\when( 'get_post_meta' )->justReturn( 'PXZZ111111' );
-		Functions\expect( 'get_transient' )->once()->andReturn( false );
-		Functions\expect( 'set_transient' )->once();
+		Functions\when( 'get_transient' )->justReturn( false );
+		Functions\when( 'set_transient' )->justReturn( true );
 
 		$wc_countries = Mockery::mock( 'WC_Countries' );
 		$wc_countries->shouldReceive( 'get_countries' )->andReturn( array(

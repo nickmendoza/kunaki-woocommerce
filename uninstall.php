@@ -37,6 +37,9 @@ delete_site_transient( 'puc_manual_check_errors-kunaki-woocommerce' );
 // Clean up dashboard widget transient.
 delete_transient( 'kunaki_dashboard_counts' );
 
+// Clean up delivery estimator transient.
+delete_transient( 'kunaki_manufacturing_stats' );
+
 // Clean up order meta (postmeta and HPOS custom order tables).
 $kunaki_wc_order_meta_keys = array(
 	'_kunaki_order_id',
@@ -50,6 +53,8 @@ $kunaki_wc_order_meta_keys = array(
 	'_kunaki_tracking_type',
 	'_kunaki_tracking_id',
 	'_kunaki_sync_note_pending',
+	'_kunaki_submitted_at',
+	'_kunaki_shipped_at',
 );
 foreach ( $kunaki_wc_order_meta_keys as $kunaki_wc_meta_key ) {
 	$wpdb->query( $wpdb->prepare(

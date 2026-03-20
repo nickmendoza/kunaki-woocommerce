@@ -91,6 +91,7 @@ class OrderFulfillmentTest extends KunakiTestCase {
 		$order->shouldReceive( 'update_meta_data' )->with( '_kunaki_order_id', 'KUN999' )->once();
 		$order->shouldReceive( 'update_meta_data' )->with( '_kunaki_submitted', 'yes' )->once();
 		$order->shouldReceive( 'update_meta_data' )->with( '_kunaki_all_items', 'yes' )->once();
+		$order->shouldReceive( 'update_meta_data' )->with( '_kunaki_submitted_at', Mockery::type( 'string' ) )->once();
 		$order->shouldReceive( 'delete_meta_data' )->with( '_kunaki_fulfillment_error' )->once();
 		$order->shouldReceive( 'delete_meta_data' )->with( '_kunaki_fulfillment_failed_at' )->once();
 		$order->shouldReceive( 'delete_meta_data' )->with( '_kunaki_fulfillment_attempts' )->once();
