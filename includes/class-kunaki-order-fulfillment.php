@@ -203,6 +203,7 @@ class Kunaki_Order_Fulfillment {
 		$order->update_meta_data( self::META_KUNAKI_ORDER_ID, $result );
 		$order->update_meta_data( self::META_KUNAKI_SUBMITTED, 'yes' );
 		$order->update_meta_data( '_kunaki_all_items', $has_non_kunaki ? 'no' : 'yes' );
+		$order->update_meta_data( Kunaki_Delivery_Estimator::META_SUBMITTED_AT, gmdate( 'c' ) );
 
 		// Clear any failure meta from previous attempts.
 		$order->delete_meta_data( self::META_FULFILLMENT_ERROR );

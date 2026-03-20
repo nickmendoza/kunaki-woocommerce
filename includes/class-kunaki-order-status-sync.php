@@ -151,6 +151,8 @@ class Kunaki_Order_Status_Sync {
 
 		switch ( $kunaki_status ) {
 			case 'SHIPPED':
+				$order->update_meta_data( Kunaki_Delivery_Estimator::META_SHIPPED_AT, gmdate( 'c' ) );
+
 				if ( 'NA' !== $tracking_id && ! empty( $tracking_id ) ) {
 					$order->update_meta_data( '_kunaki_tracking_type', $tracking_type );
 					$order->update_meta_data( '_kunaki_tracking_id', $tracking_id );

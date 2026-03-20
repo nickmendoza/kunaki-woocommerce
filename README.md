@@ -30,7 +30,8 @@ This plugin addresses these concerns through atomic locking, idempotent submissi
 - **API Circuit Breaker** -- Detects sustained Kunaki API failures and temporarily halts outbound requests, preserving retry budgets and surfacing an admin notice. Automatically probes for recovery.
 - **Structured Logging** -- JSON-formatted log entries with contextual fields (order ID, error details) for machine-parseable log aggregation.
 - **WP-CLI Support** -- `wp kunaki sync` command for on-demand bulk status sync with `--dry-run` and `--limit` options.
-- **Dashboard Widget** -- At-a-glance Kunaki order summary on the WordPress dashboard: fulfilling, action needed, and retrying counts with circuit breaker status.
+- **Predictive Delivery Estimates** -- Displays estimated delivery date ranges at checkout based on historical manufacturing times and parsed transit durations.
+- **Dashboard Widget** -- At-a-glance Kunaki order summary on the WordPress dashboard: fulfilling, action needed, and retrying counts with circuit breaker status and average manufacturing time.
 - **Credential Encryption** -- Passwords encrypted at rest with AES-256-GCM.
 
 ## Requirements
@@ -77,7 +78,7 @@ This plugin addresses these concerns through atomic locking, idempotent submissi
 
 ## Architecture Overview
 
-The plugin is organized into twelve single-responsibility components, coordinated by a singleton orchestrator. No component performs direct SQL outside controlled locking primitives.
+The plugin is organized into thirteen single-responsibility components, coordinated by a singleton orchestrator. No component performs direct SQL outside controlled locking primitives.
 
 ```
 kunaki-woocommerce.php                   Bootstrap, constants, encryption filters, cron setup
@@ -91,6 +92,7 @@ includes/
   class-kunaki-product-meta.php          Product editor field, validation, admin column
   class-kunaki-settings.php              WooCommerce settings tab
   class-kunaki-circuit-breaker.php       API circuit breaker with state machine
+  class-kunaki-delivery-estimator.php    Predictive delivery date estimates from historical data
   class-kunaki-dashboard-widget.php      Dashboard widget (order summary counts)
   class-kunaki-cli-command.php           WP-CLI commands (bulk status sync)
   class-kunaki-logger.php                Structured JSON log wrapper with debug gating
@@ -189,7 +191,7 @@ The test suite runs entirely outside WordPress. No WordPress installation, no da
 
 This isolation strategy means tests execute in seconds, run in CI without infrastructure, and validate plugin logic without conflating it with WordPress behavior.
 
-238 unit tests cover:
+261 unit tests cover:
 
 | Area | What's Validated |
 |------|-----------------|
@@ -202,7 +204,8 @@ This isolation strategy means tests execute in seconds, run in CI without infras
 | Retry Queue | AJAX handler permission and input validation, `prepare_for_retry` guard clauses, admin page hook registration |
 | Circuit Breaker | State transitions (closed/open/half_open), threshold and cooldown configuration, error classification (infrastructure vs. business logic), probe recovery, admin state reporting |
 | CLI Command | Dry-run listing, limit enforcement, sync dispatch, empty-queue handling |
-| Dashboard Widget | Hook registration, capability gating, zero/mixed-state count rendering, circuit breaker warning display, URL generation |
+| Delivery Estimator | Transit day parsing, business-to-calendar conversion, percentile statistics, transient caching, date range formatting, end-to-end estimate generation |
+| Dashboard Widget | Hook registration, capability gating, zero/mixed-state count rendering, circuit breaker warning display, manufacturing time stats, URL generation |
 | Settings | Settings field definitions, sanitization callbacks, defaults and range enforcement |
 | Shipping Packages | Mixed cart splitting, per-package rate filtering, destination preservation, package naming, contents_cost recalculation, multi-package splitting |
 | Bootstrap | Hook registration, component loading, cron scheduling, HPOS declaration |

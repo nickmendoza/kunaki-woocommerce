@@ -50,9 +50,9 @@ class DashboardWidgetTest extends KunakiTestCase {
 
 	public function test_render_shows_zero_counts_with_no_orders() {
 		Functions\expect( 'get_option' )->zeroOrMoreTimes()->andReturn( '' );
-		Functions\expect( 'get_transient' )->once()->andReturn( false );
-		Functions\expect( 'set_transient' )->once();
-		Functions\expect( 'wc_get_orders' )->times( 4 )->andReturn( array() );
+		Functions\when( 'get_transient' )->justReturn( false );
+		Functions\when( 'set_transient' )->justReturn( true );
+		Functions\expect( 'wc_get_orders' )->times( 5 )->andReturn( array() );
 		Functions\when( 'admin_url' )->returnArg();
 
 		ob_start();
@@ -67,8 +67,8 @@ class DashboardWidgetTest extends KunakiTestCase {
 
 	public function test_render_shows_correct_counts() {
 		Functions\expect( 'get_option' )->zeroOrMoreTimes()->andReturn( '' );
-		Functions\expect( 'get_transient' )->once()->andReturn( false );
-		Functions\expect( 'set_transient' )->once();
+		Functions\when( 'get_transient' )->justReturn( false );
+		Functions\when( 'set_transient' )->justReturn( true );
 		Functions\when( 'admin_url' )->returnArg();
 
 		// submitted: [1,2,3,4], shipped: [4], exhausted: [10], retrying: [30,31,32,33]
@@ -76,12 +76,13 @@ class DashboardWidgetTest extends KunakiTestCase {
 		// action_needed = unique(merge([10], [4])) = 2
 		// retrying = 4
 		Functions\expect( 'wc_get_orders' )
-			->times( 4 )
+			->times( 5 )
 			->andReturn(
 				array( 1, 2, 3, 4 ),    // submitted
 				array( 4 ),             // shipped
 				array( 10 ),            // exhausted
-				array( 30, 31, 32, 33 ) // retrying
+				array( 30, 31, 32, 33 ), // retrying
+				array()                  // estimator (no data)
 			);
 
 		ob_start();
@@ -95,18 +96,19 @@ class DashboardWidgetTest extends KunakiTestCase {
 
 	public function test_render_deduplicates_action_needed() {
 		Functions\expect( 'get_option' )->zeroOrMoreTimes()->andReturn( '' );
-		Functions\expect( 'get_transient' )->once()->andReturn( false );
-		Functions\expect( 'set_transient' )->once();
+		Functions\when( 'get_transient' )->justReturn( false );
+		Functions\when( 'set_transient' )->justReturn( true );
 		Functions\when( 'admin_url' )->returnArg();
 
 		// Order 5 is both exhausted AND shipped — should only count once.
 		Functions\expect( 'wc_get_orders' )
-			->times( 4 )
+			->times( 5 )
 			->andReturn(
 				array(),        // submitted
 				array( 5 ),    // shipped
 				array( 5, 6 ), // exhausted (5 overlaps with shipped)
-				array()         // retrying
+				array(),        // retrying
+				array()         // estimator (no data)
 			);
 
 		ob_start();
@@ -120,12 +122,16 @@ class DashboardWidgetTest extends KunakiTestCase {
 		Functions\expect( 'get_option' )->zeroOrMoreTimes()->andReturn( '' );
 		Functions\when( 'admin_url' )->returnArg();
 
-		// Return cached counts — no wc_get_orders should be called.
-		Functions\expect( 'get_transient' )
-			->once()
-			->with( Kunaki_Dashboard_Widget::TRANSIENT_KEY )
-			->andReturn( array( 'fulfilling' => 7, 'action_needed' => 1, 'retrying' => 0 ) );
-		Functions\expect( 'wc_get_orders' )->never();
+		// Return cached dashboard counts; estimator stats return false (no data).
+		$dashboard_counts = array( 'fulfilling' => 7, 'action_needed' => 1, 'retrying' => 0 );
+		Functions\when( 'get_transient' )->alias( function ( $key ) use ( $dashboard_counts ) {
+			if ( Kunaki_Dashboard_Widget::TRANSIENT_KEY === $key ) {
+				return $dashboard_counts;
+			}
+			return false;
+		} );
+		// Estimator queries for stats when its transient is a cache miss.
+		Functions\expect( 'wc_get_orders' )->once()->andReturn( array() );
 
 		ob_start();
 		$this->widget->render_widget();
@@ -148,9 +154,9 @@ class DashboardWidgetTest extends KunakiTestCase {
 			->with( 'kunaki_wc_circuit_breaker', '' )
 			->andReturn( $cb_state );
 		Functions\expect( 'get_option' )->zeroOrMoreTimes()->andReturn( '' );
-		Functions\expect( 'get_transient' )->once()->andReturn( false );
-		Functions\expect( 'set_transient' )->once();
-		Functions\expect( 'wc_get_orders' )->times( 4 )->andReturn( array() );
+		Functions\when( 'get_transient' )->justReturn( false );
+		Functions\when( 'set_transient' )->justReturn( true );
+		Functions\expect( 'wc_get_orders' )->times( 5 )->andReturn( array() );
 		Functions\when( 'admin_url' )->returnArg();
 
 		ob_start();
@@ -173,9 +179,9 @@ class DashboardWidgetTest extends KunakiTestCase {
 			->with( 'kunaki_wc_circuit_breaker', '' )
 			->andReturn( $cb_state );
 		Functions\expect( 'get_option' )->zeroOrMoreTimes()->andReturn( '' );
-		Functions\expect( 'get_transient' )->once()->andReturn( false );
-		Functions\expect( 'set_transient' )->once();
-		Functions\expect( 'wc_get_orders' )->times( 4 )->andReturn( array() );
+		Functions\when( 'get_transient' )->justReturn( false );
+		Functions\when( 'set_transient' )->justReturn( true );
+		Functions\expect( 'wc_get_orders' )->times( 5 )->andReturn( array() );
 		Functions\when( 'admin_url' )->returnArg();
 
 		ob_start();
@@ -188,9 +194,9 @@ class DashboardWidgetTest extends KunakiTestCase {
 
 	public function test_render_links_to_orders_page() {
 		Functions\expect( 'get_option' )->zeroOrMoreTimes()->andReturn( '' );
-		Functions\expect( 'get_transient' )->once()->andReturn( false );
-		Functions\expect( 'set_transient' )->once();
-		Functions\expect( 'wc_get_orders' )->times( 4 )->andReturn( array() );
+		Functions\when( 'get_transient' )->justReturn( false );
+		Functions\when( 'set_transient' )->justReturn( true );
+		Functions\expect( 'wc_get_orders' )->times( 5 )->andReturn( array() );
 
 		$urls = array();
 		Functions\expect( 'admin_url' )->zeroOrMoreTimes()->andReturnUsing( function ( $path ) use ( &$urls ) {

@@ -65,6 +65,20 @@ class Kunaki_Dashboard_Widget {
 		echo '</li>';
 
 		echo '</ul>';
+
+		$estimator = new Kunaki_Delivery_Estimator();
+		$stats     = $estimator->get_manufacturing_stats();
+
+		if ( null !== $stats ) {
+			echo '<p class="kunaki-manufacturing-time description">';
+			echo esc_html( sprintf(
+				/* translators: 1: average manufacturing days, 2: number of orders in sample */
+				__( 'Avg. manufacturing time: %1$s days (based on %2$d orders)', 'kunaki-woocommerce' ),
+				number_format_i18n( $stats['mean_days'], 1 ),
+				$stats['sample_size']
+			) );
+			echo '</p>';
+		}
 	}
 
 	/**

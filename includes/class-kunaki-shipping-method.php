@@ -101,12 +101,21 @@ class WC_Shipping_Kunaki extends WC_Shipping_Method {
 			set_transient( $cache_key, $options, 30 * MINUTE_IN_SECONDS );
 		}
 
+		$estimator = new Kunaki_Delivery_Estimator();
+
 		foreach ( $options as $option ) {
 			$rate_id = $this->get_rate_id() . ':' . sanitize_title( $option['description'] );
+			$label   = $option['description'] . ' (' . $option['delivery_time'] . ')';
+
+			$estimate = $estimator->estimate_delivery( $option['delivery_time'] );
+			if ( null !== $estimate && '' !== $estimate['label'] ) {
+				/* translators: %s: estimated delivery date range, e.g. "Mar 25–Mar 28" */
+				$label .= ' · ' . sprintf( __( 'Est. delivery %s', 'kunaki-woocommerce' ), $estimate['label'] );
+			}
 
 			$this->add_rate( array(
 				'id'        => $rate_id,
-				'label'     => $option['description'] . ' (' . $option['delivery_time'] . ')',
+				'label'     => $label,
 				'cost'      => $option['price'],
 				'meta_data' => array(
 					'kunaki_shipping_description' => $option['description'],
