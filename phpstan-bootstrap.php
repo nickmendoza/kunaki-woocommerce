@@ -65,6 +65,7 @@ function wp_check_invalid_utf8( string $text ): string { return $text; }
 function wp_kses_post( string $text ): string { return $text; }
 function wp_unslash( $value ) { return $value; }
 function wp_schedule_event( int $timestamp, string $recurrence, string $hook ): bool { return true; }
+function wp_schedule_single_event( int $timestamp, string $hook, array $args = [] ): bool { return true; }
 function wp_next_scheduled( string $hook ): bool { return false; }
 function wp_clear_scheduled_hook( string $hook ): void {}
 function wp_get_schedule( string $hook ): string { return ''; }

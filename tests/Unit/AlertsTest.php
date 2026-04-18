@@ -12,8 +12,8 @@ class AlertsTest extends KunakiTestCase {
 	/** @var array Option store: key => value. */
 	private $options = array();
 
-	/** @var array Transient store: key => value (values reset between tests). */
-	private $transients = array();
+	/** @var array Mocked wp_options rows used for the atomic debounce claim. */
+	private $claim_rows = array();
 
 	/** @var array Captured wp_mail calls. */
 	private $mail_calls = array();
@@ -30,21 +30,34 @@ class AlertsTest extends KunakiTestCase {
 	/** @var mixed Return value for wp_remote_post. */
 	private $remote_return = null;
 
-	/** @var int|WP_Error Response code for wp_remote_retrieve_response_code. */
+	/** @var int Response code for wp_remote_retrieve_response_code. */
 	private $remote_status = 200;
+
+	/** @var array Captured wp_schedule_single_event calls. */
+	private $scheduled_events = array();
+
+	/** @var bool If true, wp_schedule_single_event immediately invokes execute_send. */
+	private $schedule_runs_inline = true;
 
 	protected function set_up() {
 		parent::set_up();
-		$this->options       = array();
-		$this->transients    = array();
-		$this->mail_calls    = array();
-		$this->mail_count    = 0;
-		$this->mail_return   = true;
-		$this->remote_calls  = array();
-		$this->remote_return = array( 'response' => array( 'code' => 200 ) );
-		$this->remote_status = 200;
+		$this->options              = array();
+		$this->claim_rows           = array();
+		$this->mail_calls           = array();
+		$this->mail_count           = 0;
+		$this->mail_return          = true;
+		$this->remote_calls         = array();
+		$this->remote_return        = array( 'response' => array( 'code' => 200 ) );
+		$this->remote_status        = 200;
+		$this->scheduled_events     = array();
+		$this->schedule_runs_inline = true;
 
 		$this->wire_mocks();
+	}
+
+	protected function tear_down() {
+		unset( $GLOBALS['wpdb'] );
+		parent::tear_down();
 	}
 
 	// ── Master toggle ─────────────────────────────────────────────────
@@ -58,10 +71,11 @@ class AlertsTest extends KunakiTestCase {
 		$alerts->handle_retry_exhausted( 42, 3, 'boom' );
 
 		$this->assertSame( 0, $this->mail_count );
-		$this->assertSame( 0, count( $this->remote_calls ) );
+		$this->assertCount( 0, $this->remote_calls );
+		$this->assertCount( 0, $this->scheduled_events );
 	}
 
-	public function test_all_channels_disabled_sends_nothing() {
+	public function test_all_channels_disabled_does_not_send() {
 		$this->enable_alerts();
 		$this->options[ Kunaki_Alerts::OPT_EMAIL_ENABLED ] = 'no';
 		$this->options[ Kunaki_Alerts::OPT_SLACK_ENABLED ] = 'no';
@@ -69,8 +83,10 @@ class AlertsTest extends KunakiTestCase {
 		$alerts = new Kunaki_Alerts();
 		$alerts->handle_circuit_opened( array( 'failure_count' => 5 ) );
 
+		// dispatch() still schedules the cron (claim succeeded), but execute_send
+		// no-ops because every channel is disabled.
 		$this->assertSame( 0, $this->mail_count );
-		$this->assertSame( 0, count( $this->remote_calls ) );
+		$this->assertCount( 0, $this->remote_calls );
 	}
 
 	// ── Email channel ─────────────────────────────────────────────────
@@ -85,7 +101,7 @@ class AlertsTest extends KunakiTestCase {
 		$this->assertSame( 'alerts@example.com', $this->mail_calls[0]['to'] );
 		$this->assertStringContainsString( 'Kunaki API outage detected', $this->mail_calls[0]['subject'] );
 		$this->assertStringContainsString( '5 consecutive', $this->mail_calls[0]['body'] );
-		$this->assertSame( 0, count( $this->remote_calls ) );
+		$this->assertCount( 0, $this->remote_calls );
 	}
 
 	public function test_empty_email_falls_back_to_admin_email() {
@@ -120,7 +136,7 @@ class AlertsTest extends KunakiTestCase {
 		$alerts->handle_circuit_opened( array( 'failure_count' => 5 ) );
 
 		$this->assertSame( 1, $this->mail_count );
-		$this->assertSame( 1, count( $this->remote_calls ) );
+		$this->assertCount( 1, $this->remote_calls );
 	}
 
 	// ── Slack channel ─────────────────────────────────────────────────
@@ -134,8 +150,9 @@ class AlertsTest extends KunakiTestCase {
 		$alerts->handle_circuit_opened( array( 'failure_count' => 5 ) );
 
 		$this->assertSame( 0, $this->mail_count );
-		$this->assertSame( 1, count( $this->remote_calls ) );
+		$this->assertCount( 1, $this->remote_calls );
 		$this->assertSame( 'https://hooks.slack.com/services/T/B/XYZ', $this->remote_calls[0]['url'] );
+		$this->assertSame( 0, $this->remote_calls[0]['args']['redirection'] );
 
 		$payload = json_decode( $this->remote_calls[0]['args']['body'], true );
 		$this->assertSame( 'danger', $payload['attachments'][0]['color'] );
@@ -164,7 +181,7 @@ class AlertsTest extends KunakiTestCase {
 		$alerts = new Kunaki_Alerts();
 		$alerts->handle_circuit_opened( array( 'failure_count' => 5 ) );
 
-		$this->assertSame( 0, count( $this->remote_calls ) );
+		$this->assertCount( 0, $this->remote_calls );
 	}
 
 	public function test_slack_non_2xx_response_is_logged() {
@@ -176,8 +193,7 @@ class AlertsTest extends KunakiTestCase {
 		$alerts = new Kunaki_Alerts();
 		$alerts->handle_circuit_opened( array( 'failure_count' => 5 ) );
 
-		// The request was attempted; no exception.
-		$this->assertSame( 1, count( $this->remote_calls ) );
+		$this->assertCount( 1, $this->remote_calls );
 	}
 
 	public function test_slack_transport_error_is_logged() {
@@ -189,7 +205,7 @@ class AlertsTest extends KunakiTestCase {
 		$alerts = new Kunaki_Alerts();
 		$alerts->handle_circuit_opened( array( 'failure_count' => 5 ) );
 
-		$this->assertSame( 1, count( $this->remote_calls ) );
+		$this->assertCount( 1, $this->remote_calls );
 	}
 
 	// ── Retry exhausted ───────────────────────────────────────────────
@@ -216,7 +232,48 @@ class AlertsTest extends KunakiTestCase {
 		$this->assertStringContainsString( '(not recorded)', $this->mail_calls[0]['body'] );
 	}
 
-	// ── Debounce ──────────────────────────────────────────────────────
+	public function test_retry_exhausted_truncates_long_error_text() {
+		$this->enable_alerts( 'alerts@example.com' );
+		$long_error = str_repeat( 'x', 5000 );
+
+		$alerts = new Kunaki_Alerts();
+		$alerts->handle_retry_exhausted( 300, 3, $long_error );
+
+		$this->assertSame( 1, $this->mail_count );
+		$this->assertLessThan( 2000, strlen( $this->mail_calls[0]['body'] ) );
+		$this->assertStringContainsString( '…', $this->mail_calls[0]['body'] );
+	}
+
+	public function test_retry_exhausted_strips_control_characters() {
+		$this->enable_alerts( 'alerts@example.com' );
+		$nasty = "line1\x00null\x1Fescape";
+
+		$alerts = new Kunaki_Alerts();
+		$alerts->handle_retry_exhausted( 400, 3, $nasty );
+
+		$this->assertSame( 1, $this->mail_count );
+		$this->assertStringNotContainsString( "\x00", $this->mail_calls[0]['body'] );
+		$this->assertStringNotContainsString( "\x1F", $this->mail_calls[0]['body'] );
+		$this->assertStringContainsString( 'line1nullescape', $this->mail_calls[0]['body'] );
+	}
+
+	// ── Slack webhook defense-in-depth ────────────────────────────────
+
+	public function test_slack_send_blocks_non_slack_webhook_at_send_time() {
+		$this->enable_alerts();
+		$this->options[ Kunaki_Alerts::OPT_EMAIL_ENABLED ] = 'no';
+		// Simulate a stored value that somehow bypassed the settings filter
+		// (direct SQL, import from another site, WP-CLI without the filter loaded).
+		$this->options[ Kunaki_Alerts::OPT_SLACK_ENABLED ] = 'yes';
+		$this->options[ Kunaki_Alerts::OPT_SLACK_WEBHOOK ] = 'https://evil.example.com/exfiltrate';
+
+		$alerts = new Kunaki_Alerts();
+		$alerts->handle_circuit_opened( array( 'failure_count' => 5 ) );
+
+		$this->assertCount( 0, $this->remote_calls, 'wp_remote_post must not be called for non-slack hosts' );
+	}
+
+	// ── Atomic debounce ───────────────────────────────────────────────
 
 	public function test_circuit_opened_debounces_within_window() {
 		$this->enable_alerts( 'alerts@example.com' );
@@ -226,6 +283,7 @@ class AlertsTest extends KunakiTestCase {
 		$alerts->handle_circuit_opened( array( 'failure_count' => 5 ) );
 
 		$this->assertSame( 1, $this->mail_count );
+		$this->assertCount( 1, $this->scheduled_events, 'second concurrent fire must not re-schedule' );
 	}
 
 	public function test_retry_exhausted_debounces_per_order() {
@@ -239,15 +297,85 @@ class AlertsTest extends KunakiTestCase {
 		$this->assertSame( 2, $this->mail_count );
 	}
 
+	public function test_expired_claim_is_cleared_allowing_new_send() {
+		$this->enable_alerts( 'alerts@example.com' );
+
+		// Seed an expired claim row so INSERT IGNORE can reacquire after the cleanup step.
+		$this->claim_rows[ Kunaki_Alerts::CLAIM_PREFIX . 'circuit_opened' ] = (string) ( time() - 3600 );
+
+		$alerts = new Kunaki_Alerts();
+		$alerts->handle_circuit_opened( array( 'failure_count' => 5 ) );
+
+		$this->assertSame( 1, $this->mail_count );
+	}
+
+	// ── Async dispatch ────────────────────────────────────────────────
+
+	public function test_handler_defers_to_cron_instead_of_sending_inline() {
+		$this->enable_alerts( 'alerts@example.com' );
+		$this->schedule_runs_inline = false; // Capture scheduled event without firing send.
+
+		$alerts = new Kunaki_Alerts();
+		$alerts->handle_circuit_opened( array( 'failure_count' => 5 ) );
+
+		// The handler must return without doing any I/O — Slack and email happen on the cron.
+		$this->assertSame( 0, $this->mail_count );
+		$this->assertCount( 0, $this->remote_calls );
+
+		// It scheduled the send for later.
+		$this->assertCount( 1, $this->scheduled_events );
+		$this->assertSame( Kunaki_Alerts::CRON_SEND_ALERT, $this->scheduled_events[0]['hook'] );
+		$this->assertSame( 'circuit_opened', $this->scheduled_events[0]['args'][0] );
+		$this->assertArrayHasKey( 'subject', $this->scheduled_events[0]['args'][1] );
+	}
+
+	public function test_execute_send_drops_invalid_payload() {
+		$this->enable_alerts( 'alerts@example.com' );
+
+		$alerts = new Kunaki_Alerts();
+		$alerts->execute_send( 'circuit_opened', 'not-an-array' );
+
+		$this->assertSame( 0, $this->mail_count );
+	}
+
+	public function test_execute_send_sends_with_valid_payload() {
+		$this->enable_alerts( 'alerts@example.com' );
+
+		$payload = array(
+			'subject'      => '[Test] Subject',
+			'body_text'    => 'body',
+			'slack_title'  => 'title',
+			'slack_fields' => array(),
+			'severity'     => Kunaki_Alerts::SEVERITY_DANGER,
+		);
+
+		$alerts = new Kunaki_Alerts();
+		$alerts->execute_send( 'circuit_opened', $payload );
+
+		$this->assertSame( 1, $this->mail_count );
+		$this->assertSame( '[Test] Subject', $this->mail_calls[0]['subject'] );
+	}
+
 	// ── Hook registration ─────────────────────────────────────────────
 
-	public function test_init_registers_three_action_hooks() {
+	public function test_init_registers_action_hooks() {
+		$expect_callback = function ( $method ) {
+			return Mockery::on( function ( $callback ) use ( $method ) {
+				return is_array( $callback )
+					&& isset( $callback[0], $callback[1] )
+					&& $callback[0] instanceof Kunaki_Alerts
+					&& $callback[1] === $method;
+			} );
+		};
+
 		Functions\expect( 'add_action' )
-			->once()->with( 'kunaki_wc_circuit_breaker_opened', Mockery::type( 'array' ), 10, 1 );
+			->once()->with( 'kunaki_wc_circuit_breaker_opened', $expect_callback( 'handle_circuit_opened' ), 10, 1 );
 		Functions\expect( 'add_action' )
-			->once()->with( 'kunaki_wc_circuit_breaker_closed', Mockery::type( 'array' ), 10, 1 );
+			->once()->with( 'kunaki_wc_circuit_breaker_closed', $expect_callback( 'handle_circuit_closed' ), 10, 1 );
 		Functions\expect( 'add_action' )
-			->once()->with( 'kunaki_wc_order_retry_exhausted', Mockery::type( 'array' ), 10, 3 );
+			->once()->with( 'kunaki_wc_order_retry_exhausted', $expect_callback( 'handle_retry_exhausted' ), 10, 3 );
+		Functions\expect( 'add_action' )
+			->once()->with( Kunaki_Alerts::CRON_SEND_ALERT, $expect_callback( 'execute_send' ), 10, 2 );
 
 		$alerts = new Kunaki_Alerts();
 		$alerts->init();
@@ -267,14 +395,17 @@ class AlertsTest extends KunakiTestCase {
 	}
 
 	private function wire_mocks() {
-		$options  = &$this->options;
-		$trans    = &$this->transients;
-		$calls    = &$this->mail_calls;
-		$count    = &$this->mail_count;
-		$ret      = &$this->mail_return;
-		$remote   = &$this->remote_calls;
-		$r_return = &$this->remote_return;
-		$r_status = &$this->remote_status;
+		$options   = &$this->options;
+		$claim_rows = &$this->claim_rows;
+		$calls     = &$this->mail_calls;
+		$count     = &$this->mail_count;
+		$ret       = &$this->mail_return;
+		$remote    = &$this->remote_calls;
+		$r_return  = &$this->remote_return;
+		$r_status  = &$this->remote_status;
+		$sched     = &$this->scheduled_events;
+		$inline    = &$this->schedule_runs_inline;
+		$test      = $this;
 
 		Functions\when( 'get_option' )->alias( function ( $key, $default = '' ) use ( &$options ) {
 			if ( array_key_exists( $key, $options ) ) {
@@ -285,15 +416,6 @@ class AlertsTest extends KunakiTestCase {
 
 		Functions\when( 'update_option' )->alias( function ( $key, $value ) use ( &$options ) {
 			$options[ $key ] = $value;
-			return true;
-		} );
-
-		Functions\when( 'get_transient' )->alias( function ( $key ) use ( &$trans ) {
-			return array_key_exists( $key, $trans ) ? $trans[ $key ] : false;
-		} );
-
-		Functions\when( 'set_transient' )->alias( function ( $key, $value, $ttl ) use ( &$trans ) {
-			$trans[ $key ] = $value;
 			return true;
 		} );
 
@@ -324,8 +446,53 @@ class AlertsTest extends KunakiTestCase {
 			return $r_status;
 		} );
 
+		Functions\when( 'wp_schedule_single_event' )->alias( function ( $timestamp, $hook, $args = array() ) use ( &$sched, &$inline ) {
+			$sched[] = array( 'timestamp' => $timestamp, 'hook' => $hook, 'args' => $args );
+			if ( $inline && 'kunaki_wc_send_alert' === $hook ) {
+				// Invoke the cron handler synchronously so existing assertions
+				// (which inspect mail/remote state) remain meaningful.
+				$alerts = new Kunaki_Alerts();
+				$alerts->execute_send( $args[0], $args[1] );
+			}
+			return true;
+		} );
+
 		Functions\when( 'wc_get_logger' )->justReturn(
 			Mockery::mock( 'WC_Logger' )->shouldIgnoreMissing()
 		);
+
+		// Mock wpdb for the atomic debounce claim INSERT IGNORE.
+		$wpdb          = Mockery::mock( 'wpdb' );
+		$wpdb->options = 'wp_options';
+		$wpdb->shouldReceive( 'prepare' )->andReturnUsing( function ( $query, ...$args ) {
+			return array( 'query' => $query, 'args' => $args );
+		} );
+		$wpdb->shouldReceive( 'query' )->andReturnUsing( function ( $prepared ) use ( &$claim_rows ) {
+			$query = is_array( $prepared ) ? $prepared['query'] : $prepared;
+			$args  = is_array( $prepared ) ? $prepared['args'] : array();
+
+			if ( false !== strpos( $query, 'DELETE FROM' ) && false !== strpos( $query, 'option_value <' ) ) {
+				$key     = $args[0];
+				$cutoff  = $args[1];
+				if ( isset( $claim_rows[ $key ] ) && $claim_rows[ $key ] < $cutoff ) {
+					unset( $claim_rows[ $key ] );
+					return 1;
+				}
+				return 0;
+			}
+
+			if ( false !== strpos( $query, 'INSERT IGNORE' ) ) {
+				$key    = $args[0];
+				$expiry = $args[1];
+				if ( isset( $claim_rows[ $key ] ) ) {
+					return 0; // Row exists — INSERT IGNORE does nothing.
+				}
+				$claim_rows[ $key ] = $expiry;
+				return 1;
+			}
+
+			return 0;
+		} );
+		$GLOBALS['wpdb'] = $wpdb;
 	}
 }

@@ -183,7 +183,9 @@ The bundled alerts component subscribes to these hooks and dispatches notificati
 - **Email** via `wp_mail()` to a configured address (falls back to the site admin email).
 - **Slack** via an incoming webhook — only `hooks.slack.com` URLs are accepted (host-allowlisted to prevent SSRF). Payload uses `color: danger` for outages and exhausted retries, `color: good` for recovery.
 
-Each event is debounced via a transient with a 30-minute TTL. Circuit events debounce globally (repeated flaps within the window collapse to one alert); retry-exhausted debounces per order so every failed order gets one alert.
+Each event claims an atomic debounce slot (`INSERT IGNORE` into `wp_options`) with a 30-minute TTL before scheduling the send, so concurrent PHP-FPM workers that both observe the same state transition can't double-alert. Circuit events debounce globally (repeated flaps within the window collapse to one alert); retry-exhausted debounces per order so every failed order gets one alert.
+
+The actual email and Slack dispatch happens in a background `wp_schedule_single_event` handler (`kunaki_wc_send_alert`). That keeps the customer-facing request path — the shipping-rate lookup or order submission that happened to be the Nth consecutive failure and therefore tripped the circuit — from paying `wp_mail` and `wp_remote_post` latency inline. The handler truncates third-party error bodies to 500 characters and strips control characters before splicing them into alert payloads.
 
 Third-party integrations (SMS, PagerDuty, custom dashboards) can subscribe to the same hooks independently.
 

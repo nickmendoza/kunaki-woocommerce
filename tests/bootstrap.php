@@ -157,6 +157,12 @@ if ( ! function_exists( 'wp_json_encode' ) ) {
 	}
 }
 
+if ( ! function_exists( 'wp_parse_url' ) ) {
+	function wp_parse_url( $url, $component = -1 ) {
+		return parse_url( $url, $component );
+	}
+}
+
 if ( ! function_exists( 'wp_check_invalid_utf8' ) ) {
 	function wp_check_invalid_utf8( $text ) {
 		return $text;

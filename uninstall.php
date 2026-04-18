@@ -19,14 +19,16 @@ delete_option( 'kunaki_wc_alert_slack_webhook' );
 
 wp_clear_scheduled_hook( 'kunaki_wc_sync_order_status' );
 wp_clear_scheduled_hook( 'kunaki_wc_retry_failed_orders' );
+wp_clear_scheduled_hook( 'kunaki_wc_send_alert' );
 
-// Clean up dynamic per-order options (locks, durable markers).
+// Clean up dynamic per-order options (locks, durable markers, alert debounce claims).
 global $wpdb;
 $kunaki_wc_patterns = array(
 	'_kunaki_lock_',
 	'_kunaki_sync_lock_',
 	'_kunaki_submitted_',
 	'_kunaki_failed_',
+	'kunaki_wc_alert_claim_',
 );
 foreach ( $kunaki_wc_patterns as $kunaki_wc_prefix ) {
 	$wpdb->query( $wpdb->prepare(
@@ -41,16 +43,6 @@ delete_site_transient( 'puc_manual_check_errors-kunaki-woocommerce' );
 
 // Clean up dashboard widget transient.
 delete_transient( 'kunaki_dashboard_counts' );
-
-// Clean up alert debounce transients.
-$wpdb->query( $wpdb->prepare(
-	"DELETE FROM {$wpdb->options} WHERE option_name LIKE %s",
-	$wpdb->esc_like( '_transient_kunaki_wc_alert_sent_' ) . '%'
-) );
-$wpdb->query( $wpdb->prepare(
-	"DELETE FROM {$wpdb->options} WHERE option_name LIKE %s",
-	$wpdb->esc_like( '_transient_timeout_kunaki_wc_alert_sent_' ) . '%'
-) );
 
 // Clean up delivery estimator transient.
 delete_transient( 'kunaki_manufacturing_stats' );

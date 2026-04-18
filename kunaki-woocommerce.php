@@ -77,7 +77,7 @@ add_filter( 'pre_update_option_kunaki_wc_circuit_cooldown', function ( $value ) 
 } );
 
 // Validate Slack webhook URL — accept only hooks.slack.com hosts to prevent SSRF via arbitrary URLs.
-add_filter( 'pre_update_option_kunaki_wc_alert_slack_webhook', function ( $value ) {
+function kunaki_wc_validate_slack_webhook( $value ) {
 	$value = is_string( $value ) ? trim( $value ) : '';
 	if ( '' === $value ) {
 		return '';
@@ -90,7 +90,11 @@ add_filter( 'pre_update_option_kunaki_wc_alert_slack_webhook', function ( $value
 		return '';
 	}
 	return esc_url_raw( $value );
-} );
+}
+add_filter( 'pre_update_option_kunaki_wc_alert_slack_webhook', 'kunaki_wc_validate_slack_webhook' );
+// Also validate on first save (when the option row doesn't yet exist) so
+// WP-CLI, imports, or direct add_option() calls can't bypass the allowlist.
+add_filter( 'pre_add_option_kunaki_wc_alert_slack_webhook', 'kunaki_wc_validate_slack_webhook' );
 
 // Show admin notice when Kunaki is in test mode.
 add_action( 'admin_notices', function () {
