@@ -70,6 +70,16 @@ function wp_clear_scheduled_hook( string $hook ): void {}
 function wp_get_schedule( string $hook ): string { return ''; }
 function add_action( string $tag, $callback, int $priority = 10, int $accepted_args = 1 ): bool { return true; }
 function add_filter( string $tag, $callback, int $priority = 10, int $accepted_args = 1 ): bool { return true; }
+function do_action( string $tag, ...$args ): void {}
+function apply_filters( string $tag, $value, ...$args ) { return $value; }
+function wp_mail( $to, string $subject, string $message, $headers = '', array $attachments = [] ): bool { return true; }
+function get_bloginfo( string $field = '', string $filter = 'raw' ): string { return ''; }
+function is_email( $email ) { return is_string( $email ) ? $email : false; }
+function wp_http_validate_url( string $url ): bool { return true; }
+/** @return array<string, string|int>|string|null */
+function wp_parse_url( string $url, int $component = -1 ) { return parse_url( $url, $component ); }
+function esc_url_raw( string $url ): string { return $url; }
+function wc_get_container(): object { return new class { public function get( string $id ): object { return new \stdClass(); } }; }
 function register_activation_hook( string $file, $callback ): void {}
 function register_deactivation_hook( string $file, $callback ): void {}
 function plugin_dir_path( string $file ): string { return __DIR__ . '/'; }

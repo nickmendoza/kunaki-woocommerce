@@ -454,12 +454,15 @@ class Kunaki_Order_Fulfillment {
 		foreach ( $orders as $order ) {
 			$attempts = (int) $order->get_meta( self::META_FULFILLMENT_ATTEMPTS );
 			if ( $attempts >= $max_retries ) {
+				$last_error = (string) $order->get_meta( self::META_FULFILLMENT_ERROR );
 				$order->update_meta_data( self::META_FULFILLMENT_EXHAUSTED, 'yes' );
 				$order->delete_meta_data( self::META_FULFILLMENT_ERROR );
+				$saved = true;
 				try {
 					$order->save();
 				} catch ( \Throwable $_ ) {
 					// Will be caught again next cron run.
+					$saved = false;
 				}
 				try {
 					$order->add_order_note(
@@ -474,6 +477,9 @@ class Kunaki_Order_Fulfillment {
 					// Best effort — log entry below is the fallback.
 				}
 				Kunaki_Logger::info( 'Max retries exhausted. Requires manual intervention.', array( 'order_id' => $order->get_id(), 'max_retries' => $max_retries ) );
+				if ( $saved ) {
+					do_action( 'kunaki_wc_order_retry_exhausted', $order->get_id(), $attempts, $last_error );
+				}
 				continue;
 			}
 

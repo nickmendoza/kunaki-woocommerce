@@ -32,6 +32,7 @@ This plugin addresses these concerns through atomic locking, idempotent submissi
 - **WP-CLI Support** -- `wp kunaki sync` command for on-demand bulk status sync with `--dry-run` and `--limit` options.
 - **Predictive Delivery Estimates** -- Displays estimated delivery date ranges at checkout based on historical manufacturing times and parsed transit durations.
 - **Dashboard Widget** -- At-a-glance Kunaki order summary on the WordPress dashboard: fulfilling, action needed, and retrying counts with circuit breaker status and average manufacturing time.
+- **Out-of-Band Alerts** -- Optional email and/or Slack notifications for circuit breaker trips, API recovery, and orders that exhausted their retry budget. Complements in-admin notices so time-sensitive failures are caught even when the admin isn't logged into WordPress.
 - **Credential Encryption** -- Passwords encrypted at rest with AES-256-GCM.
 
 ## Requirements
@@ -75,10 +76,15 @@ This plugin addresses these concerns through atomic locking, idempotent submissi
 | Debug Logging | Log full API requests/responses (credentials redacted) to WooCommerce > Status > Logs |
 | Failure Threshold | Number of consecutive API failures before the circuit breaker trips (default: 5, range: 2--20) |
 | Cooldown Period | Minutes to wait before allowing a probe request after the circuit trips (default: 5, range: 1--60 min) |
+| Enable Alerts | Master switch for out-of-band alerts (default: off) |
+| Send Email Alerts | Deliver alerts via `wp_mail()` (default: on) |
+| Alert Email Address | Recipient for alert emails. Falls back to the site admin email when blank |
+| Send Slack Alerts | Post alerts to a Slack incoming webhook (default: off) |
+| Slack Webhook URL | Slack incoming webhook URL. Only `hooks.slack.com` hosts are accepted |
 
 ## Architecture Overview
 
-The plugin is organized into thirteen single-responsibility components, coordinated by a singleton orchestrator. No component performs direct SQL outside controlled locking primitives.
+The plugin is organized into fourteen single-responsibility components, coordinated by a singleton orchestrator. No component performs direct SQL outside controlled locking primitives.
 
 ```
 kunaki-woocommerce.php                   Bootstrap, constants, encryption filters, cron setup
@@ -94,6 +100,7 @@ includes/
   class-kunaki-circuit-breaker.php       API circuit breaker with state machine
   class-kunaki-delivery-estimator.php    Predictive delivery date estimates from historical data
   class-kunaki-dashboard-widget.php      Dashboard widget (order summary counts)
+  class-kunaki-alerts.php                Out-of-band email and Slack notifications
   class-kunaki-cli-command.php           WP-CLI commands (bulk status sync)
   class-kunaki-logger.php                Structured JSON log wrapper with debug gating
   encryption.php                         AES-256-GCM encrypt/decrypt helpers
@@ -163,6 +170,23 @@ API business logic errors (Kunaki `ErrorCode != 0`) do not count toward the thre
 
 When the circuit is open, order submission failures do not increment the retry attempt counter, preserving the retry budget for when the API recovers.
 
+### Out-of-Band Alerts
+
+The plugin exposes three public action hooks for operationally-important events, fired exactly once per state transition:
+
+- `kunaki_wc_circuit_breaker_opened` — Fires when the circuit transitions from `closed` → `open` (threshold reached) or `half_open` → `open` (probe failed). Receives the circuit state array.
+- `kunaki_wc_circuit_breaker_closed` — Fires when the circuit transitions from `half_open` → `closed` after a successful probe. Receives the circuit state array.
+- `kunaki_wc_order_retry_exhausted` — Fires once per order when `retry_failed_orders()` marks it exhausted and the order is successfully saved. Receives `( $order_id, $attempts, $last_error )`.
+
+The bundled alerts component subscribes to these hooks and dispatches notifications through two channels:
+
+- **Email** via `wp_mail()` to a configured address (falls back to the site admin email).
+- **Slack** via an incoming webhook — only `hooks.slack.com` URLs are accepted (host-allowlisted to prevent SSRF). Payload uses `color: danger` for outages and exhausted retries, `color: good` for recovery.
+
+Each event is debounced via a transient with a 30-minute TTL. Circuit events debounce globally (repeated flaps within the window collapse to one alert); retry-exhausted debounces per order so every failed order gets one alert.
+
+Third-party integrations (SMS, PagerDuty, custom dashboards) can subscribe to the same hooks independently.
+
 ### Email Duplication Prevention
 
 The status sync saves all meta and status changes via `$order->save()` before adding any customer-facing order notes. If `save()` fails, no notes are persisted and the next cron run retries from a clean state. To handle the crash window between a successful `save()` and `add_order_note()`, pending notes are stored in order meta atomically with the status change. If the process dies after save but before the note is sent, the next cron run detects the pending note, delivers it, and clears the flag.
@@ -191,7 +215,7 @@ The test suite runs entirely outside WordPress. No WordPress installation, no da
 
 This isolation strategy means tests execute in seconds, run in CI without infrastructure, and validate plugin logic without conflating it with WordPress behavior.
 
-261 unit tests cover:
+286 unit tests cover:
 
 | Area | What's Validated |
 |------|-----------------|
@@ -206,6 +230,7 @@ This isolation strategy means tests execute in seconds, run in CI without infras
 | CLI Command | Dry-run listing, limit enforcement, sync dispatch, empty-queue handling |
 | Delivery Estimator | Transit day parsing, business-to-calendar conversion, percentile statistics, transient caching, date range formatting, end-to-end estimate generation |
 | Dashboard Widget | Hook registration, capability gating, zero/mixed-state count rendering, circuit breaker warning display, manufacturing time stats, URL generation |
+| Alerts | Master toggle gating, email channel send + admin-email fallback, Slack channel with webhook + severity colors, debounce per event key (circuit events global, retry-exhausted per-order), transport error handling |
 | Settings | Settings field definitions, sanitization callbacks, defaults and range enforcement |
 | Shipping Packages | Mixed cart splitting, per-package rate filtering, destination preservation, package naming, contents_cost recalculation, multi-package splitting |
 | Bootstrap | Hook registration, component loading, cron scheduling, HPOS declaration |

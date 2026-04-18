@@ -132,6 +132,7 @@ class Kunaki_Circuit_Breaker {
 			$state['opened_at'] = time();
 			$this->save_state( $state );
 			Kunaki_Logger::info( 'Circuit breaker: half_open -> open (probe request failed).' );
+			do_action( 'kunaki_wc_circuit_breaker_opened', $state );
 			return;
 		}
 
@@ -142,6 +143,7 @@ class Kunaki_Circuit_Breaker {
 			Kunaki_Logger::info(
 				sprintf( 'Circuit breaker: closed -> open after %d consecutive failures.', $state['failure_count'] )
 			);
+			do_action( 'kunaki_wc_circuit_breaker_opened', $state );
 			return;
 		}
 
@@ -164,6 +166,7 @@ class Kunaki_Circuit_Breaker {
 
 		if ( 'half_open' === $previous ) {
 			Kunaki_Logger::info( 'Circuit breaker: half_open -> closed (probe request succeeded).' );
+			do_action( 'kunaki_wc_circuit_breaker_closed', $state );
 		}
 	}
 

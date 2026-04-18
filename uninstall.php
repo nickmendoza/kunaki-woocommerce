@@ -11,6 +11,11 @@ delete_option( 'kunaki_wc_max_retries' );
 delete_option( 'kunaki_wc_circuit_breaker' );
 delete_option( 'kunaki_wc_circuit_threshold' );
 delete_option( 'kunaki_wc_circuit_cooldown' );
+delete_option( 'kunaki_wc_alerts_enabled' );
+delete_option( 'kunaki_wc_alert_email_enabled' );
+delete_option( 'kunaki_wc_alert_email_address' );
+delete_option( 'kunaki_wc_alert_slack_enabled' );
+delete_option( 'kunaki_wc_alert_slack_webhook' );
 
 wp_clear_scheduled_hook( 'kunaki_wc_sync_order_status' );
 wp_clear_scheduled_hook( 'kunaki_wc_retry_failed_orders' );
@@ -36,6 +41,16 @@ delete_site_transient( 'puc_manual_check_errors-kunaki-woocommerce' );
 
 // Clean up dashboard widget transient.
 delete_transient( 'kunaki_dashboard_counts' );
+
+// Clean up alert debounce transients.
+$wpdb->query( $wpdb->prepare(
+	"DELETE FROM {$wpdb->options} WHERE option_name LIKE %s",
+	$wpdb->esc_like( '_transient_kunaki_wc_alert_sent_' ) . '%'
+) );
+$wpdb->query( $wpdb->prepare(
+	"DELETE FROM {$wpdb->options} WHERE option_name LIKE %s",
+	$wpdb->esc_like( '_transient_timeout_kunaki_wc_alert_sent_' ) . '%'
+) );
 
 // Clean up delivery estimator transient.
 delete_transient( 'kunaki_manufacturing_stats' );

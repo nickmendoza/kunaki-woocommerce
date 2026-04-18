@@ -125,6 +125,55 @@ class Kunaki_Settings extends WC_Settings_Page {
 				'type' => 'sectionend',
 				'id'   => 'kunaki_wc_circuit_breaker_settings',
 			),
+			array(
+				'title' => __( 'Alerts', 'kunaki-woocommerce' ),
+				'type'  => 'title',
+				'desc'  => __( 'Out-of-band notifications for Kunaki API outages and orders that exhausted their retry budget. These alerts complement the in-admin notices so time-sensitive failures aren\'t missed while the admin is away from WordPress.', 'kunaki-woocommerce' ),
+				'id'    => 'kunaki_wc_alerts_settings',
+			),
+			array(
+				'title'   => __( 'Enable Alerts', 'kunaki-woocommerce' ),
+				'desc'    => __( 'Master switch. When off, no email or Slack notifications are sent.', 'kunaki-woocommerce' ),
+				'id'      => 'kunaki_wc_alerts_enabled',
+				'type'    => 'checkbox',
+				'default' => 'no',
+			),
+			array(
+				'title'   => __( 'Send Email Alerts', 'kunaki-woocommerce' ),
+				'desc'    => __( 'Send notifications via email.', 'kunaki-woocommerce' ),
+				'id'      => 'kunaki_wc_alert_email_enabled',
+				'type'    => 'checkbox',
+				'default' => 'yes',
+			),
+			array(
+				'title'    => __( 'Alert Email Address', 'kunaki-woocommerce' ),
+				'desc'     => __( 'Recipient for alert emails. Defaults to the site admin email if left blank.', 'kunaki-woocommerce' ),
+				'id'       => 'kunaki_wc_alert_email_address',
+				'type'     => 'email',
+				'default'  => '',
+				'desc_tip' => true,
+				'css'      => 'min-width: 350px;',
+			),
+			array(
+				'title'   => __( 'Send Slack Alerts', 'kunaki-woocommerce' ),
+				'desc'    => __( 'Post notifications to a Slack incoming webhook.', 'kunaki-woocommerce' ),
+				'id'      => 'kunaki_wc_alert_slack_enabled',
+				'type'    => 'checkbox',
+				'default' => 'no',
+			),
+			array(
+				'title'    => __( 'Slack Webhook URL', 'kunaki-woocommerce' ),
+				'desc'     => __( 'Slack incoming webhook URL (must be on hooks.slack.com).', 'kunaki-woocommerce' ),
+				'id'       => 'kunaki_wc_alert_slack_webhook',
+				'type'     => 'text',
+				'default'  => '',
+				'desc_tip' => true,
+				'css'      => 'min-width: 350px;',
+			),
+			array(
+				'type' => 'sectionend',
+				'id'   => 'kunaki_wc_alerts_settings',
+			),
 		);
 	}
 }

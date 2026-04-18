@@ -22,8 +22,29 @@ class SettingsTest extends KunakiTestCase {
 	public function test_settings_returns_expected_fields() {
 		$fields = $this->settings->get_settings_for_default_section();
 
-		// (title + 6 fields + sectionend) + (title + 2 fields + sectionend) = 12
-		$this->assertCount( 12, $fields );
+		// API section: title + 6 fields + sectionend = 8
+		// Circuit Breaker section: title + 2 fields + sectionend = 4
+		// Alerts section: title + 5 fields + sectionend = 7
+		$this->assertCount( 19, $fields );
+	}
+
+	public function test_alerts_fields_present() {
+		$fields = $this->settings->get_settings_for_default_section();
+
+		$ids = array_column( $fields, 'id' );
+		$this->assertContains( 'kunaki_wc_alerts_enabled', $ids );
+		$this->assertContains( 'kunaki_wc_alert_email_enabled', $ids );
+		$this->assertContains( 'kunaki_wc_alert_email_address', $ids );
+		$this->assertContains( 'kunaki_wc_alert_slack_enabled', $ids );
+		$this->assertContains( 'kunaki_wc_alert_slack_webhook', $ids );
+	}
+
+	public function test_alerts_master_defaults_to_no() {
+		$fields = $this->settings->get_settings_for_default_section();
+		$master = $this->find_field( $fields, 'kunaki_wc_alerts_enabled' );
+
+		$this->assertSame( 'checkbox', $master['type'] );
+		$this->assertSame( 'no', $master['default'] );
 	}
 
 	public function test_settings_field_ids() {

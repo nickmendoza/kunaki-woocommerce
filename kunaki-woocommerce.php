@@ -76,6 +76,22 @@ add_filter( 'pre_update_option_kunaki_wc_circuit_cooldown', function ( $value ) 
 	return kunaki_wc_clamp_option( $value, 1, 60, 5 );
 } );
 
+// Validate Slack webhook URL — accept only hooks.slack.com hosts to prevent SSRF via arbitrary URLs.
+add_filter( 'pre_update_option_kunaki_wc_alert_slack_webhook', function ( $value ) {
+	$value = is_string( $value ) ? trim( $value ) : '';
+	if ( '' === $value ) {
+		return '';
+	}
+	if ( ! wp_http_validate_url( $value ) ) {
+		return '';
+	}
+	$host = wp_parse_url( $value, PHP_URL_HOST );
+	if ( ! is_string( $host ) || 'hooks.slack.com' !== strtolower( $host ) ) {
+		return '';
+	}
+	return esc_url_raw( $value );
+} );
+
 // Show admin notice when Kunaki is in test mode.
 add_action( 'admin_notices', function () {
 	if ( 'TEST' !== strtoupper( get_option( 'kunaki_wc_mode', 'TEST' ) ) ) {

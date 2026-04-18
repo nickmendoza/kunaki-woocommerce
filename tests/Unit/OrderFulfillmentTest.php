@@ -2,6 +2,7 @@
 
 namespace Kunaki\Tests\Unit;
 
+use Brain\Monkey\Actions;
 use Brain\Monkey\Functions;
 use Mockery;
 use Kunaki_Order_Fulfillment;
@@ -576,6 +577,7 @@ class OrderFulfillmentTest extends KunakiTestCase {
 		$order->shouldReceive( 'get_meta' )->with( '_kunaki_submitted' )->andReturn( '' );
 		$order->shouldReceive( 'get_meta' )->with( '_kunaki_fulfillment_exhausted' )->andReturn( '' );
 		$order->shouldReceive( 'get_meta' )->with( '_kunaki_fulfillment_attempts' )->andReturn( '3' );
+		$order->shouldReceive( 'get_meta' )->with( '_kunaki_fulfillment_error' )->andReturn( 'Last error' );
 
 		// Should never attempt submission (3 >= 3: exhausted).
 		$order->shouldNotReceive( 'get_items' );
@@ -594,6 +596,58 @@ class OrderFulfillmentTest extends KunakiTestCase {
 		$this->mock_wpdb_recovery();
 
 		$this->fulfillment->retry_failed_orders();
+	}
+
+	public function test_retry_exhausted_action_fires_with_order_context() {
+		$order = Mockery::mock( 'WC_Order' );
+		$order->shouldReceive( 'get_id' )->andReturn( 100 );
+		$order->shouldReceive( 'get_meta' )->with( '_kunaki_submitted' )->andReturn( '' );
+		$order->shouldReceive( 'get_meta' )->with( '_kunaki_fulfillment_exhausted' )->andReturn( '' );
+		$order->shouldReceive( 'get_meta' )->with( '_kunaki_fulfillment_attempts' )->andReturn( '3' );
+		$order->shouldReceive( 'get_meta' )->with( '_kunaki_fulfillment_error' )->andReturn( 'HTTP 500 from Kunaki' );
+		$order->shouldReceive( 'update_meta_data' )->with( '_kunaki_fulfillment_exhausted', 'yes' )->once();
+		$order->shouldReceive( 'delete_meta_data' )->with( '_kunaki_fulfillment_error' )->once();
+		$order->shouldReceive( 'save' )->once();
+		$order->shouldReceive( 'add_order_note' )->zeroOrMoreTimes();
+
+		Functions\expect( 'wc_get_orders' )->once()->andReturn( array( $order ) );
+		Functions\expect( 'get_option' )->with( 'kunaki_wc_max_retries', 3 )->andReturn( '3' );
+		Functions\expect( 'get_option' )->zeroOrMoreTimes()->andReturn( 'no' );
+
+		$captured = array();
+		Actions\expectDone( 'kunaki_wc_order_retry_exhausted' )
+			->once()
+			->whenHappen( function ( $order_id, $attempts, $last_error ) use ( &$captured ) {
+				$captured = compact( 'order_id', 'attempts', 'last_error' );
+			} );
+
+		$this->mock_wpdb_recovery();
+
+		$this->fulfillment->retry_failed_orders();
+
+		$this->assertSame( 100, $captured['order_id'] );
+		$this->assertSame( 3, $captured['attempts'] );
+		$this->assertSame( 'HTTP 500 from Kunaki', $captured['last_error'] );
+	}
+
+	public function test_retry_exhausted_action_does_not_fire_when_under_limit() {
+		$order = Mockery::mock( 'WC_Order' );
+		$order->shouldReceive( 'get_id' )->andReturn( 100 );
+		$order->shouldReceive( 'get_meta' )->with( '_kunaki_submitted' )->andReturn( '' );
+		$order->shouldReceive( 'get_meta' )->with( '_kunaki_fulfillment_exhausted' )->andReturn( '' );
+		$order->shouldReceive( 'get_meta' )->with( '_kunaki_fulfillment_attempts' )->andReturn( '1' );
+		$order->shouldReceive( 'get_meta' )->with( '_kunaki_fulfillment_failed_at' )
+			->andReturn( gmdate( 'c', time() - 5 * MINUTE_IN_SECONDS ) );
+
+		Functions\expect( 'wc_get_orders' )->once()->andReturn( array( $order ) );
+		Functions\expect( 'get_option' )->with( 'kunaki_wc_max_retries', 3 )->andReturn( '3' );
+		Functions\expect( 'get_option' )->zeroOrMoreTimes()->andReturn( 'no' );
+
+		$this->mock_wpdb_recovery();
+
+		$this->fulfillment->retry_failed_orders();
+
+		$this->assertSame( 0, Actions\did( 'kunaki_wc_order_retry_exhausted' ) );
 	}
 
 	public function test_retry_cron_exception_does_not_halt_loop() {
@@ -796,6 +850,7 @@ class OrderFulfillmentTest extends KunakiTestCase {
 		$order->shouldReceive( 'get_meta' )->with( '_kunaki_submitted' )->andReturn( '' );
 		$order->shouldReceive( 'get_meta' )->with( '_kunaki_fulfillment_exhausted' )->andReturn( '' );
 		$order->shouldReceive( 'get_meta' )->with( '_kunaki_fulfillment_attempts' )->andReturn( '5' );
+		$order->shouldReceive( 'get_meta' )->with( '_kunaki_fulfillment_error' )->andReturn( '' );
 
 		// With max_retries=5, attempts=5 >= 5 means exhausted.
 		$order->shouldNotReceive( 'get_items' );
@@ -1197,6 +1252,7 @@ class OrderFulfillmentTest extends KunakiTestCase {
 		$order1->shouldReceive( 'get_meta' )->with( '_kunaki_submitted' )->andReturn( '' );
 		$order1->shouldReceive( 'get_meta' )->with( '_kunaki_fulfillment_exhausted' )->andReturn( '' );
 		$order1->shouldReceive( 'get_meta' )->with( '_kunaki_fulfillment_attempts' )->andReturn( '3' );
+		$order1->shouldReceive( 'get_meta' )->with( '_kunaki_fulfillment_error' )->andReturn( '' );
 		$order1->shouldReceive( 'update_meta_data' )->with( '_kunaki_fulfillment_exhausted', 'yes' )->once();
 		$order1->shouldReceive( 'delete_meta_data' )->with( '_kunaki_fulfillment_error' )->once();
 		$order1->shouldReceive( 'save' )->once()->andThrow( new \RuntimeException( 'DB down' ) );
@@ -1207,6 +1263,7 @@ class OrderFulfillmentTest extends KunakiTestCase {
 		$order2->shouldReceive( 'get_meta' )->with( '_kunaki_submitted' )->andReturn( '' );
 		$order2->shouldReceive( 'get_meta' )->with( '_kunaki_fulfillment_exhausted' )->andReturn( '' );
 		$order2->shouldReceive( 'get_meta' )->with( '_kunaki_fulfillment_attempts' )->andReturn( '3' );
+		$order2->shouldReceive( 'get_meta' )->with( '_kunaki_fulfillment_error' )->andReturn( '' );
 		$order2->shouldReceive( 'update_meta_data' )->with( '_kunaki_fulfillment_exhausted', 'yes' )->once();
 		$order2->shouldReceive( 'delete_meta_data' )->with( '_kunaki_fulfillment_error' )->once();
 		$order2->shouldReceive( 'save' )->once();
@@ -1228,6 +1285,7 @@ class OrderFulfillmentTest extends KunakiTestCase {
 		$order->shouldReceive( 'get_meta' )->with( '_kunaki_submitted' )->andReturn( '' );
 		$order->shouldReceive( 'get_meta' )->with( '_kunaki_fulfillment_exhausted' )->andReturn( '' );
 		$order->shouldReceive( 'get_meta' )->with( '_kunaki_fulfillment_attempts' )->andReturn( '3' );
+		$order->shouldReceive( 'get_meta' )->with( '_kunaki_fulfillment_error' )->andReturn( '' );
 		$order->shouldReceive( 'update_meta_data' )->with( '_kunaki_fulfillment_exhausted', 'yes' )->once();
 		$order->shouldReceive( 'delete_meta_data' )->with( '_kunaki_fulfillment_error' )->once();
 		$order->shouldReceive( 'save' )->once();

@@ -2,6 +2,7 @@
 
 namespace Kunaki\Tests\Unit;
 
+use Brain\Monkey\Actions;
 use Brain\Monkey\Functions;
 use Mockery;
 use Kunaki_Circuit_Breaker;
@@ -251,6 +252,53 @@ class CircuitBreakerTest extends KunakiTestCase {
 
 		$saved = json_decode( $this->updated_options[ Kunaki_Circuit_Breaker::OPTION_KEY ], true );
 		$this->assertSame( 'open', $saved['state'] );
+	}
+
+	// ── Transition action hooks ───────────────────────────────────────
+
+	public function test_opened_action_fires_on_closed_to_open() {
+		$this->set_circuit_state( 'closed', 4 );
+
+		$cb = new Kunaki_Circuit_Breaker();
+		$cb->post_request( new WP_Error( 'http_request_failed', 'Timeout' ) );
+
+		$this->assertSame( 1, Actions\did( 'kunaki_wc_circuit_breaker_opened' ) );
+	}
+
+	public function test_opened_action_fires_on_half_open_to_open() {
+		$this->set_circuit_state( 'half_open', 5, time() - 400 );
+
+		$cb = new Kunaki_Circuit_Breaker();
+		$cb->post_request( new WP_Error( 'http_request_failed', 'Timeout' ) );
+
+		$this->assertSame( 1, Actions\did( 'kunaki_wc_circuit_breaker_opened' ) );
+	}
+
+	public function test_opened_action_does_not_fire_below_threshold() {
+		$this->set_circuit_state( 'closed', 2 );
+
+		$cb = new Kunaki_Circuit_Breaker();
+		$cb->post_request( new WP_Error( 'http_request_failed', 'Timeout' ) );
+
+		$this->assertSame( 0, Actions\did( 'kunaki_wc_circuit_breaker_opened' ) );
+	}
+
+	public function test_closed_action_fires_on_half_open_to_closed() {
+		$this->set_circuit_state( 'half_open', 5, time() - 400 );
+
+		$cb = new Kunaki_Circuit_Breaker();
+		$cb->post_request( simplexml_load_string( '<R><ErrorCode>0</ErrorCode></R>' ) );
+
+		$this->assertSame( 1, Actions\did( 'kunaki_wc_circuit_breaker_closed' ) );
+	}
+
+	public function test_closed_action_does_not_fire_on_successive_successes() {
+		$this->set_circuit_state( 'closed', 3 );
+
+		$cb = new Kunaki_Circuit_Breaker();
+		$cb->post_request( simplexml_load_string( '<R><ErrorCode>0</ErrorCode></R>' ) );
+
+		$this->assertSame( 0, Actions\did( 'kunaki_wc_circuit_breaker_closed' ) );
 	}
 
 	// ── reset() ───────────────────────────────────────────────────────

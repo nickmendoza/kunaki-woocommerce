@@ -27,6 +27,7 @@ class Kunaki_WooCommerce {
 		require_once KUNAKI_WC_PLUGIN_DIR . 'includes/class-kunaki-retry-queue.php';
 		require_once KUNAKI_WC_PLUGIN_DIR . 'includes/class-kunaki-delivery-estimator.php';
 		require_once KUNAKI_WC_PLUGIN_DIR . 'includes/class-kunaki-dashboard-widget.php';
+		require_once KUNAKI_WC_PLUGIN_DIR . 'includes/class-kunaki-alerts.php';
 	}
 
 	private function init_hooks() {
@@ -58,6 +59,10 @@ class Kunaki_WooCommerce {
 		// Dashboard widget.
 		$dashboard = new Kunaki_Dashboard_Widget();
 		$dashboard->init();
+
+		// Out-of-band alerts (email + Slack).
+		$alerts = new Kunaki_Alerts();
+		$alerts->init();
 
 		// Admin assets.
 		add_action( 'admin_enqueue_scripts', array( $this, 'enqueue_admin_assets' ) );
