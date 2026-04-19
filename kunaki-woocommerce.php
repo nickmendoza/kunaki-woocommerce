@@ -76,25 +76,11 @@ add_filter( 'pre_update_option_kunaki_wc_circuit_cooldown', function ( $value ) 
 	return kunaki_wc_clamp_option( $value, 1, 60, 5 );
 } );
 
-// Validate Slack webhook URL — accept only hooks.slack.com hosts to prevent SSRF via arbitrary URLs.
-function kunaki_wc_validate_slack_webhook( $value ) {
-	$value = is_string( $value ) ? trim( $value ) : '';
-	if ( '' === $value ) {
-		return '';
-	}
-	if ( ! wp_http_validate_url( $value ) ) {
-		return '';
-	}
-	$host = wp_parse_url( $value, PHP_URL_HOST );
-	if ( ! is_string( $host ) || 'hooks.slack.com' !== strtolower( $host ) ) {
-		return '';
-	}
-	return esc_url_raw( $value );
-}
-add_filter( 'pre_update_option_kunaki_wc_alert_slack_webhook', 'kunaki_wc_validate_slack_webhook' );
-// Also validate on first save (when the option row doesn't yet exist) so
+// Validate Slack webhook URL at save time — delegates to Kunaki_Alerts so the
+// logic is unit-testable. Both pre_update and pre_add filters are registered so
 // WP-CLI, imports, or direct add_option() calls can't bypass the allowlist.
-add_filter( 'pre_add_option_kunaki_wc_alert_slack_webhook', 'kunaki_wc_validate_slack_webhook' );
+add_filter( 'pre_update_option_kunaki_wc_alert_slack_webhook', array( 'Kunaki_Alerts', 'validate_webhook_option' ) );
+add_filter( 'pre_add_option_kunaki_wc_alert_slack_webhook', array( 'Kunaki_Alerts', 'validate_webhook_option' ) );
 
 // Show admin notice when Kunaki is in test mode.
 add_action( 'admin_notices', function () {
@@ -221,9 +207,12 @@ register_activation_hook( __FILE__, function () {
 	}
 } );
 
-// Deactivation: unschedule cron and reset circuit breaker.
+// Deactivation: unschedule cron and reset circuit breaker. Clearing the
+// single-event alert hook avoids pending cron entries firing against an
+// unloaded class during the deactivation window.
 register_deactivation_hook( __FILE__, function () {
 	wp_clear_scheduled_hook( 'kunaki_wc_sync_order_status' );
 	wp_clear_scheduled_hook( 'kunaki_wc_retry_failed_orders' );
+	wp_clear_scheduled_hook( 'kunaki_wc_send_alert' );
 	delete_option( 'kunaki_wc_circuit_breaker' );
 } );

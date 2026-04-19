@@ -61,6 +61,29 @@ class WooCommerceBootstrapTest extends KunakiTestCase {
 		Kunaki_WooCommerce::instance();
 	}
 
+	public function test_bootstrap_registers_alerts_hooks() {
+		// Silently removing `new Kunaki_Alerts(); $alerts->init();` from
+		// Kunaki_WooCommerce::init_hooks() would wipe out the entire alerts
+		// feature with zero test failures. This guards that wiring.
+		$registered_actions = array();
+		Functions\when( 'add_action' )->alias( function ( $hook, $callback, $priority = 10, $accepted_args = 1 ) use ( &$registered_actions ) {
+			$registered_actions[] = $hook;
+			return true;
+		} );
+		Functions\when( 'add_filter' )->justReturn( true );
+
+		$ref = new \ReflectionClass( Kunaki_WooCommerce::class );
+		$prop = $ref->getProperty( 'instance' );
+		$prop->setAccessible( true );
+		$prop->setValue( null, null );
+
+		Kunaki_WooCommerce::instance();
+
+		$this->assertContains( 'kunaki_wc_circuit_breaker_opened', $registered_actions );
+		$this->assertContains( 'kunaki_wc_circuit_breaker_closed', $registered_actions );
+		$this->assertContains( 'kunaki_wc_order_retry_exhausted', $registered_actions );
+	}
+
 	public function test_instance_returns_singleton() {
 		$a = $this->create_instance();
 		$b = Kunaki_WooCommerce::instance();

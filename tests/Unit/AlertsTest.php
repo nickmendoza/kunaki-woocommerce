@@ -39,6 +39,9 @@ class AlertsTest extends KunakiTestCase {
 	/** @var bool If true, wp_schedule_single_event immediately invokes execute_send. */
 	private $schedule_runs_inline = true;
 
+	/** @var mixed Return value for wp_schedule_single_event (true=scheduled, false=fail). */
+	private $schedule_return = true;
+
 	protected function set_up() {
 		parent::set_up();
 		$this->options              = array();
@@ -51,6 +54,7 @@ class AlertsTest extends KunakiTestCase {
 		$this->remote_status        = 200;
 		$this->scheduled_events     = array();
 		$this->schedule_runs_inline = true;
+		$this->schedule_return      = true;
 
 		$this->wire_mocks();
 	}
@@ -257,6 +261,57 @@ class AlertsTest extends KunakiTestCase {
 		$this->assertStringContainsString( 'line1nullescape', $this->mail_calls[0]['body'] );
 	}
 
+	// ── Slack webhook save-time validator (SSRF allowlist) ────────────
+
+	public function test_validate_webhook_option_accepts_hooks_slack_com() {
+		Functions\when( 'wp_http_validate_url' )->justReturn( true );
+		Functions\when( 'esc_url_raw' )->returnArg();
+
+		$url = 'https://hooks.slack.com/services/T/B/XYZ';
+		$this->assertSame( $url, Kunaki_Alerts::validate_webhook_option( $url ) );
+	}
+
+	public function test_validate_webhook_option_accepts_uppercase_host() {
+		Functions\when( 'wp_http_validate_url' )->justReturn( true );
+		Functions\when( 'esc_url_raw' )->returnArg();
+
+		// Host comparison is case-insensitive (strtolower).
+		$url = 'https://HOOKS.SLACK.COM/services/T/B/XYZ';
+		$this->assertSame( $url, Kunaki_Alerts::validate_webhook_option( $url ) );
+	}
+
+	public function test_validate_webhook_option_rejects_non_slack_host() {
+		Functions\when( 'wp_http_validate_url' )->justReturn( true );
+		Functions\when( 'esc_url_raw' )->returnArg();
+
+		$this->assertSame( '', Kunaki_Alerts::validate_webhook_option( 'https://evil.example.com/exfiltrate' ) );
+	}
+
+	public function test_validate_webhook_option_rejects_subdomain_tricks() {
+		Functions\when( 'wp_http_validate_url' )->justReturn( true );
+		Functions\when( 'esc_url_raw' )->returnArg();
+
+		// `hooks.slack.com.evil.com` must not pass — exact host match only.
+		$this->assertSame( '', Kunaki_Alerts::validate_webhook_option( 'https://hooks.slack.com.evil.com/webhook' ) );
+	}
+
+	public function test_validate_webhook_option_rejects_malformed_url() {
+		Functions\when( 'wp_http_validate_url' )->justReturn( false );
+		Functions\when( 'esc_url_raw' )->returnArg();
+
+		$this->assertSame( '', Kunaki_Alerts::validate_webhook_option( 'not-a-url' ) );
+	}
+
+	public function test_validate_webhook_option_accepts_empty_string() {
+		$this->assertSame( '', Kunaki_Alerts::validate_webhook_option( '' ) );
+	}
+
+	public function test_validate_webhook_option_rejects_non_string_input() {
+		$this->assertSame( '', Kunaki_Alerts::validate_webhook_option( null ) );
+		$this->assertSame( '', Kunaki_Alerts::validate_webhook_option( 42 ) );
+		$this->assertSame( '', Kunaki_Alerts::validate_webhook_option( array( 'url' => 'x' ) ) );
+	}
+
 	// ── Slack webhook defense-in-depth ────────────────────────────────
 
 	public function test_slack_send_blocks_non_slack_webhook_at_send_time() {
@@ -286,15 +341,18 @@ class AlertsTest extends KunakiTestCase {
 		$this->assertCount( 1, $this->scheduled_events, 'second concurrent fire must not re-schedule' );
 	}
 
-	public function test_retry_exhausted_debounces_per_order() {
+	public function test_retry_exhausted_skips_claim_to_survive_save_retry() {
+		// retry_exhausted intentionally bypasses the debounce claim. Caller-side
+		// EXHAUSTED=yes meta enforces at-most-once on the happy path, and skipping
+		// the claim means a legitimate retry after a save() failure still alerts.
 		$this->enable_alerts( 'alerts@example.com' );
 
 		$alerts = new Kunaki_Alerts();
 		$alerts->handle_retry_exhausted( 100, 3, 'err' );
 		$alerts->handle_retry_exhausted( 101, 3, 'err' );
-		$alerts->handle_retry_exhausted( 100, 3, 'err' ); // Duplicate for 100 is debounced.
+		$alerts->handle_retry_exhausted( 100, 3, 'err' ); // Not debounced — delivery depends on caller idempotency.
 
-		$this->assertSame( 2, $this->mail_count );
+		$this->assertSame( 3, $this->mail_count );
 	}
 
 	public function test_expired_claim_is_cleared_allowing_new_send() {
@@ -356,6 +414,83 @@ class AlertsTest extends KunakiTestCase {
 		$this->assertSame( '[Test] Subject', $this->mail_calls[0]['subject'] );
 	}
 
+	// ── Schedule failure fallback ─────────────────────────────────────
+
+	public function test_schedule_failure_releases_claim_and_sends_inline() {
+		$this->enable_alerts( 'alerts@example.com' );
+		$this->schedule_return = false; // Simulate DISABLE_WP_CRON or dedup collision.
+
+		$alerts = new Kunaki_Alerts();
+		$alerts->handle_circuit_opened( array( 'failure_count' => 5 ) );
+
+		// Schedule was attempted, failed, handler fell back to inline send.
+		$this->assertCount( 1, $this->scheduled_events );
+		$this->assertSame( 1, $this->mail_count, 'inline fallback must still deliver the email' );
+
+		// Claim was released so a subsequent fire in the same window can retry.
+		$this->assertArrayNotHasKey( Kunaki_Alerts::CLAIM_PREFIX . 'circuit_opened', $this->claim_rows );
+
+		// Second fire: schedule succeeds this time → alert delivered again, claim held.
+		$this->schedule_return = true;
+		$alerts->handle_circuit_opened( array( 'failure_count' => 6 ) );
+		$this->assertSame( 2, $this->mail_count );
+	}
+
+	// ── wp_mail admin_email fallback ──────────────────────────────────
+
+	public function test_wp_mail_failure_falls_back_to_admin_email() {
+		$this->enable_alerts( 'typo@example.com' );
+		$this->options['admin_email'] = 'admin@example.com';
+
+		// First wp_mail to configured recipient fails; fallback to admin_email succeeds.
+		$to_fail           = 'typo@example.com';
+		$to_succeed        = 'admin@example.com';
+		$calls             = &$this->mail_calls;
+		$count             = &$this->mail_count;
+		Functions\when( 'wp_mail' )->alias( function ( $to, $subject, $body ) use ( &$calls, &$count, $to_fail ) {
+			$calls[] = array( 'to' => $to, 'subject' => $subject, 'body' => $body );
+			$count++;
+			return $to !== $to_fail;
+		} );
+
+		$alerts = new Kunaki_Alerts();
+		$alerts->handle_circuit_opened( array( 'failure_count' => 5 ) );
+
+		$this->assertSame( 2, $this->mail_count, 'initial send + admin_email fallback' );
+		$this->assertSame( 'typo@example.com', $this->mail_calls[0]['to'] );
+		$this->assertSame( 'admin@example.com', $this->mail_calls[1]['to'] );
+	}
+
+	public function test_wp_mail_no_fallback_when_configured_equals_admin_email() {
+		$this->enable_alerts( 'admin@example.com' );
+		$this->options['admin_email'] = 'admin@example.com';
+		$this->mail_return            = false;
+
+		$alerts = new Kunaki_Alerts();
+		$alerts->handle_circuit_opened( array( 'failure_count' => 5 ) );
+
+		// Only one attempt — no point retrying the same address.
+		$this->assertSame( 1, $this->mail_count );
+	}
+
+	// ── Expired-claim sweep ───────────────────────────────────────────
+
+	public function test_sweep_expired_claims_deletes_expired_rows_only() {
+		$now = time();
+		// Seed one expired and one live claim row.
+		$this->claim_rows[ Kunaki_Alerts::CLAIM_PREFIX . 'circuit_opened' ]       = (string) ( $now - 3600 );
+		$this->claim_rows[ Kunaki_Alerts::CLAIM_PREFIX . 'retry_exhausted_500' ]  = (string) ( $now + 3600 );
+		// Seed an unrelated option that must not be touched.
+		$this->claim_rows['unrelated_option']                                    = (string) ( $now - 9999 );
+
+		$alerts = new Kunaki_Alerts();
+		$alerts->sweep_expired_claims();
+
+		$this->assertArrayNotHasKey( Kunaki_Alerts::CLAIM_PREFIX . 'circuit_opened', $this->claim_rows );
+		$this->assertArrayHasKey( Kunaki_Alerts::CLAIM_PREFIX . 'retry_exhausted_500', $this->claim_rows );
+		$this->assertArrayHasKey( 'unrelated_option', $this->claim_rows );
+	}
+
 	// ── Hook registration ─────────────────────────────────────────────
 
 	public function test_init_registers_action_hooks() {
@@ -376,6 +511,8 @@ class AlertsTest extends KunakiTestCase {
 			->once()->with( 'kunaki_wc_order_retry_exhausted', $expect_callback( 'handle_retry_exhausted' ), 10, 3 );
 		Functions\expect( 'add_action' )
 			->once()->with( Kunaki_Alerts::CRON_SEND_ALERT, $expect_callback( 'execute_send' ), 10, 2 );
+		Functions\expect( 'add_action' )
+			->once()->with( 'kunaki_wc_retry_failed_orders', $expect_callback( 'sweep_expired_claims' ), 5 );
 
 		$alerts = new Kunaki_Alerts();
 		$alerts->init();
@@ -405,6 +542,7 @@ class AlertsTest extends KunakiTestCase {
 		$r_status  = &$this->remote_status;
 		$sched     = &$this->scheduled_events;
 		$inline    = &$this->schedule_runs_inline;
+		$sched_ret = &$this->schedule_return;
 		$test      = $this;
 
 		Functions\when( 'get_option' )->alias( function ( $key, $default = '' ) use ( &$options ) {
@@ -446,16 +584,18 @@ class AlertsTest extends KunakiTestCase {
 			return $r_status;
 		} );
 
-		Functions\when( 'wp_schedule_single_event' )->alias( function ( $timestamp, $hook, $args = array() ) use ( &$sched, &$inline ) {
+		Functions\when( 'wp_schedule_single_event' )->alias( function ( $timestamp, $hook, $args = array() ) use ( &$sched, &$inline, &$sched_ret ) {
 			$sched[] = array( 'timestamp' => $timestamp, 'hook' => $hook, 'args' => $args );
-			if ( $inline && 'kunaki_wc_send_alert' === $hook ) {
-				// Invoke the cron handler synchronously so existing assertions
-				// (which inspect mail/remote state) remain meaningful.
+			// When scheduling returns truthy AND the inline flag is set, invoke
+			// the cron handler synchronously so existing assertions that inspect
+			// mail/remote state remain meaningful.
+			if ( $sched_ret && $inline && 'kunaki_wc_send_alert' === $hook ) {
 				$alerts = new Kunaki_Alerts();
 				$alerts->execute_send( $args[0], $args[1] );
 			}
-			return true;
+			return $sched_ret;
 		} );
+		// is_wp_error is already stubbed globally in tests/bootstrap.php.
 
 		Functions\when( 'wc_get_logger' )->justReturn(
 			Mockery::mock( 'WC_Logger' )->shouldIgnoreMissing()
@@ -467,14 +607,46 @@ class AlertsTest extends KunakiTestCase {
 		$wpdb->shouldReceive( 'prepare' )->andReturnUsing( function ( $query, ...$args ) {
 			return array( 'query' => $query, 'args' => $args );
 		} );
+		$wpdb->shouldReceive( 'esc_like' )->andReturnUsing( function ( $s ) {
+			return addcslashes( (string) $s, '_%\\' );
+		} );
 		$wpdb->shouldReceive( 'query' )->andReturnUsing( function ( $prepared ) use ( &$claim_rows ) {
 			$query = is_array( $prepared ) ? $prepared['query'] : $prepared;
 			$args  = is_array( $prepared ) ? $prepared['args'] : array();
 
-			if ( false !== strpos( $query, 'DELETE FROM' ) && false !== strpos( $query, 'option_value <' ) ) {
+			// Sweep: DELETE ... option_name LIKE %s AND option_value <= %s
+			if ( false !== strpos( $query, 'DELETE FROM' )
+				&& false !== strpos( $query, 'option_name LIKE' )
+				&& false !== strpos( $query, 'option_value' ) ) {
+				$pattern = $args[0];
+				$cutoff  = $args[1];
+				// Reverse esc_like (strip backslash escapes) and drop the trailing %.
+				$prefix  = rtrim( stripslashes( $pattern ), '%' );
+				$deleted = 0;
+				foreach ( array_keys( $claim_rows ) as $key ) {
+					if ( 0 === strpos( $key, $prefix ) && $claim_rows[ $key ] <= $cutoff ) {
+						unset( $claim_rows[ $key ] );
+						$deleted++;
+					}
+				}
+				return $deleted;
+			}
+
+			// Expired-claim cleanup: DELETE ... option_name = %s AND option_value <= %s
+			if ( false !== strpos( $query, 'DELETE FROM' ) && false !== strpos( $query, 'option_value' ) ) {
 				$key     = $args[0];
 				$cutoff  = $args[1];
-				if ( isset( $claim_rows[ $key ] ) && $claim_rows[ $key ] < $cutoff ) {
+				if ( isset( $claim_rows[ $key ] ) && $claim_rows[ $key ] <= $cutoff ) {
+					unset( $claim_rows[ $key ] );
+					return 1;
+				}
+				return 0;
+			}
+
+			// Unconditional release: DELETE ... option_name = %s
+			if ( false !== strpos( $query, 'DELETE FROM' ) ) {
+				$key = $args[0];
+				if ( isset( $claim_rows[ $key ] ) ) {
 					unset( $claim_rows[ $key ] );
 					return 1;
 				}

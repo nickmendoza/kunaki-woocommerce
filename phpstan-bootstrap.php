@@ -80,7 +80,6 @@ function wp_http_validate_url( string $url ): bool { return true; }
 /** @return array<string, string|int>|string|null */
 function wp_parse_url( string $url, int $component = -1 ) { return parse_url( $url, $component ); }
 function esc_url_raw( string $url ): string { return $url; }
-function wc_get_container(): object { return new class { public function get( string $id ): object { return new \stdClass(); } }; }
 function register_activation_hook( string $file, $callback ): void {}
 function register_deactivation_hook( string $file, $callback ): void {}
 function plugin_dir_path( string $file ): string { return __DIR__ . '/'; }

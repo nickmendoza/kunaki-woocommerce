@@ -630,6 +630,32 @@ class OrderFulfillmentTest extends KunakiTestCase {
 		$this->assertSame( 'HTTP 500 from Kunaki', $captured['last_error'] );
 	}
 
+	public function test_retry_exhausted_action_does_not_fire_when_save_throws() {
+		// Guards the $saved=false branch: if $order->save() throws during the
+		// exhaustion path, the do_action must NOT fire — the alert is
+		// inaccurate until state is actually persisted.
+		$order = Mockery::mock( 'WC_Order' );
+		$order->shouldReceive( 'get_id' )->andReturn( 100 );
+		$order->shouldReceive( 'get_meta' )->with( '_kunaki_submitted' )->andReturn( '' );
+		$order->shouldReceive( 'get_meta' )->with( '_kunaki_fulfillment_exhausted' )->andReturn( '' );
+		$order->shouldReceive( 'get_meta' )->with( '_kunaki_fulfillment_attempts' )->andReturn( '3' );
+		$order->shouldReceive( 'get_meta' )->with( '_kunaki_fulfillment_error' )->andReturn( 'db blip' );
+		$order->shouldReceive( 'update_meta_data' )->with( '_kunaki_fulfillment_exhausted', 'yes' );
+		$order->shouldReceive( 'delete_meta_data' )->with( '_kunaki_fulfillment_error' );
+		$order->shouldReceive( 'save' )->andThrow( new \RuntimeException( 'db down' ) );
+		$order->shouldReceive( 'add_order_note' )->zeroOrMoreTimes();
+
+		Functions\expect( 'wc_get_orders' )->once()->andReturn( array( $order ) );
+		Functions\expect( 'get_option' )->with( 'kunaki_wc_max_retries', 3 )->andReturn( '3' );
+		Functions\expect( 'get_option' )->zeroOrMoreTimes()->andReturn( 'no' );
+
+		$this->mock_wpdb_recovery();
+
+		$this->fulfillment->retry_failed_orders();
+
+		$this->assertSame( 0, Actions\did( 'kunaki_wc_order_retry_exhausted' ) );
+	}
+
 	public function test_retry_exhausted_action_does_not_fire_when_under_limit() {
 		$order = Mockery::mock( 'WC_Order' );
 		$order->shouldReceive( 'get_id' )->andReturn( 100 );

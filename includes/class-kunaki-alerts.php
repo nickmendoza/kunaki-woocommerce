@@ -20,6 +20,35 @@ class Kunaki_Alerts {
 	const SEVERITY_DANGER = 'danger';
 	const SEVERITY_GOOD   = 'good';
 
+	// Only allow Slack incoming webhooks on this host. Referenced by both the
+	// save-time validator (`validate_webhook_option`) and the send-time
+	// defense-in-depth check in send_slack().
+	const SLACK_WEBHOOK_HOST = 'hooks.slack.com';
+
+	/**
+	 * Sanitize a stored Slack webhook URL. Rejects anything that isn't a
+	 * valid HTTP(S) URL on hooks.slack.com. Registered as a pre_update_option
+	 * / pre_add_option filter so WP-CLI, imports, and direct add_option() all
+	 * go through the same gate.
+	 *
+	 * @param mixed $value Raw value the user (or import) is trying to save.
+	 * @return string Empty string when rejected; validated URL otherwise.
+	 */
+	public static function validate_webhook_option( $value ) {
+		$value = is_string( $value ) ? trim( $value ) : '';
+		if ( '' === $value ) {
+			return '';
+		}
+		if ( ! wp_http_validate_url( $value ) ) {
+			return '';
+		}
+		$host = wp_parse_url( $value, PHP_URL_HOST );
+		if ( ! is_string( $host ) || self::SLACK_WEBHOOK_HOST !== strtolower( $host ) ) {
+			return '';
+		}
+		return esc_url_raw( $value );
+	}
+
 	// Cap arbitrary third-party strings (Kunaki error bodies) before splicing
 	// them into email or Slack payloads.
 	const MAX_ERROR_CHARS = 500;
@@ -29,6 +58,11 @@ class Kunaki_Alerts {
 		add_action( 'kunaki_wc_circuit_breaker_closed', array( $this, 'handle_circuit_closed' ), 10, 1 );
 		add_action( 'kunaki_wc_order_retry_exhausted', array( $this, 'handle_retry_exhausted' ), 10, 3 );
 		add_action( self::CRON_SEND_ALERT, array( $this, 'execute_send' ), 10, 2 );
+
+		// Piggy-back on the retry cron to sweep expired claim rows so the
+		// wp_options table doesn't accumulate stale entries over the plugin
+		// lifetime. Runs before retry_failed_orders (priority 5 vs default 10).
+		add_action( 'kunaki_wc_retry_failed_orders', array( $this, 'sweep_expired_claims' ), 5 );
 	}
 
 	public function handle_circuit_opened( $state ) {
@@ -68,6 +102,12 @@ class Kunaki_Alerts {
 		$attempts   = (int) $attempts;
 		$last_error = $this->sanitize_error_text( (string) $last_error );
 
+		// The public action should only fire for real orders. Guard so an
+		// external caller passing 0 doesn't collapse into a shared bucket.
+		if ( $order_id <= 0 ) {
+			return;
+		}
+
 		$subject = sprintf(
 			/* translators: 1: site tag, 2: order ID */
 			__( '%1$s Order #%2$d failed Kunaki submission', 'kunaki-woocommerce' ),
@@ -75,19 +115,23 @@ class Kunaki_Alerts {
 			$order_id
 		);
 
+		$error_display = '' === $last_error
+			? __( '(not recorded)', 'kunaki-woocommerce' )
+			: $last_error;
+
 		$body = sprintf(
 			/* translators: 1: order ID, 2: attempt count, 3: last error, 4: order edit URL */
 			__( "Order #%1\$d exhausted all %2\$d automatic retries and will not be submitted to Kunaki without manual intervention.\n\nLast error: %3\$s\n\nReview and retry: %4\$s", 'kunaki-woocommerce' ),
 			$order_id,
 			$attempts,
-			'' === $last_error ? __( '(not recorded)', 'kunaki-woocommerce' ) : $last_error,
+			$error_display,
 			$this->order_edit_url( $order_id )
 		);
 
 		$slack_fields = array(
 			array( 'title' => __( 'Order ID', 'kunaki-woocommerce' ), 'value' => '#' . $order_id, 'short' => true ),
 			array( 'title' => __( 'Attempts', 'kunaki-woocommerce' ), 'value' => (string) $attempts, 'short' => true ),
-			array( 'title' => __( 'Last error', 'kunaki-woocommerce' ), 'value' => '' === $last_error ? '—' : $last_error, 'short' => false ),
+			array( 'title' => __( 'Last error', 'kunaki-woocommerce' ), 'value' => $error_display, 'short' => false ),
 		);
 
 		$this->dispatch(
@@ -105,15 +149,18 @@ class Kunaki_Alerts {
 			return;
 		}
 
-		// Atomic debounce: only one process can claim the slot. Subsequent fires
-		// within the TTL window lose the INSERT IGNORE and bail.
-		if ( ! $this->claim_debounce_slot( $event_key ) ) {
+		// Per-event debounce. One-shot events (retry_exhausted_*) skip the
+		// claim because the caller's EXHAUSTED=yes meta already enforces
+		// at-most-once. Holding a 30-min claim for a one-shot event would
+		// silently swallow the legitimate retry when $order->save() throws
+		// on one cron run and succeeds on the next.
+		$use_debounce = ! $this->is_one_shot_event( $event_key );
+
+		if ( $use_debounce && ! $this->claim_debounce_slot( $event_key ) ) {
 			Kunaki_Logger::debug( 'Alert debounced.', array( 'event' => $event_key ) );
 			return;
 		}
 
-		// Defer the actual send to background cron so customer-facing requests
-		// that trip the circuit breaker don't pay wp_mail/Slack latency inline.
 		$payload = array(
 			'subject'      => $subject,
 			'body_text'    => $body_text,
@@ -121,7 +168,24 @@ class Kunaki_Alerts {
 			'slack_fields' => $slack_fields,
 			'severity'     => $severity,
 		);
-		wp_schedule_single_event( time(), self::CRON_SEND_ALERT, array( $event_key, $payload ) );
+
+		// Defer the send to background cron so customer-facing requests that
+		// trip the breaker don't pay wp_mail/Slack latency inline. If cron is
+		// disabled or the schedule is rejected, release the claim and send
+		// synchronously — silent alert loss is worse than a small latency hit.
+		$scheduled = wp_schedule_single_event( time(), self::CRON_SEND_ALERT, array( $event_key, $payload ) );
+
+		if ( ! $scheduled || ( function_exists( 'is_wp_error' ) && is_wp_error( $scheduled ) ) ) {
+			if ( $use_debounce ) {
+				$this->release_debounce_slot( $event_key );
+			}
+			Kunaki_Logger::info( 'Alert scheduling failed — sending inline.', array( 'event' => $event_key ) );
+			$this->execute_send( $event_key, $payload );
+		}
+	}
+
+	private function is_one_shot_event( $event_key ) {
+		return 0 === strpos( (string) $event_key, 'retry_exhausted_' );
 	}
 
 	/**
@@ -140,8 +204,10 @@ class Kunaki_Alerts {
 		$expiry      = time() + self::CLAIM_TTL;
 
 		// Atomically delete an expired claim (no SELECT-then-DELETE race).
+		// Use <= so a claim whose expiry equals now() is treated as expired;
+		// strict < would drop the alert when both timestamps land in the same second.
 		$wpdb->query( $wpdb->prepare(
-			"DELETE FROM {$wpdb->options} WHERE option_name = %s AND option_value < %s",
+			"DELETE FROM {$wpdb->options} WHERE option_name = %s AND option_value <= %s",
 			$option_name,
 			(string) time()
 		) );
@@ -157,6 +223,36 @@ class Kunaki_Alerts {
 	}
 
 	/**
+	 * Release a claim acquired in dispatch() when the subsequent schedule
+	 * failed. Without this, a failed schedule would hold the claim for
+	 * CLAIM_TTL and silently swallow the next N alerts in the window.
+	 *
+	 * @param string $event_key Debounce bucket.
+	 */
+	private function release_debounce_slot( $event_key ) {
+		global $wpdb;
+		$option_name = self::CLAIM_PREFIX . $event_key;
+		$wpdb->query( $wpdb->prepare(
+			"DELETE FROM {$wpdb->options} WHERE option_name = %s",
+			$option_name
+		) );
+	}
+
+	/**
+	 * Sweep all expired claim rows. Called opportunistically from the
+	 * retry cron (priority 5) so the wp_options table doesn't grow
+	 * unbounded over the plugin lifetime. Single indexed DELETE.
+	 */
+	public function sweep_expired_claims() {
+		global $wpdb;
+		$wpdb->query( $wpdb->prepare(
+			"DELETE FROM {$wpdb->options} WHERE option_name LIKE %s AND option_value <= %s",
+			$wpdb->esc_like( self::CLAIM_PREFIX ) . '%',
+			(string) time()
+		) );
+	}
+
+	/**
 	 * Cron handler — does the actual email + Slack dispatch outside the
 	 * customer-facing request path. Fires via wp_schedule_single_event()
 	 * from dispatch().
@@ -169,6 +265,13 @@ class Kunaki_Alerts {
 	public function execute_send( $event_key, $payload ) {
 		if ( ! is_array( $payload ) ) {
 			Kunaki_Logger::error( 'Alert cron payload invalid — dropping.', array( 'event' => $event_key ) );
+			return;
+		}
+
+		// Re-check the master switch in case the admin disabled alerts
+		// between the dispatch() schedule and this cron firing.
+		if ( 'yes' !== get_option( self::OPT_ENABLED, 'no' ) ) {
+			Kunaki_Logger::debug( 'Alert cron skipped: master toggle disabled after scheduling.', array( 'event' => $event_key ) );
 			return;
 		}
 
@@ -196,13 +299,28 @@ class Kunaki_Alerts {
 
 		$result = wp_mail( $to, $subject, $body_text );
 
-		if ( ! $result ) {
-			Kunaki_Logger::error( 'Alert email failed to send.', array( 'recipient' => $to ) );
-			return false;
+		if ( $result ) {
+			Kunaki_Logger::info( 'Alert email sent.', array( 'recipient' => $to ) );
+			return true;
 		}
 
-		Kunaki_Logger::info( 'Alert email sent.', array( 'recipient' => $to ) );
-		return true;
+		Kunaki_Logger::error( 'Alert email failed to send.', array( 'recipient' => $to ) );
+
+		// A typo in the configured recipient, a deliverability rejection, or
+		// a missing SMTP provider would otherwise kill every alert silently.
+		// Retry once with admin_email when the configured address is
+		// different — one misconfiguration shouldn't disable the whole feature.
+		$admin_email = get_option( 'admin_email', '' );
+		if ( is_email( $admin_email ) && $admin_email !== $to ) {
+			Kunaki_Logger::info( 'Retrying alert email via admin_email fallback.', array( 'fallback' => $admin_email ) );
+			if ( wp_mail( $admin_email, $subject, $body_text ) ) {
+				Kunaki_Logger::info( 'Alert email sent via admin_email fallback.', array( 'recipient' => $admin_email ) );
+				return true;
+			}
+			Kunaki_Logger::error( 'Alert email fallback to admin_email also failed.', array( 'recipient' => $admin_email ) );
+		}
+
+		return false;
 	}
 
 	private function send_slack( $title, $body_text, $fields, $severity ) {
@@ -216,8 +334,8 @@ class Kunaki_Alerts {
 		// the stored option bypassed the pre_update_option filter (WP-CLI,
 		// direct SQL, a migration import, etc.).
 		$host = wp_parse_url( $webhook, PHP_URL_HOST );
-		if ( ! is_string( $host ) || 'hooks.slack.com' !== strtolower( $host ) ) {
-			Kunaki_Logger::error( 'Alert Slack blocked: stored webhook URL is not on hooks.slack.com.' );
+		if ( ! is_string( $host ) || self::SLACK_WEBHOOK_HOST !== strtolower( $host ) ) {
+			Kunaki_Logger::error( 'Alert Slack blocked: stored webhook URL is not on ' . self::SLACK_WEBHOOK_HOST . '.' );
 			return false;
 		}
 
@@ -287,7 +405,17 @@ class Kunaki_Alerts {
 	private function sanitize_error_text( $text ) {
 		// Strip control characters (newlines/tabs preserved) so an error body
 		// from Kunaki can't embed Slack formatting tricks or break email headers.
-		$text = preg_replace( '/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/u', '', $text );
+		// preg_replace with /u returns null on invalid UTF-8 input — fall back
+		// to a bytewise strip on the original text rather than silently losing it.
+		$stripped = preg_replace( '/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/u', '', $text );
+		if ( null === $stripped ) {
+			$stripped = preg_replace( '/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/', '', $text );
+		}
+		if ( null === $stripped ) {
+			$stripped = '';
+		}
+		$text = $stripped;
+
 		if ( function_exists( 'mb_substr' ) && mb_strlen( $text ) > self::MAX_ERROR_CHARS ) {
 			return mb_substr( $text, 0, self::MAX_ERROR_CHARS ) . '…';
 		}
