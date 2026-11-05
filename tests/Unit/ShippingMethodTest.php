@@ -265,13 +265,71 @@ class ShippingMethodTest extends KunakiTestCase {
 		$this->assertStringNotContainsString( '(US)', $captured_xml );
 	}
 
-	public function test_api_error_yields_no_rates() {
+	public function test_outage_yields_no_rates_and_flags_rates_unavailable() {
 		Functions\when( 'get_post_meta' )->justReturn( 'PXZZ111111' );
-		Functions\expect( 'get_transient' )->once()->andReturn( false );
+		Functions\expect( 'get_transient' )->twice()->andReturn( false );
 		$this->mock_wc_countries();
 
 		Functions\expect( 'wp_remote_post' )->once()
-			->andReturn( new \WP_Error( 'timeout', 'Connection timed out' ) );
+			->with( Mockery::any(), Mockery::on( function ( $args ) {
+				return 10 === $args['timeout'];
+			} ) )
+			->andReturn( new \WP_Error( 'http_request_failed', 'Connection timed out' ) );
+
+		$set = array();
+		Functions\when( 'set_transient' )->alias( function ( $key, $value, $ttl ) use ( &$set ) {
+			$set[ $key ] = $ttl;
+			return true;
+		} );
+		Functions\when( 'update_option' )->justReturn( true );
+
+		$shipping = new WC_Shipping_Kunaki();
+		$shipping->calculate_shipping( $this->build_package( array(
+			array( 'product_id' => 10, 'quantity' => 1 ),
+		) ) );
+
+		$this->assertEmpty( $shipping->get_rates_added() );
+		$this->assertArrayHasKey( 'kunaki_wc_rates_unavailable', $set );
+		$error_keys = array_filter( array_keys( $set ), function ( $key ) {
+			return 0 === strpos( $key, 'kunaki_ship_err_' );
+		} );
+		$this->assertCount( 1, $error_keys );
+		$this->assertSame( 120, $set[ reset( $error_keys ) ] );
+	}
+
+	public function test_bad_address_error_is_cached_but_not_flagged_as_outage() {
+		Functions\when( 'get_post_meta' )->justReturn( 'PXZZ111111' );
+		Functions\expect( 'get_transient' )->twice()->andReturn( false );
+		$this->mock_wc_countries();
+
+		$xml = '<Response><ErrorCode>500</ErrorCode><ErrorText>Invalid postal code</ErrorText></Response>';
+		Functions\expect( 'wp_remote_post' )->once()->andReturn( array( 'body' => $xml ) );
+		Functions\expect( 'wp_remote_retrieve_response_code' )->andReturn( 200 );
+		Functions\expect( 'wp_remote_retrieve_body' )->andReturn( $xml );
+
+		$set = array();
+		Functions\when( 'set_transient' )->alias( function ( $key ) use ( &$set ) {
+			$set[] = $key;
+			return true;
+		} );
+
+		$shipping = new WC_Shipping_Kunaki();
+		$shipping->calculate_shipping( $this->build_package( array(
+			array( 'product_id' => 10, 'quantity' => 1 ),
+		) ) );
+
+		$this->assertEmpty( $shipping->get_rates_added() );
+		$this->assertNotContains( 'kunaki_wc_rates_unavailable', $set );
+		$this->assertStringStartsWith( 'kunaki_ship_err_', $set[0] );
+	}
+
+	public function test_recent_failure_skips_api_call() {
+		Functions\when( 'get_post_meta' )->justReturn( 'PXZZ111111' );
+		$this->mock_wc_countries();
+		Functions\when( 'get_transient' )->alias( function ( $key ) {
+			return 0 === strpos( $key, 'kunaki_ship_err_' ) ? 1 : false;
+		} );
+		Functions\expect( 'wp_remote_post' )->never();
 
 		$shipping = new WC_Shipping_Kunaki();
 		$shipping->calculate_shipping( $this->build_package( array(

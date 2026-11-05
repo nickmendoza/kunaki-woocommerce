@@ -12,6 +12,63 @@ class ShippingPackageTest extends KunakiTestCase {
 	protected function set_up() {
 		parent::set_up();
 		$this->instance = $this->create_instance();
+		// No Kunaki outage unless a test says otherwise.
+		Functions\when( 'get_transient' )->justReturn( false );
+	}
+
+	public function test_kunaki_packages_tagged_during_outage_so_wc_recalculates() {
+		Functions\when( 'get_transient' )->alias( function ( $key ) {
+			return 'kunaki_wc_rates_unavailable' === $key ? 1700000000 : false;
+		} );
+		Functions\when( 'get_post_meta' )->alias( function ( $id, $key, $single ) {
+			return 10 === $id ? 'PX00ZJTM4R' : '';
+		} );
+
+		$result = $this->instance->split_shipping_packages( array( $this->build_package( array(
+			array( 'product_id' => 10, 'quantity' => 1 ),
+			array( 'product_id' => 20, 'quantity' => 1 ),
+		) ) ) );
+
+		$this->assertSame( 1700000000, $result[0]['kunaki_rates_unavailable'] );
+		$this->assertArrayNotHasKey( 'kunaki_rates_unavailable', $result[1] );
+	}
+
+	public function test_packages_not_tagged_without_outage() {
+		Functions\when( 'get_post_meta' )->justReturn( 'PX00ZJTM4R' );
+
+		$result = $this->instance->split_shipping_packages( array( $this->build_package( array(
+			array( 'product_id' => 10, 'quantity' => 1 ),
+		) ) ) );
+
+		$this->assertArrayNotHasKey( 'kunaki_rates_unavailable', $result[0] );
+	}
+
+	public function test_no_shipping_message_explains_outage_for_disc_carts() {
+		Functions\when( 'get_transient' )->justReturn( 1700000000 );
+		Functions\when( 'get_post_meta' )->justReturn( 'PX00ZJTM4R' );
+		$this->mock_cart( array( array( 'product_id' => 10 ) ) );
+
+		$html = $this->instance->rates_unavailable_message( 'No shipping options were found.' );
+
+		$this->assertStringContainsString( 'temporarily unavailable', $html );
+	}
+
+	public function test_no_shipping_message_unchanged_without_outage_or_discs() {
+		Functions\when( 'get_post_meta' )->justReturn( '' );
+		$this->mock_cart( array( array( 'product_id' => 20 ) ) );
+
+		$this->assertSame( 'default', $this->instance->rates_unavailable_message( 'default' ) );
+
+		Functions\when( 'get_transient' )->justReturn( 1700000000 );
+		$this->assertSame( 'default', $this->instance->rates_unavailable_message( 'default' ) );
+	}
+
+	private function mock_cart( $items ) {
+		$cart = \Mockery::mock( 'WC_Cart' );
+		$cart->shouldReceive( 'get_cart' )->andReturn( $items );
+		$wc       = \Mockery::mock( 'WooCommerce' );
+		$wc->cart = $cart;
+		Functions\when( 'WC' )->justReturn( $wc );
 	}
 
 	public function test_mixed_cart_splits_into_two_packages() {

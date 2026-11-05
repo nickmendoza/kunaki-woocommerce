@@ -15,6 +15,11 @@ delete_option( 'kunaki_wc_circuit_cooldown' );
 wp_clear_scheduled_hook( 'kunaki_wc_sync_order_status' );
 wp_clear_scheduled_hook( 'kunaki_wc_retry_failed_orders' );
 
+// Pending background submissions (Action Scheduler ships with WooCommerce).
+if ( function_exists( 'as_unschedule_all_actions' ) ) {
+	as_unschedule_all_actions( 'kunaki_wc_submit_order', array(), 'kunaki-woocommerce' );
+}
+
 // Clean up dynamic per-order options (locks, durable markers).
 global $wpdb;
 $kunaki_wc_patterns = array(
@@ -37,6 +42,9 @@ delete_site_transient( 'puc_manual_check_errors-kunaki-woocommerce' );
 // Clean up dashboard widget transient.
 delete_transient( 'kunaki_dashboard_counts' );
 
+// Clean up Kunaki outage flag used at checkout.
+delete_transient( 'kunaki_wc_rates_unavailable' );
+
 // Clean up delivery estimator transient.
 delete_transient( 'kunaki_manufacturing_stats' );
 
@@ -48,6 +56,8 @@ $kunaki_wc_order_meta_keys = array(
 	'_kunaki_fulfillment_failed_at',
 	'_kunaki_fulfillment_attempts',
 	'_kunaki_fulfillment_exhausted',
+	'_kunaki_fulfillment_last_error',
+	'_kunaki_address_hash',
 	'_kunaki_all_items',
 	'_kunaki_order_status',
 	'_kunaki_tracking_type',

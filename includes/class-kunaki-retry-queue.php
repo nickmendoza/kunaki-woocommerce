@@ -19,24 +19,60 @@ class Kunaki_Retry_Queue {
 		);
 	}
 
-	public function render_page() {
-		$failed_orders = wc_get_orders( array(
-			'status'       => 'processing',
-			'meta_query'   => array(
-				array( 'key' => Kunaki_Order_Fulfillment::META_FULFILLMENT_ERROR, 'compare' => 'EXISTS' ),
+	/**
+	 * Collect orders needing attention: retrying, retries exhausted, or declined by Kunaki.
+	 *
+	 * Uses separate EXISTS / value queries merged in PHP — HPOS NOT EXISTS
+	 * meta queries can return false positives.
+	 *
+	 * @return WC_Order[] Orders sorted newest first.
+	 */
+	public function get_failed_orders() {
+		$base = array(
+			'status'  => 'processing',
+			'limit'   => 50,
+			'orderby' => 'date',
+			'order'   => 'DESC',
+		);
+
+		$queries = array(
+			$base + array(
+				'meta_query' => array(
+					array( 'key' => Kunaki_Order_Fulfillment::META_FULFILLMENT_ERROR, 'compare' => 'EXISTS' ),
+				),
 			),
-			'limit'        => 50,
-			'orderby'      => 'date',
-			'order'        => 'DESC',
-		) );
+			$base + array(
+				'meta_query' => array(
+					array( 'key' => Kunaki_Order_Fulfillment::META_FULFILLMENT_EXHAUSTED, 'value' => 'yes' ),
+				),
+			),
+			array(
+				'status'     => array( 'processing', 'on-hold' ),
+				'meta_query' => array(
+					array( 'key' => Kunaki_Order_Fulfillment::META_KUNAKI_STATUS, 'value' => 'DECLINED' ),
+				),
+			) + $base,
+		);
 
-		// Filter in PHP — HPOS NOT EXISTS meta queries can return false positives.
-		$failed_orders = array_values( array_filter( $failed_orders, function ( $order ) {
-			return 'yes' !== $order->get_meta( Kunaki_Order_Fulfillment::META_KUNAKI_SUBMITTED )
-				&& 'yes' !== $order->get_meta( Kunaki_Order_Fulfillment::META_FULFILLMENT_EXHAUSTED );
-		} ) );
+		$orders = array();
+		foreach ( $queries as $query ) {
+			foreach ( wc_get_orders( $query ) as $order ) {
+				if ( isset( $orders[ $order->get_id() ] ) ) {
+					continue;
+				}
+				if ( null !== Kunaki_Order_Fulfillment::get_failure_state( $order ) ) {
+					$orders[ $order->get_id() ] = $order;
+				}
+			}
+		}
 
-		$count = count( $failed_orders );
+		krsort( $orders );
+		return array_values( $orders );
+	}
+
+	public function render_page() {
+		$failed_orders = $this->get_failed_orders();
+		$count         = count( $failed_orders );
 
 		echo '<div class="wrap">';
 		echo '<h1>' . esc_html__( 'Kunaki Failed Orders', 'kunaki-woocommerce' )
@@ -48,11 +84,18 @@ class Kunaki_Retry_Queue {
 			return;
 		}
 
+		$state_labels = array(
+			'retrying'  => __( 'Retrying automatically', 'kunaki-woocommerce' ),
+			'exhausted' => __( 'Retries exhausted', 'kunaki-woocommerce' ),
+			'declined'  => __( 'Declined by Kunaki', 'kunaki-woocommerce' ),
+		);
+
 		echo '<table class="wp-list-table widefat fixed striped">';
 		echo '<thead><tr>';
 		echo '<th>' . esc_html__( 'Order', 'kunaki-woocommerce' ) . '</th>';
 		echo '<th>' . esc_html__( 'Date', 'kunaki-woocommerce' ) . '</th>';
 		echo '<th>' . esc_html__( 'Customer', 'kunaki-woocommerce' ) . '</th>';
+		echo '<th>' . esc_html__( 'Status', 'kunaki-woocommerce' ) . '</th>';
 		echo '<th>' . esc_html__( 'Error', 'kunaki-woocommerce' ) . '</th>';
 		echo '<th>' . esc_html__( 'Attempts', 'kunaki-woocommerce' ) . '</th>';
 		echo '<th>' . esc_html__( 'Last Failure', 'kunaki-woocommerce' ) . '</th>';
@@ -62,24 +105,21 @@ class Kunaki_Retry_Queue {
 
 		foreach ( $failed_orders as $order ) {
 			$order_id  = $order->get_id();
-			$edit_url  = $order->get_edit_order_url();
-			$error     = $order->get_meta( Kunaki_Order_Fulfillment::META_FULFILLMENT_ERROR );
+			$state     = Kunaki_Order_Fulfillment::get_failure_state( $order );
 			$attempts  = (int) $order->get_meta( Kunaki_Order_Fulfillment::META_FULFILLMENT_ATTEMPTS );
 			$failed_at = $order->get_meta( Kunaki_Order_Fulfillment::META_FULFILLMENT_FAILED );
 
 			echo '<tr>';
-			echo '<td><a href="' . esc_url( $edit_url ) . '"><strong>#' . esc_html( (string) $order_id ) . '</strong></a></td>';
+			echo '<td><a href="' . esc_url( $order->get_edit_order_url() ) . '"><strong>#' . esc_html( (string) $order_id ) . '</strong></a></td>';
 			$date_created = $order->get_date_created();
 			echo '<td>' . esc_html( $date_created ? $date_created->date_i18n( get_option( 'date_format' ) ) : '—' ) . '</td>';
 			echo '<td>' . esc_html( $order->get_billing_first_name() . ' ' . $order->get_billing_last_name() ) . '</td>';
-			echo '<td>' . esc_html( $error ) . '</td>';
+			echo '<td>' . esc_html( $state_labels[ $state ] ?? '' ) . '</td>';
+			echo '<td>' . esc_html( Kunaki_Order_Fulfillment::get_failure_message( $order ) ) . '</td>';
 			echo '<td>' . esc_html( (string) $attempts ) . '</td>';
 			echo '<td>' . esc_html( $failed_at ) . '</td>';
 			echo '<td>';
-			echo '<button type="button" class="button kunaki-retry-button" data-order-id="' . esc_attr( (string) $order_id ) . '">'
-				. esc_html__( 'Retry', 'kunaki-woocommerce' ) . '</button>';
-			echo ' <span class="spinner"></span>';
-			echo '<span class="kunaki-retry-result"></span>';
+			Kunaki_Order_Fulfillment::render_retry_control( $order, __( 'Retry', 'kunaki-woocommerce' ) );
 			echo '</td>';
 			echo '</tr>';
 		}
