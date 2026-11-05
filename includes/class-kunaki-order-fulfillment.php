@@ -9,11 +9,86 @@ class Kunaki_Order_Fulfillment {
 	const META_FULFILLMENT_FAILED    = '_kunaki_fulfillment_failed_at';
 	const META_FULFILLMENT_ATTEMPTS  = '_kunaki_fulfillment_attempts';
 	const META_FULFILLMENT_EXHAUSTED = '_kunaki_fulfillment_exhausted';
+	const META_FULFILLMENT_LAST_ERROR = '_kunaki_fulfillment_last_error';
+	const META_KUNAKI_STATUS         = '_kunaki_order_status';
+
+	const META_ADDRESS_HASH          = '_kunaki_address_hash';
+
+	const SUBMIT_ACTION = 'kunaki_wc_submit_order';
+	const ACTION_GROUP  = 'kunaki-woocommerce';
 
 	public function init() {
-		add_action( 'woocommerce_order_status_processing', array( $this, 'handle_order_processing' ), 10, 2 );
+		add_action( 'woocommerce_order_status_processing', array( $this, 'queue_order_submission' ), 10, 1 );
+		add_action( self::SUBMIT_ACTION, array( $this, 'run_queued_submission' ), 10, 1 );
 		add_action( 'woocommerce_admin_order_data_after_shipping_address', array( $this, 'display_kunaki_order_info' ) );
 		add_action( 'kunaki_wc_retry_failed_orders', array( $this, 'retry_failed_orders' ) );
+		add_action( 'woocommerce_order_status_cancelled', array( $this, 'note_cancelled_after_submission' ), 10, 1 );
+		add_action( 'woocommerce_order_status_refunded', array( $this, 'note_cancelled_after_submission' ), 10, 1 );
+		add_action( 'woocommerce_order_partially_refunded', array( $this, 'note_partially_refunded_after_submission' ), 10, 1 );
+	}
+
+	/**
+	 * Queue a background Kunaki submission when an order moves to "processing".
+	 *
+	 * This hook fires inside checkout and payment-gateway webhooks. Calling the
+	 * Kunaki API here (30s timeout) would stall checkout and can make gateways
+	 * time out and resend the webhook, so the submission runs via Action
+	 * Scheduler instead. Falls back to submitting inline if Action Scheduler
+	 * isn't available.
+	 *
+	 * @param int $order_id WooCommerce order ID.
+	 */
+	public function queue_order_submission( $order_id ) {
+		$order_id = absint( $order_id );
+		if ( ! $order_id ) {
+			return;
+		}
+
+		if ( ! function_exists( 'as_enqueue_async_action' ) ) {
+			$this->handle_order_processing( $order_id );
+			return;
+		}
+
+		$args = array( 'order_id' => $order_id );
+
+		// One pending submission per order is enough — handle_order_processing()
+		// is idempotent, but there's no point queuing duplicates on repeated
+		// status transitions.
+		if ( function_exists( 'as_next_scheduled_action' ) && as_next_scheduled_action( self::SUBMIT_ACTION, $args, self::ACTION_GROUP ) ) {
+			return;
+		}
+
+		as_enqueue_async_action( self::SUBMIT_ACTION, $args, self::ACTION_GROUP );
+		Kunaki_Logger::debug( 'Queued Kunaki submission.', array( 'order_id' => $order_id ) );
+	}
+
+	/**
+	 * Action Scheduler callback: submit a queued order.
+	 *
+	 * An uncaught exception would leave the order with no failure meta, so the
+	 * retry cron would never find it. Record it as a failure instead so it is
+	 * retried and visible on the Failures page.
+	 *
+	 * @param int $order_id WooCommerce order ID.
+	 */
+	public function run_queued_submission( $order_id ) {
+		// The order may have been cancelled, refunded, or put on hold between
+		// queuing and now — only submit orders that are still processing.
+		$queued_order = wc_get_order( absint( $order_id ) );
+		if ( ! $queued_order || 'processing' !== $queued_order->get_status() ) {
+			Kunaki_Logger::info( 'Order no longer processing — skipping queued submission.', array( 'order_id' => $order_id ) );
+			return;
+		}
+
+		try {
+			$this->handle_order_processing( absint( $order_id ) );
+		} catch ( \Throwable $e ) {
+			Kunaki_Logger::error( 'Queued submission threw.', array( 'order_id' => $order_id, 'error' => $e->getMessage() ) );
+			$order = wc_get_order( absint( $order_id ) );
+			if ( $order && 'yes' !== $order->get_meta( self::META_KUNAKI_SUBMITTED ) ) {
+				$this->record_failure( $order, $e->getMessage() );
+			}
+		}
 	}
 
 	/**
@@ -52,6 +127,7 @@ class Kunaki_Order_Fulfillment {
 			$order->delete_meta_data( self::META_FULFILLMENT_FAILED );
 			$order->delete_meta_data( self::META_FULFILLMENT_ATTEMPTS );
 			$order->delete_meta_data( self::META_FULFILLMENT_EXHAUSTED );
+			$order->delete_meta_data( self::META_FULFILLMENT_LAST_ERROR );
 			try {
 				$order->save();
 			} catch ( \Throwable $_ ) {
@@ -147,11 +223,11 @@ class Kunaki_Order_Fulfillment {
 		}
 
 		// Build shipping address.
-		$countries    = WC()->countries->get_countries();
 		$country_code = $order->get_shipping_country();
-		$country_name = isset( $countries[ $country_code ] ) ? $countries[ $country_code ] : $country_code;
-		// Strip parenthetical codes like "(US)" that some WooCommerce installs append.
-		$country_name = preg_replace( '/\s*\([A-Z]{2}\)$/', '', $country_name );
+		$country_name = Kunaki_API_Client::get_country_name( $country_code );
+		if ( '' === $country_name ) {
+			$country_name = $country_code;
+		}
 
 		// Kunaki only accepts state/province for US and CA.
 		$state = in_array( $country_code, array( 'US', 'CA' ), true )
@@ -204,12 +280,14 @@ class Kunaki_Order_Fulfillment {
 		$order->update_meta_data( self::META_KUNAKI_SUBMITTED, 'yes' );
 		$order->update_meta_data( '_kunaki_all_items', $has_non_kunaki ? 'no' : 'yes' );
 		$order->update_meta_data( Kunaki_Delivery_Estimator::META_SUBMITTED_AT, gmdate( 'c' ) );
+		$order->update_meta_data( self::META_ADDRESS_HASH, self::get_address_hash( $order ) );
 
 		// Clear any failure meta from previous attempts.
 		$order->delete_meta_data( self::META_FULFILLMENT_ERROR );
 		$order->delete_meta_data( self::META_FULFILLMENT_FAILED );
 		$order->delete_meta_data( self::META_FULFILLMENT_ATTEMPTS );
 		$order->delete_meta_data( self::META_FULFILLMENT_EXHAUSTED );
+		$order->delete_meta_data( self::META_FULFILLMENT_LAST_ERROR );
 
 		try {
 			$order->save();
@@ -282,13 +360,19 @@ class Kunaki_Order_Fulfillment {
 		$skip_increment = $permanent || in_array( $error_code, array( 'kunaki_circuit_open', 'kunaki_credentials_invalid' ), true );
 
 		$attempts = (int) $order->get_meta( self::META_FULFILLMENT_ATTEMPTS );
-		$order->update_meta_data( self::META_FULFILLMENT_ERROR, $error_message );
 		$order->update_meta_data( self::META_FULFILLMENT_FAILED, gmdate( 'c' ) );
 		if ( ! $skip_increment ) {
 			$order->update_meta_data( self::META_FULFILLMENT_ATTEMPTS, $attempts + 1 );
 		}
 		if ( $permanent ) {
+			// Permanent failures go straight to "needs attention". The message is
+			// kept under LAST_ERROR (not ERROR) so the order stays out of the
+			// retry cron's ERROR EXISTS query and can't starve retryable orders.
 			$order->update_meta_data( self::META_FULFILLMENT_EXHAUSTED, 'yes' );
+			$order->update_meta_data( self::META_FULFILLMENT_LAST_ERROR, $error_message );
+			$order->delete_meta_data( self::META_FULFILLMENT_ERROR );
+		} else {
+			$order->update_meta_data( self::META_FULFILLMENT_ERROR, $error_message );
 		}
 		try {
 			$order->save_meta_data();
@@ -336,7 +420,26 @@ class Kunaki_Order_Fulfillment {
 			return new \WP_Error( 'invalid_status', __( 'Order must be in processing status to retry.', 'kunaki-woocommerce' ) );
 		}
 
-		if ( 'yes' === $order->get_meta( self::META_KUNAKI_SUBMITTED ) ) {
+		$declined_order_id = '';
+		if ( 'DECLINED' === $order->get_meta( self::META_KUNAKI_STATUS ) ) {
+			// Kunaki declined the previous submission. The admin has moved the
+			// order back to processing and explicitly asked to retry, so clear
+			// the old Kunaki order and submit a new one.
+			$declined_order_id = (string) $order->get_meta( self::META_KUNAKI_ORDER_ID );
+			foreach ( array(
+				self::META_KUNAKI_ORDER_ID,
+				self::META_KUNAKI_SUBMITTED,
+				self::META_KUNAKI_STATUS,
+				'_kunaki_tracking_type',
+				'_kunaki_tracking_id',
+				'_kunaki_all_items',
+				'_kunaki_sync_note_pending',
+				Kunaki_Delivery_Estimator::META_SUBMITTED_AT,
+				Kunaki_Delivery_Estimator::META_SHIPPED_AT,
+			) as $key ) {
+				$order->delete_meta_data( $key );
+			}
+		} elseif ( 'yes' === $order->get_meta( self::META_KUNAKI_SUBMITTED ) ) {
 			return new \WP_Error( 'already_submitted', __( 'Order already submitted to Kunaki.', 'kunaki-woocommerce' ) );
 		}
 
@@ -344,10 +447,26 @@ class Kunaki_Order_Fulfillment {
 		// immediately get re-exhausted by the cron if this attempt fails.
 		$order->delete_meta_data( self::META_FULFILLMENT_EXHAUSTED );
 		$order->delete_meta_data( self::META_FULFILLMENT_ATTEMPTS );
+		$order->delete_meta_data( self::META_FULFILLMENT_LAST_ERROR );
 		try {
 			$order->save();
 		} catch ( \Throwable $e ) {
 			return new \WP_Error( 'save_failed', __( 'Failed to reset retry budget.', 'kunaki-woocommerce' ) );
+		}
+
+		if ( '' !== $declined_order_id ) {
+			try {
+				$order->add_order_note(
+					sprintf(
+						/* translators: %s: previous Kunaki order ID */
+						__( 'Resubmitting to Kunaki. Previous Kunaki order %s was declined.', 'kunaki-woocommerce' ),
+						$declined_order_id
+					),
+					false
+				);
+			} catch ( \Throwable $_ ) {
+				// Best effort — the resubmission note below carries the new ID.
+			}
 		}
 
 		$this->handle_order_processing( $order_id, $order );
@@ -454,7 +573,10 @@ class Kunaki_Order_Fulfillment {
 		foreach ( $orders as $order ) {
 			$attempts = (int) $order->get_meta( self::META_FULFILLMENT_ATTEMPTS );
 			if ( $attempts >= $max_retries ) {
+				// Move the message to LAST_ERROR so the admin can still see it,
+				// while the order drops out of the ERROR EXISTS retry query.
 				$order->update_meta_data( self::META_FULFILLMENT_EXHAUSTED, 'yes' );
+				$order->update_meta_data( self::META_FULFILLMENT_LAST_ERROR, $order->get_meta( self::META_FULFILLMENT_ERROR ) );
 				$order->delete_meta_data( self::META_FULFILLMENT_ERROR );
 				try {
 					$order->save();
@@ -527,15 +649,140 @@ class Kunaki_Order_Fulfillment {
 	}
 
 	/**
+	 * Fingerprint of the shipping address, stored at submission so later edits
+	 * can be detected (Kunaki keeps the address it was sent).
+	 *
+	 * @param WC_Order $order WooCommerce order.
+	 * @return string
+	 */
+	public static function get_address_hash( $order ) {
+		return md5( (string) wp_json_encode( array(
+			$order->get_shipping_first_name(),
+			$order->get_shipping_last_name(),
+			$order->get_shipping_company(),
+			$order->get_shipping_address_1(),
+			$order->get_shipping_address_2(),
+			$order->get_shipping_city(),
+			$order->get_shipping_state(),
+			$order->get_shipping_postcode(),
+			$order->get_shipping_country(),
+		) ) );
+	}
+
+	/**
+	 * Whether Kunaki may still manufacture/ship this order, so admin changes
+	 * in WooCommerce (cancel, refund, address edit) need to be made at Kunaki too.
+	 *
+	 * @param WC_Order $order WooCommerce order.
+	 * @return bool
+	 */
+	private static function is_pending_at_kunaki( $order ) {
+		return 'yes' === $order->get_meta( self::META_KUNAKI_SUBMITTED )
+			&& ! in_array( $order->get_meta( self::META_KUNAKI_STATUS ), array( 'SHIPPED', 'DECLINED' ), true );
+	}
+
+	/**
+	 * Add an admin note when an order already sent to Kunaki is cancelled or refunded.
+	 *
+	 * Kunaki's API has no cancel call, so the admin must cancel it with Kunaki.
+	 *
+	 * @param int $order_id WooCommerce order ID.
+	 */
+	public function note_cancelled_after_submission( $order_id ) {
+		$order = wc_get_order( $order_id );
+		if ( ! $order || ! self::is_pending_at_kunaki( $order ) ) {
+			return;
+		}
+		$order->add_order_note( sprintf(
+			/* translators: %s: Kunaki order ID */
+			__( 'Warning: this order was already sent to Kunaki (Kunaki Order ID %s). Kunaki will still manufacture, ship, and bill it unless you cancel it with Kunaki directly.', 'kunaki-woocommerce' ),
+			$order->get_meta( self::META_KUNAKI_ORDER_ID )
+		), false );
+	}
+
+	/**
+	 * Add an admin note when an order already sent to Kunaki is partially refunded.
+	 *
+	 * @param int $order_id WooCommerce order ID.
+	 */
+	public function note_partially_refunded_after_submission( $order_id ) {
+		$order = wc_get_order( $order_id );
+		if ( ! $order || ! self::is_pending_at_kunaki( $order ) ) {
+			return;
+		}
+		$order->add_order_note( sprintf(
+			/* translators: %s: Kunaki order ID */
+			__( 'Note: this order was already sent to Kunaki (Kunaki Order ID %s). The refund does not change what Kunaki ships — adjust the order with Kunaki directly if needed.', 'kunaki-woocommerce' ),
+			$order->get_meta( self::META_KUNAKI_ORDER_ID )
+		), false );
+	}
+
+	/**
+	 * Classify an order's Kunaki failure state for admin display.
+	 *
+	 * @param WC_Order $order WooCommerce order.
+	 * @return string|null 'declined', 'exhausted', 'retrying', or null if not failed.
+	 */
+	public static function get_failure_state( $order ) {
+		if ( 'DECLINED' === $order->get_meta( self::META_KUNAKI_STATUS ) ) {
+			return 'declined';
+		}
+		if ( 'yes' === $order->get_meta( self::META_KUNAKI_SUBMITTED ) ) {
+			return null;
+		}
+		if ( 'yes' === $order->get_meta( self::META_FULFILLMENT_EXHAUSTED ) ) {
+			return 'exhausted';
+		}
+		if ( '' !== (string) $order->get_meta( self::META_FULFILLMENT_ERROR ) ) {
+			return 'retrying';
+		}
+		return null;
+	}
+
+	/**
+	 * Get the most relevant failure message for an order.
+	 *
+	 * @param WC_Order $order WooCommerce order.
+	 * @return string
+	 */
+	public static function get_failure_message( $order ) {
+		$error = (string) $order->get_meta( self::META_FULFILLMENT_ERROR );
+		if ( '' === $error ) {
+			$error = (string) $order->get_meta( self::META_FULFILLMENT_LAST_ERROR );
+		}
+		return $error;
+	}
+
+	/**
+	 * Render the Retry button (or guidance when the order isn't retryable yet).
+	 *
+	 * @param WC_Order $order    WooCommerce order.
+	 * @param string   $label    Button label.
+	 */
+	public static function render_retry_control( $order, $label ) {
+		if ( 'processing' !== $order->get_status() ) {
+			if ( 'on-hold' === $order->get_status() && 'DECLINED' === $order->get_meta( self::META_KUNAKI_STATUS ) ) {
+				echo '<p class="description">' . esc_html__( 'Change the order status to Processing to resubmit it to Kunaki.', 'kunaki-woocommerce' ) . '</p>';
+			}
+			return;
+		}
+		echo '<button type="button" class="button kunaki-retry-button" data-order-id="'
+			. esc_attr( (string) $order->get_id() ) . '">'
+			. esc_html( $label ) . '</button>';
+		echo ' <span class="kunaki-retry-spinner spinner"></span>';
+		echo '<span class="kunaki-retry-result"></span>';
+	}
+
+	/**
 	 * Display Kunaki order info on the admin order edit page.
 	 *
 	 * @param WC_Order $order WooCommerce order.
 	 */
 	public function display_kunaki_order_info( $order ) {
 		$kunaki_order_id = $order->get_meta( self::META_KUNAKI_ORDER_ID );
-		$error           = $order->get_meta( self::META_FULFILLMENT_ERROR );
+		$failure_state   = self::get_failure_state( $order );
 
-		if ( empty( $kunaki_order_id ) && empty( $error ) ) {
+		if ( empty( $kunaki_order_id ) && null === $failure_state ) {
 			return;
 		}
 
@@ -545,7 +792,7 @@ class Kunaki_Order_Fulfillment {
 		if ( ! empty( $kunaki_order_id ) ) {
 			echo '<p><strong>' . esc_html__( 'Kunaki Order ID:', 'kunaki-woocommerce' ) . '</strong> ' . esc_html( $kunaki_order_id ) . '</p>';
 
-			$status = $order->get_meta( '_kunaki_order_status' );
+			$status = $order->get_meta( self::META_KUNAKI_STATUS );
 			if ( ! empty( $status ) ) {
 				echo '<p><strong>' . esc_html__( 'Kunaki Status:', 'kunaki-woocommerce' ) . '</strong> ' . esc_html( $status ) . '</p>';
 				if ( 'PENDING' === $status ) {
@@ -564,27 +811,43 @@ class Kunaki_Order_Fulfillment {
 				echo esc_html( $tracking_type ) . ' &ndash; ' . esc_html( $tracking_id );
 				echo '</p>';
 			}
+
+			if ( self::is_pending_at_kunaki( $order ) ) {
+				if ( in_array( $order->get_status(), array( 'cancelled', 'refunded' ), true ) ) {
+					echo '<p class="kunaki-error">' . esc_html__( 'This order was cancelled or refunded in WooCommerce, but Kunaki will still manufacture and ship it. Cancel it with Kunaki directly.', 'kunaki-woocommerce' ) . '</p>';
+				}
+				$sent_hash = (string) $order->get_meta( self::META_ADDRESS_HASH );
+				if ( '' !== $sent_hash && self::get_address_hash( $order ) !== $sent_hash ) {
+					echo '<p class="kunaki-error">' . esc_html__( 'The shipping address was changed after this order was sent to Kunaki. Kunaki will ship to the original address unless you update it with Kunaki directly.', 'kunaki-woocommerce' ) . '</p>';
+				}
+			}
+
+			if ( 'declined' === $failure_state ) {
+				echo '<p class="kunaki-error">' . esc_html__( 'Kunaki declined this order. Retrying creates a new Kunaki order.', 'kunaki-woocommerce' ) . '</p>';
+				self::render_retry_control( $order, __( 'Resubmit to Kunaki', 'kunaki-woocommerce' ) );
+			}
 		} else {
+			$error     = self::get_failure_message( $order );
 			$attempts  = (int) $order->get_meta( self::META_FULFILLMENT_ATTEMPTS );
 			$failed_at = $order->get_meta( self::META_FULFILLMENT_FAILED );
 
+			$status_label = 'exhausted' === $failure_state
+				? __( 'Failed — automatic retries stopped, manual retry required', 'kunaki-woocommerce' )
+				: __( 'Failed — will retry automatically', 'kunaki-woocommerce' );
+
 			echo '<p class="kunaki-error"><strong>' . esc_html__( 'Status:', 'kunaki-woocommerce' ) . '</strong> '
-				. esc_html__( 'Failed', 'kunaki-woocommerce' ) . '</p>';
-			echo '<p><strong>' . esc_html__( 'Error:', 'kunaki-woocommerce' ) . '</strong> '
-				. esc_html( $error ) . '</p>';
+				. esc_html( $status_label ) . '</p>';
+			if ( '' !== $error ) {
+				echo '<p><strong>' . esc_html__( 'Error:', 'kunaki-woocommerce' ) . '</strong> '
+					. esc_html( $error ) . '</p>';
+			}
 			echo '<p><strong>' . esc_html__( 'Attempts:', 'kunaki-woocommerce' ) . '</strong> '
 				. esc_html( (string) $attempts ) . '</p>';
 			if ( $failed_at ) {
 				echo '<p><strong>' . esc_html__( 'Last attempt:', 'kunaki-woocommerce' ) . '</strong> '
 					. esc_html( $failed_at ) . '</p>';
 			}
-			if ( 'processing' === $order->get_status() ) {
-				echo '<button type="button" class="button kunaki-retry-button" data-order-id="'
-					. esc_attr( (string) $order->get_id() ) . '">'
-					. esc_html__( 'Retry Submission', 'kunaki-woocommerce' ) . '</button>';
-				echo ' <span class="kunaki-retry-spinner spinner"></span>';
-				echo '<span class="kunaki-retry-result"></span>';
-			}
+			self::render_retry_control( $order, __( 'Retry Submission', 'kunaki-woocommerce' ) );
 		}
 
 		echo '</div>';

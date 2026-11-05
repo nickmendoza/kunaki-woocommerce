@@ -102,7 +102,7 @@ uninstall.php                            Option cleanup on plugin deletion
 
 ### Event-Driven Order Submission
 
-Order submission is triggered by the `woocommerce_order_status_processing` hook. The fulfillment handler collects Kunaki-linked line items, resolves the shipping description stored at checkout, maps the shipping address to Kunaki's format, and submits via the API client. The API client is stateless and injectable -- it reads credentials from `wp_options` by default but accepts constructor overrides for testing.
+Order submission is triggered by the `woocommerce_order_status_processing` hook. Because that hook fires inside checkout and payment-gateway webhooks, it only queues a background `kunaki_wc_submit_order` action via Action Scheduler (bundled with WooCommerce); the Kunaki API call happens outside the payment request. The fulfillment handler collects Kunaki-linked line items, resolves the shipping description stored at checkout, maps the shipping address to Kunaki's format, and submits via the API client. The API client is stateless and injectable -- it reads credentials from `wp_options` by default but accepts constructor overrides for testing.
 
 ### Cron-Based Status Polling
 

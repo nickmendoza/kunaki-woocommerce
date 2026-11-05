@@ -35,6 +35,8 @@ class Kunaki_WooCommerce {
 		add_filter( 'woocommerce_shipping_methods', array( $this, 'register_shipping_method' ) );
 		add_filter( 'woocommerce_cart_shipping_packages', array( $this, 'split_shipping_packages' ) );
 		add_filter( 'woocommerce_package_rates', array( $this, 'filter_package_rates' ), 10, 2 );
+		add_filter( 'woocommerce_no_shipping_available_html', array( $this, 'rates_unavailable_message' ) );
+		add_filter( 'woocommerce_cart_no_shipping_available_html', array( $this, 'rates_unavailable_message' ) );
 
 		// Settings tab.
 		add_filter( 'woocommerce_get_settings_pages', array( $this, 'add_settings_page' ) );
@@ -162,7 +164,58 @@ class Kunaki_WooCommerce {
 			}
 		}
 
+		// While Kunaki rate lookups are failing, tag disc packages with the
+		// failure time. WooCommerce caches rates per package hash in the
+		// session, so without this a customer who hit an outage would keep
+		// seeing "no shipping options" after Kunaki recovers, until they
+		// changed their cart or address. The tag changes the hash when the
+		// outage starts and again when it clears, forcing a fresh lookup.
+		$unavailable_since = get_transient( 'kunaki_wc_rates_unavailable' );
+		if ( false !== $unavailable_since ) {
+			foreach ( $split as $index => $package ) {
+				if ( $this->package_has_kunaki_items( $package ) ) {
+					$split[ $index ]['kunaki_rates_unavailable'] = $unavailable_since;
+				}
+			}
+		}
+
 		return $split;
+	}
+
+	/**
+	 * Whether a shipping package contains any Kunaki product.
+	 *
+	 * @param array $package Shipping package.
+	 * @return bool
+	 */
+	private function package_has_kunaki_items( $package ) {
+		foreach ( $package['contents'] as $item ) {
+			if ( Kunaki_Product_Meta::is_kunaki_product( $item['product_id'] ) ) {
+				return true;
+			}
+		}
+		return false;
+	}
+
+	/**
+	 * Replace WooCommerce's generic "no shipping options" text during a Kunaki outage.
+	 *
+	 * Without this, customers see a message suggesting their address is wrong.
+	 *
+	 * @param string $html Default message HTML.
+	 * @return string
+	 */
+	public function rates_unavailable_message( $html ) {
+		if ( false === get_transient( 'kunaki_wc_rates_unavailable' ) ) {
+			return $html;
+		}
+		$cart = function_exists( 'WC' ) && WC()->cart ? WC()->cart->get_cart() : array();
+		foreach ( $cart as $item ) {
+			if ( Kunaki_Product_Meta::is_kunaki_product( $item['product_id'] ) ) {
+				return esc_html__( 'Shipping rates for discs are temporarily unavailable. Please try again in a few minutes.', 'kunaki-woocommerce' );
+			}
+		}
+		return $html;
 	}
 
 	/**
