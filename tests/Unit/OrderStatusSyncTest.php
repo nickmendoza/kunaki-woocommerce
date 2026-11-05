@@ -13,6 +13,9 @@ class OrderStatusSyncTest extends KunakiTestCase {
 	/** @var Kunaki_Order_Status_Sync */
 	private $sync;
 
+	/** @var int[] IDs passed to wc_get_order(). */
+	private $loaded_ids = array();
+
 	protected function set_up() {
 		parent::set_up();
 		$this->sync = new Kunaki_Order_Status_Sync();
@@ -246,8 +249,10 @@ class OrderStatusSyncTest extends KunakiTestCase {
 
 		$item1 = Mockery::mock( 'WC_Order_Item_Product' );
 		$item1->shouldReceive( 'get_product_id' )->andReturn( 42 );
+		$item1->shouldReceive( 'get_variation_id' )->andReturn( 0 );
 		$item2 = Mockery::mock( 'WC_Order_Item_Product' );
 		$item2->shouldReceive( 'get_product_id' )->andReturn( 43 );
+		$item2->shouldReceive( 'get_variation_id' )->andReturn( 0 );
 		$order->shouldReceive( 'get_items' )->andReturn( array( $item1, $item2 ) );
 
 		// Both are Kunaki products — should auto-complete.
@@ -275,8 +280,10 @@ class OrderStatusSyncTest extends KunakiTestCase {
 
 		$item1 = Mockery::mock( 'WC_Order_Item_Product' );
 		$item1->shouldReceive( 'get_product_id' )->andReturn( 42 );
+		$item1->shouldReceive( 'get_variation_id' )->andReturn( 0 );
 		$item2 = Mockery::mock( 'WC_Order_Item_Product' );
 		$item2->shouldReceive( 'get_product_id' )->andReturn( 43 );
+		$item2->shouldReceive( 'get_variation_id' )->andReturn( 0 );
 		$order->shouldReceive( 'get_items' )->andReturn( array( $item1, $item2 ) );
 
 		// Product 43 is NOT a Kunaki product — mixed cart.
@@ -481,19 +488,31 @@ class OrderStatusSyncTest extends KunakiTestCase {
 	 * processing) must be skipped without an API call and must not use up
 	 * batch slots, or they would starve newer orders.
 	 */
-	public function test_sync_skips_final_status_orders_without_using_batch_slots() {
-		$shipped  = $this->create_order_mock( 'KUN1', 'SHIPPED' );
-		$declined = $this->create_order_mock( 'KUN2', 'DECLINED' );
-		$fresh    = $this->create_order_mock( 'KUN3', 'PROCESSING' );
+	public function test_sync_excludes_final_status_orders_without_loading_them() {
+		$fresh = $this->create_order_mock( 'KUN3', 'PROCESSING' );
 
-		$this->mock_wc_get_orders( array( $shipped, $declined, $fresh ) );
+		$this->mock_wc_get_orders( array( null, null, $fresh ), array( 1, 2 ) );
 		// Limit of 1: the slot must go to the non-final order.
 		$this->mock_api_unchanged( 'PROCESSING', 1 );
 
-		$shipped->shouldNotReceive( 'save' );
-		$declined->shouldNotReceive( 'save' );
-
 		$this->sync->sync_all_pending_orders( 1 );
+
+		$this->assertSame( array( 3 ), $this->loaded_ids );
+	}
+
+	public function test_final_status_query_covers_shipped_and_declined() {
+		$captured = array();
+		Functions\expect( 'wc_get_orders' )->andReturnUsing( function ( $args ) use ( &$captured ) {
+			$captured[] = $args;
+			return array( 1 );
+		} );
+
+		$this->sync->get_pending_order_ids();
+
+		$this->assertSame( '_kunaki_order_status', $captured[1]['meta_key'] );
+		$this->assertSame( array( 'SHIPPED', 'DECLINED' ), $captured[1]['meta_value'] );
+		$this->assertSame( 'IN', $captured[1]['meta_compare'] );
+		$this->assertSame( 'ids', $captured[1]['return'] );
 	}
 
 	public function test_sync_does_not_skip_final_status_with_pending_notes() {
@@ -507,12 +526,53 @@ class OrderStatusSyncTest extends KunakiTestCase {
 		$order->shouldReceive( 'get_meta' )->with( '_kunaki_order_status' )->andReturn( 'SHIPPED' );
 		$order->shouldReceive( 'get_meta' )->with( '_kunaki_sync_note_pending' )->andReturn( $pending );
 
-		$this->mock_wc_get_orders( array( $order ) );
+		$this->mock_wc_get_orders( array( $order ), array( 1 ), array( 1 ) );
 
 		$order->shouldReceive( 'add_order_note' )->with( Mockery::pattern( '/USPS.*9400111/' ), true )->once();
 		$order->shouldReceive( 'delete_meta_data' )->with( '_kunaki_sync_note_pending' )->once();
 		$order->shouldReceive( 'save_meta_data' )->once();
 		Functions\expect( 'wp_remote_post' )->never();
+
+		$this->sync->sync_all_pending_orders();
+	}
+
+	public function test_sync_reports_checked_and_updated_counts() {
+		$changed   = $this->create_order_mock( 'KUN1', 'PENDING' );
+		$unchanged = $this->create_order_mock( 'KUN2', 'PROCESSING' );
+		$changed->shouldReceive( 'update_meta_data' );
+		$changed->shouldReceive( 'save' )->once();
+		$changed->shouldReceive( 'add_order_note' )->once();
+		$changed->shouldReceive( 'delete_meta_data' );
+		$changed->shouldReceive( 'save_meta_data' );
+
+		$this->mock_wc_get_orders( array( $changed, $unchanged ) );
+		$this->mock_api_unchanged( 'PROCESSING', 2 );
+
+		$this->assertSame( array( 'checked' => 2, 'updated' => 1 ), $this->sync->sync_all_pending_orders() );
+	}
+
+	public function test_sync_sends_probe_once_cooldown_has_passed() {
+		$order = $this->create_order_mock( 'KUN111', 'PROCESSING' );
+		$this->mock_wc_get_orders( array( $order ) );
+
+		$open_state = wp_json_encode( array(
+			'state'           => 'open',
+			'failure_count'   => 5,
+			'last_failure_at' => time() - 600,
+			'opened_at'       => time() - 600,
+		) );
+		Functions\when( 'get_option' )->alias( function ( $key, $default = '' ) use ( $open_state ) {
+			if ( 'kunaki_wc_circuit_breaker' === $key ) {
+				return $open_state;
+			}
+			return 'kunaki_wc_debug_log' === $key ? 'no' : $default;
+		} );
+		Functions\when( 'wp_cache_delete' )->justReturn( true );
+		Functions\when( 'update_option' )->justReturn( true );
+		$GLOBALS['wpdb']->shouldReceive( 'update' )->once()->andReturn( 1 );
+
+		// Without this probe, a store with no checkout traffic never recovers.
+		$this->mock_api_unchanged( 'PROCESSING', 1 );
 
 		$this->sync->sync_all_pending_orders();
 	}
@@ -616,10 +676,21 @@ class OrderStatusSyncTest extends KunakiTestCase {
 	 * Sync queries order IDs, then loads each with wc_get_order().
 	 * IDs are positional (1-based) so mocks can share a get_id() value.
 	 */
-	private function mock_wc_get_orders( $orders ) {
+	/**
+	 * @param array $orders        Order mocks, keyed by position (order ID = position + 1).
+	 * @param int[] $finished      IDs the SHIPPED/DECLINED query returns.
+	 * @param int[] $pending_notes IDs the pending-notes query returns.
+	 */
+	private function mock_wc_get_orders( $orders, $finished = array(), $pending_notes = array() ) {
 		$ids = empty( $orders ) ? array() : range( 1, count( $orders ) );
-		Functions\expect( 'wc_get_orders' )->once()->andReturn( $ids );
+		Functions\expect( 'wc_get_orders' )->atLeast()->once()->andReturnUsing( function ( $args ) use ( $ids, $finished, $pending_notes ) {
+			if ( isset( $args['meta_value'] ) ) {
+				return $finished;
+			}
+			return '_kunaki_sync_note_pending' === ( $args['meta_key'] ?? '' ) ? $pending_notes : $ids;
+		} );
 		Functions\when( 'wc_get_order' )->alias( function ( $id ) use ( $orders ) {
+			$this->loaded_ids[] = $id;
 			return $orders[ $id - 1 ] ?? false;
 		} );
 	}

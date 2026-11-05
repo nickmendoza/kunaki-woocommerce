@@ -9,7 +9,7 @@ use Kunaki_Product_Meta;
 class ProductMetaTest extends KunakiTestCase {
 
 	protected function tear_down() {
-		unset( $_POST['_kunaki_product_id'], $_POST['woocommerce_meta_nonce'] );
+		unset( $_POST['_kunaki_product_id'], $_POST['woocommerce_meta_nonce'], $_POST[ Kunaki_Product_Meta::VARIATION_FIELD ] );
 		parent::tear_down();
 	}
 
@@ -33,18 +33,69 @@ class ProductMetaTest extends KunakiTestCase {
 		$this->assertSame( '', Kunaki_Product_Meta::get_kunaki_product_id( 42 ) );
 	}
 
-	public function test_is_kunaki_product_true() {
-		Functions\expect( 'get_post_meta' )
-			->once()->with( 42, '_kunaki_product_id', true )->andReturn( 'PXZZ111111' );
+	public function test_variation_id_overrides_parent() {
+		Functions\when( 'get_post_meta' )->alias( function ( $id ) {
+			return array( 42 => 'PXPARENT01', 43 => 'PXVARIANT1' )[ $id ] ?? '';
+		} );
 
-		$this->assertTrue( Kunaki_Product_Meta::is_kunaki_product( 42 ) );
+		$this->assertSame( 'PXVARIANT1', Kunaki_Product_Meta::get_kunaki_id_for_item( 42, 43 ) );
 	}
 
-	public function test_is_kunaki_product_false() {
-		Functions\expect( 'get_post_meta' )
-			->once()->with( 42, '_kunaki_product_id', true )->andReturn( '' );
+	public function test_variation_without_id_uses_parent() {
+		Functions\when( 'get_post_meta' )->alias( function ( $id ) {
+			return 42 === $id ? 'PXPARENT01' : '';
+		} );
 
-		$this->assertFalse( Kunaki_Product_Meta::is_kunaki_product( 42 ) );
+		$this->assertSame( 'PXPARENT01', Kunaki_Product_Meta::get_kunaki_id_for_item( 42, 44 ) );
+	}
+
+	public function test_variation_is_kunaki_even_when_parent_has_no_id() {
+		Functions\when( 'get_post_meta' )->alias( function ( $id ) {
+			return 43 === $id ? 'PXVARIANT1' : '';
+		} );
+
+		$this->assertSame( 'PXVARIANT1', Kunaki_Product_Meta::get_kunaki_id_for_cart_item( array( 'product_id' => 42, 'variation_id' => 43 ) ) );
+		$this->assertSame( '', Kunaki_Product_Meta::get_kunaki_id_for_cart_item( array( 'product_id' => 42, 'variation_id' => 44 ) ) );
+		$this->assertSame( '', Kunaki_Product_Meta::get_kunaki_id_for_cart_item( array( 'product_id' => 42 ) ) );
+	}
+
+	public function test_save_variation_field_saves_valid_id() {
+		$_POST[ Kunaki_Product_Meta::VARIATION_FIELD ] = array( 2 => 'PXVARIANT1' );
+		$this->stub_variation_save();
+		Functions\expect( 'update_post_meta' )->once()->with( 43, '_kunaki_product_id', 'PXVARIANT1' );
+
+		( new Kunaki_Product_Meta() )->save_variation_field( 43, 2 );
+	}
+
+	public function test_save_variation_field_blank_removes_id_to_inherit_parent() {
+		$_POST[ Kunaki_Product_Meta::VARIATION_FIELD ] = array( 2 => '' );
+		$this->stub_variation_save();
+		Functions\expect( 'delete_post_meta' )->once()->with( 43, '_kunaki_product_id' );
+		Functions\expect( 'update_post_meta' )->never();
+
+		( new Kunaki_Product_Meta() )->save_variation_field( 43, 2 );
+	}
+
+	public function test_save_variation_field_rejects_invalid_id() {
+		$_POST[ Kunaki_Product_Meta::VARIATION_FIELD ] = array( 2 => 'tooshort' );
+		$this->stub_variation_save();
+		Functions\when( 'get_current_user_id' )->justReturn( 1 );
+		Functions\expect( 'set_transient' )->once();
+		Functions\expect( 'update_post_meta' )->never();
+
+		( new Kunaki_Product_Meta() )->save_variation_field( 43, 2 );
+	}
+
+	public function test_save_variation_field_requires_capability() {
+		$_POST[ Kunaki_Product_Meta::VARIATION_FIELD ] = array( 2 => 'PXVARIANT1' );
+		Functions\when( 'current_user_can' )->justReturn( false );
+		Functions\expect( 'update_post_meta' )->never();
+
+		( new Kunaki_Product_Meta() )->save_variation_field( 43, 2 );
+	}
+
+	private function stub_variation_save() {
+		Functions\when( 'current_user_can' )->justReturn( true );
 	}
 
 	public function test_save_valid_id() {

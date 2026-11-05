@@ -8,6 +8,21 @@ class Kunaki_Settings extends WC_Settings_Page {
 		$this->label = __( 'Kunaki', 'kunaki-woocommerce' );
 
 		parent::__construct();
+
+		add_filter( 'woocommerce_admin_settings_sanitize_option_kunaki_wc_password', array( $this, 'keep_password_when_blank' ) );
+	}
+
+	/**
+	 * Keep the saved password when the field is submitted blank.
+	 *
+	 * The field is never filled in (see below), so blank means "no change".
+	 * WooCommerce skips saving an option whose sanitized value is null.
+	 *
+	 * @param mixed $value Sanitized value.
+	 * @return mixed
+	 */
+	public function keep_password_when_blank( $value ) {
+		return '' === $value ? null : $value;
 	}
 
 	public function get_settings_for_default_section() {
@@ -29,12 +44,17 @@ class Kunaki_Settings extends WC_Settings_Page {
 			),
 			array(
 				'title'    => __( 'Kunaki Password', 'kunaki-woocommerce' ),
-				'desc'     => __( 'Your Kunaki account password.', 'kunaki-woocommerce' ),
+				'desc'     => __( 'Your Kunaki account password. For security it is never shown here. Leave blank to keep the saved password.', 'kunaki-woocommerce' ),
 				'id'       => 'kunaki_wc_password',
 				'type'     => 'password',
+				// Never send the decrypted password to the browser.
+				'value'    => '',
 				'default'  => '',
 				'desc_tip' => true,
 				'css'      => 'min-width: 350px;',
+				'custom_attributes' => array(
+					'autocomplete' => 'new-password',
+				),
 			),
 			array(
 				'title'    => __( 'Mode', 'kunaki-woocommerce' ),
@@ -80,6 +100,13 @@ class Kunaki_Settings extends WC_Settings_Page {
 				'title'   => __( 'Enable Debug Logging', 'kunaki-woocommerce' ),
 				'desc'    => __( 'Log API requests and responses to WooCommerce > Status > Logs.', 'kunaki-woocommerce' ),
 				'id'      => 'kunaki_wc_debug_log',
+				'type'    => 'checkbox',
+				'default' => 'no',
+			),
+			array(
+				'title'   => __( 'Remove Data on Uninstall', 'kunaki-woocommerce' ),
+				'desc'    => __( 'When the plugin is deleted, also delete Kunaki order IDs, tracking details, and product IDs. This cannot be undone. Leave unchecked to keep your order history.', 'kunaki-woocommerce' ),
+				'id'      => 'kunaki_wc_delete_data_on_uninstall',
 				'type'    => 'checkbox',
 				'default' => 'no',
 			),

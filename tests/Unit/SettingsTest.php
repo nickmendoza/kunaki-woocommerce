@@ -22,8 +22,8 @@ class SettingsTest extends KunakiTestCase {
 	public function test_settings_returns_expected_fields() {
 		$fields = $this->settings->get_settings_for_default_section();
 
-		// (title + 6 fields + sectionend) + (title + 2 fields + sectionend) = 12
-		$this->assertCount( 12, $fields );
+		// (title + 7 fields + sectionend) + (title + 2 fields + sectionend) = 13
+		$this->assertCount( 13, $fields );
 	}
 
 	public function test_settings_field_ids() {
@@ -36,6 +36,24 @@ class SettingsTest extends KunakiTestCase {
 		$this->assertContains( 'kunaki_wc_sync_interval', $ids );
 		$this->assertContains( 'kunaki_wc_max_retries', $ids );
 		$this->assertContains( 'kunaki_wc_debug_log', $ids );
+	}
+
+	public function test_password_is_never_rendered() {
+		$password = $this->find_field( $this->settings->get_settings_for_default_section(), 'kunaki_wc_password' );
+
+		$this->assertSame( '', $password['value'] );
+	}
+
+	public function test_blank_password_keeps_saved_one() {
+		// WooCommerce skips saving an option when the sanitized value is null.
+		$this->assertNull( $this->settings->keep_password_when_blank( '' ) );
+		$this->assertSame( 'new-password', $this->settings->keep_password_when_blank( 'new-password' ) );
+	}
+
+	public function test_data_removal_is_opt_in() {
+		$field = $this->find_field( $this->settings->get_settings_for_default_section(), 'kunaki_wc_delete_data_on_uninstall' );
+
+		$this->assertSame( 'no', $field['default'] );
 	}
 
 	public function test_mode_defaults_to_test() {

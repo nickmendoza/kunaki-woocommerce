@@ -84,11 +84,59 @@ class CircuitBreakerTest extends KunakiTestCase {
 		$this->assertSame( 'half_open', $saved['state'] );
 	}
 
-	public function test_pre_request_allows_when_half_open() {
-		$this->set_circuit_state( 'half_open', 5, time() - 400 );
+	public function test_pre_request_claims_abandoned_probe() {
+		$this->set_circuit_state( 'half_open', 5, time() - 400, time() - Kunaki_Circuit_Breaker::PROBE_TIMEOUT - 1 );
 
 		$cb = new Kunaki_Circuit_Breaker();
 		$this->assertTrue( $cb->pre_request() );
+
+		$saved = json_decode( $this->updated_options[ Kunaki_Circuit_Breaker::OPTION_KEY ], true );
+		$this->assertEqualsWithDelta( time(), $saved['probe_at'], 2 );
+	}
+
+	public function test_pre_request_blocks_while_another_probe_is_in_flight() {
+		$this->set_circuit_state( 'half_open', 5, time() - 400, time() - 5 );
+
+		$cb     = new Kunaki_Circuit_Breaker();
+		$result = $cb->pre_request();
+
+		$this->assertInstanceOf( WP_Error::class, $result );
+		$this->assertSame( 'kunaki_circuit_open', $result->get_error_code() );
+	}
+
+	public function test_only_one_of_two_concurrent_callers_gets_the_probe() {
+		$this->set_circuit_state( 'open', 5, time() - 400 );
+		$stale_read = $this->option_store[ Kunaki_Circuit_Breaker::OPTION_KEY ];
+
+		$first = new Kunaki_Circuit_Breaker();
+		$this->assertTrue( $first->pre_request() );
+
+		// The second process read the option before the first one's update landed.
+		$store = &$this->option_store;
+		Functions\when( 'get_option' )->alias( function ( $key, $default = '' ) use ( &$store, $stale_read ) {
+			if ( Kunaki_Circuit_Breaker::OPTION_KEY === $key ) {
+				return $stale_read;
+			}
+			return $store[ $key ] ?? $default;
+		} );
+
+		$second = new Kunaki_Circuit_Breaker();
+		$this->assertInstanceOf( WP_Error::class, $second->pre_request() );
+	}
+
+	public function test_allows_request_does_not_claim_the_probe() {
+		$cb = new Kunaki_Circuit_Breaker();
+		$this->assertTrue( $cb->allows_request() );
+
+		$this->set_circuit_state( 'open', 5, time() - 60 );
+		$this->assertFalse( $cb->allows_request() );
+
+		$this->set_circuit_state( 'open', 5, time() - 400 );
+		$this->assertTrue( $cb->allows_request() );
+		$this->assertArrayNotHasKey( Kunaki_Circuit_Breaker::OPTION_KEY, $this->updated_options );
+
+		$this->set_circuit_state( 'half_open', 5, time() - 400, time() - 5 );
+		$this->assertFalse( $cb->allows_request() );
 	}
 
 	public function test_pre_request_uses_configured_cooldown() {
@@ -324,14 +372,43 @@ class CircuitBreakerTest extends KunakiTestCase {
 		Functions\when( 'wc_get_logger' )->justReturn(
 			Mockery::mock( 'WC_Logger' )->shouldIgnoreMissing()
 		);
+		Functions\when( 'wp_cache_delete' )->justReturn( true );
+
+		// Behaves like MySQL: only updates the row if the WHERE value still matches.
+		$GLOBALS['wpdb'] = new class( $store, $updated ) {
+			public $options = 'wp_options';
+			private $store;
+			private $updated;
+
+			public function __construct( array &$store, array &$updated ) {
+				$this->store   = &$store;
+				$this->updated = &$updated;
+			}
+
+			public function update( $table, $data, $where ) {
+				$key = $where['option_name'];
+				if ( ( $this->store[ $key ] ?? null ) !== $where['option_value'] ) {
+					return 0;
+				}
+				$this->store[ $key ]   = $data['option_value'];
+				$this->updated[ $key ] = $data['option_value'];
+				return 1;
+			}
+		};
 	}
 
-	private function set_circuit_state( $state, $failure_count, $opened_at = 0 ) {
+	protected function tear_down() {
+		unset( $GLOBALS['wpdb'] );
+		parent::tear_down();
+	}
+
+	private function set_circuit_state( $state, $failure_count, $opened_at = 0, $probe_at = 0 ) {
 		$this->option_store[ Kunaki_Circuit_Breaker::OPTION_KEY ] = wp_json_encode( array(
 			'state'           => $state,
 			'failure_count'   => $failure_count,
 			'last_failure_at' => $opened_at ?: 0,
 			'opened_at'       => $opened_at ?: 0,
+			'probe_at'        => $probe_at,
 		) );
 	}
 }

@@ -63,11 +63,55 @@ class ShippingPackageTest extends KunakiTestCase {
 		$this->assertSame( 'default', $this->instance->rates_unavailable_message( 'default' ) );
 	}
 
-	private function mock_cart( $items ) {
+	public function test_block_notice_shown_when_disc_package_has_no_rates_during_outage() {
+		$this->start_outage_with_disc_cart( array( array( 'contents' => array( array( 'product_id' => 10 ) ), 'rates' => array() ) ) );
+
+		$html = $this->instance->block_rates_unavailable_notice( '<div>checkout</div>' );
+
+		$this->assertStringContainsString( 'temporarily unavailable', $html );
+		$this->assertStringEndsWith( '<div>checkout</div>', $html );
+	}
+
+	public function test_block_notice_hidden_when_cached_rates_still_work() {
+		$this->start_outage_with_disc_cart( array( array( 'contents' => array( array( 'product_id' => 10 ) ), 'rates' => array( 'kunaki:1' => new \stdClass() ) ) ) );
+
+		$this->assertSame( '<div>checkout</div>', $this->instance->block_rates_unavailable_notice( '<div>checkout</div>' ) );
+	}
+
+	public function test_block_notice_hidden_without_outage() {
+		$this->mock_cart( array( array( 'product_id' => 10 ) ) );
+
+		$this->assertSame( '<div>checkout</div>', $this->instance->block_rates_unavailable_notice( '<div>checkout</div>' ) );
+	}
+
+	public function test_variation_with_own_id_is_split_from_parent_without_one() {
+		Functions\when( 'get_post_meta' )->alias( function ( $id ) {
+			return 11 === $id ? 'PX00ZJTM4R' : '';
+		} );
+
+		$result = $this->instance->split_shipping_packages( array( $this->build_package( array(
+			array( 'product_id' => 10, 'variation_id' => 11, 'quantity' => 1 ),
+			array( 'product_id' => 10, 'variation_id' => 12, 'quantity' => 1 ),
+		) ) ) );
+
+		$this->assertCount( 2, $result );
+	}
+
+	private function start_outage_with_disc_cart( $packages ) {
+		Functions\when( 'get_transient' )->justReturn( 1700000000 );
+		Functions\when( 'get_post_meta' )->justReturn( 'PX00ZJTM4R' );
+		$this->mock_cart( array( array( 'product_id' => 10 ) ), $packages );
+	}
+
+	private function mock_cart( $items, $packages = array() ) {
 		$cart = \Mockery::mock( 'WC_Cart' );
 		$cart->shouldReceive( 'get_cart' )->andReturn( $items );
+		$cart->shouldReceive( 'calculate_shipping' );
+		$shipping = \Mockery::mock( 'WC_Shipping' );
+		$shipping->shouldReceive( 'get_packages' )->andReturn( $packages );
 		$wc       = \Mockery::mock( 'WooCommerce' );
 		$wc->cart = $cart;
+		$wc->shouldReceive( 'shipping' )->andReturn( $shipping );
 		Functions\when( 'WC' )->justReturn( $wc );
 	}
 
@@ -315,7 +359,9 @@ class ShippingPackageTest extends KunakiTestCase {
 
 		$ref = new \ReflectionClass( Kunaki_WooCommerce::class );
 		$prop = $ref->getProperty( 'instance' );
-		$prop->setAccessible( true );
+		if ( PHP_VERSION_ID < 80100 ) {
+			$prop->setAccessible( true );
+		}
 		$prop->setValue( null, null );
 
 		return Kunaki_WooCommerce::instance();

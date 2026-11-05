@@ -51,30 +51,32 @@ if ( ! function_exists( 'kunaki_wc_encrypt_password' ) ) {
 			return $value;
 		}
 
-		// Too short to be any encrypted format — likely a plaintext password.
-		if ( strlen( $data ) <= 16 ) {
+		// Encrypted values are a 12-byte IV + 16-byte tag + at least 1 byte of
+		// ciphertext. Anything shorter is a plaintext password that happens to
+		// be valid base64, not a failed decryption.
+		if ( strlen( $data ) <= 28 ) {
 			return $value;
 		}
 
-		$key = hash( 'sha256', wp_salt( 'auth' ), true );
+		$key       = hash( 'sha256', wp_salt( 'auth' ), true );
+		$decrypted = openssl_decrypt( substr( $data, 28 ), 'aes-256-gcm', $key, OPENSSL_RAW_DATA, substr( $data, 0, 12 ), substr( $data, 12, 16 ) );
+		$flagged   = 'yes' === get_option( 'kunaki_wc_decrypt_failed' );
 
-		// AES-256-GCM format: 12-byte IV + 16-byte tag + ciphertext.
-		if ( strlen( $data ) > 28 ) {
-			$iv        = substr( $data, 0, 12 );
-			$tag       = substr( $data, 12, 16 );
-			$encrypted = substr( $data, 28 );
-
-			$decrypted = openssl_decrypt( $encrypted, 'aes-256-gcm', $key, OPENSSL_RAW_DATA, $iv, $tag );
-			if ( false !== $decrypted ) {
-				return $decrypted;
+		if ( false !== $decrypted ) {
+			// The password works again (e.g. the previous salts were restored).
+			if ( $flagged ) {
+				delete_option( 'kunaki_wc_decrypt_failed' );
 			}
+			return $decrypted;
 		}
 
-		// Decryption failed — flag for admin notice.
-		update_option( 'kunaki_wc_decrypt_failed', 'yes', 'no' );
+		// This runs on every read of the option, so only report it once.
+		if ( ! $flagged ) {
+			update_option( 'kunaki_wc_decrypt_failed', 'yes', 'no' );
 
-		if ( function_exists( 'wc_get_logger' ) ) {
-			wc_get_logger()->error( 'Failed to decrypt Kunaki password. Auth salts may have changed.', array( 'source' => 'kunaki-woocommerce' ) );
+			if ( function_exists( 'wc_get_logger' ) ) {
+				wc_get_logger()->error( 'Failed to decrypt Kunaki password. Auth salts may have changed.', array( 'source' => 'kunaki-woocommerce' ) );
+			}
 		}
 		return '';
 	}
