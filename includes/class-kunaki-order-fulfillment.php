@@ -63,6 +63,47 @@ class Kunaki_Order_Fulfillment {
 	}
 
 	/**
+	 * Hand queued submissions over to the retry queue before deactivation.
+	 *
+	 * With the plugin inactive, Action Scheduler would run these jobs with no
+	 * callback and discard them, leaving the orders unsent with nothing to show
+	 * for it. Recording a failure instead lists them on the Failures page and
+	 * lets the retry cron send them after reactivation.
+	 */
+	public function park_queued_submissions() {
+		if ( ! function_exists( 'as_get_scheduled_actions' ) || ! function_exists( 'as_unschedule_all_actions' ) ) {
+			return;
+		}
+
+		$actions = as_get_scheduled_actions( array(
+			'hook'     => self::SUBMIT_ACTION,
+			'group'    => self::ACTION_GROUP,
+			'status'   => 'pending',
+			'per_page' => -1,
+		) );
+
+		foreach ( $actions as $action ) {
+			try {
+				$args  = $action->get_args();
+				$order = wc_get_order( absint( $args['order_id'] ?? 0 ) );
+				if ( $order && 'processing' === $order->get_status() && 'yes' !== $order->get_meta( self::META_KUNAKI_SUBMITTED ) ) {
+					$this->record_failure(
+						$order,
+						__( 'The Kunaki plugin was deactivated before this order was sent. It will be retried when the plugin is active again.', 'kunaki-woocommerce' ),
+						'kunaki_plugin_deactivated'
+					);
+				}
+			} catch ( \Throwable $e ) {
+				// Never block deactivation over a single order.
+				Kunaki_Logger::error( 'Could not hand over queued submission.', array( 'error' => $e->getMessage() ) );
+			}
+		}
+
+		// Hook only: passed a group as well, this would only cancel jobs with no args.
+		as_unschedule_all_actions( self::SUBMIT_ACTION );
+	}
+
+	/**
 	 * Action Scheduler callback: submit a queued order.
 	 *
 	 * An uncaught exception would leave the order with no failure meta, so the
@@ -185,8 +226,7 @@ class Kunaki_Order_Fulfillment {
 		$has_non_kunaki  = false;
 
 		foreach ( $order->get_items() as $item ) {
-			$product_id = $item->get_product_id();
-			$kunaki_id  = Kunaki_Product_Meta::get_kunaki_product_id( $product_id );
+			$kunaki_id = Kunaki_Product_Meta::get_kunaki_id_for_item( $item->get_product_id(), $item->get_variation_id() );
 
 			if ( empty( $kunaki_id ) ) {
 				$has_non_kunaki = true;
@@ -357,7 +397,7 @@ class Kunaki_Order_Fulfillment {
 	 * @param bool     $permanent     Whether the error is permanent (immediately mark exhausted, skip retry).
 	 */
 	private function record_failure( $order, $error_message, $error_code = '', $permanent = false ) {
-		$skip_increment = $permanent || in_array( $error_code, array( 'kunaki_circuit_open', 'kunaki_credentials_invalid' ), true );
+		$skip_increment = $permanent || in_array( $error_code, array( 'kunaki_circuit_open', 'kunaki_credentials_invalid', 'kunaki_plugin_deactivated' ), true );
 
 		$attempts = (int) $order->get_meta( self::META_FULFILLMENT_ATTEMPTS );
 		$order->update_meta_data( self::META_FULFILLMENT_FAILED, gmdate( 'c' ) );
@@ -544,13 +584,9 @@ class Kunaki_Order_Fulfillment {
 		}
 
 		$orders = wc_get_orders( array(
-			'status'     => array( 'processing' ),
-			'meta_query' => array(
-				array(
-					'key'     => self::META_FULFILLMENT_ERROR,
-					'compare' => 'EXISTS',
-				),
-			),
+			'status'       => array( 'processing' ),
+			'meta_key'     => self::META_FULFILLMENT_ERROR,
+			'meta_compare' => 'EXISTS',
 			'limit'   => 50,
 			'orderby' => 'date',
 			'order'   => 'ASC',
@@ -599,7 +635,7 @@ class Kunaki_Order_Fulfillment {
 				continue;
 			}
 
-			if ( 'open' === $cb->get_state()['state'] ) {
+			if ( ! $cb->allows_request() ) {
 				Kunaki_Logger::info( 'Circuit breaker is open — stopping retry batch.' );
 				break;
 			}

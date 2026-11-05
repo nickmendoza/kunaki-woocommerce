@@ -56,8 +56,7 @@ class WC_Shipping_Kunaki extends WC_Shipping_Method {
 		$kunaki_products = array();
 
 		foreach ( $package['contents'] as $item ) {
-			$product_id = $item['product_id'];
-			$kunaki_id  = Kunaki_Product_Meta::get_kunaki_product_id( $product_id );
+			$kunaki_id = Kunaki_Product_Meta::get_kunaki_id_for_cart_item( $item );
 
 			if ( empty( $kunaki_id ) ) {
 				continue;

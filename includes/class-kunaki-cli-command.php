@@ -10,7 +10,7 @@ class Kunaki_CLI_Command {
 	 * Sync Kunaki order statuses.
 	 *
 	 * Queries the Kunaki API for status updates on all WooCommerce orders
-	 * that have been submitted to Kunaki but not yet completed.
+	 * that have been submitted to Kunaki and haven't reached a final status.
 	 *
 	 * ## OPTIONS
 	 *
@@ -33,14 +33,8 @@ class Kunaki_CLI_Command {
 		$dry_run = ! empty( $assoc_args['dry-run'] );
 		$limit   = isset( $assoc_args['limit'] ) ? (int) $assoc_args['limit'] : 0;
 
-		/** @var int[] $orders */
-		$orders = wc_get_orders( array(
-			'status'       => array( 'processing' ),
-			'meta_key'     => Kunaki_Order_Fulfillment::META_KUNAKI_ORDER_ID,
-			'meta_compare' => 'EXISTS',
-			'limit'        => -1,
-			'return'       => 'ids',
-		) );
+		$sync   = new Kunaki_Order_Status_Sync();
+		$orders = $sync->get_pending_order_ids();
 
 		$count = count( $orders );
 
@@ -60,25 +54,12 @@ class Kunaki_CLI_Command {
 
 		$sync_limit = $limit > 0 ? $limit : -1;
 
-		$sync = new Kunaki_Order_Status_Sync();
-		$sync->sync_all_pending_orders( $sync_limit );
-
-		/** @var int[] $remaining */
-		$remaining = wc_get_orders( array(
-			'status'       => array( 'processing' ),
-			'meta_key'     => Kunaki_Order_Fulfillment::META_KUNAKI_ORDER_ID,
-			'meta_compare' => 'EXISTS',
-			'limit'        => -1,
-			'return'       => 'ids',
-		) );
-
-		$checked = $limit > 0 ? min( $count, $limit ) : $count;
-		$updated = $count - count( $remaining );
+		$result = $sync->sync_all_pending_orders( $sync_limit );
 
 		\WP_CLI::success( sprintf(
 			'Sync complete. %d order(s) checked, %d status(es) updated.',
-			$checked,
-			$updated
+			$result['checked'],
+			$result['updated']
 		) );
 	}
 }

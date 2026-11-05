@@ -234,6 +234,7 @@ class RetryQueueTest extends KunakiTestCase {
 
 		$item = Mockery::mock( 'WC_Order_Item_Product' );
 		$item->shouldReceive( 'get_product_id' )->andReturn( 42 );
+		$item->shouldReceive( 'get_variation_id' )->andReturn( 0 );
 		$item->shouldReceive( 'get_quantity' )->andReturn( 1 );
 
 		$order = Mockery::mock( 'WC_Order' );
@@ -555,6 +556,7 @@ class RetryQueueTest extends KunakiTestCase {
 		if ( null === $items ) {
 			$item = Mockery::mock( 'WC_Order_Item_Product' );
 			$item->shouldReceive( 'get_product_id' )->andReturn( 42 );
+			$item->shouldReceive( 'get_variation_id' )->andReturn( 0 );
 			$item->shouldReceive( 'get_quantity' )->andReturn( 1 );
 			$items = array( $item );
 		}

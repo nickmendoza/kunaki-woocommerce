@@ -11,78 +11,109 @@ class Kunaki_Order_Status_Sync {
 	 * Query Kunaki for status updates on all submitted but not yet completed orders.
 	 *
 	 * @param int $limit Maximum orders to process per batch. Default 50.
+	 * @return array{checked: int, updated: int} Orders checked, and how many changed status.
 	 */
 	public function sync_all_pending_orders( $limit = 50 ) {
+		$result = array( 'checked' => 0, 'updated' => 0 );
+
 		Kunaki_Logger::info( 'Starting order status sync.' );
 
 		// Bail if credentials are known-bad — status checks require authentication.
 		if ( 'yes' === get_option( 'kunaki_wc_decrypt_failed' ) ) {
 			Kunaki_Logger::info( 'Credentials invalid — skipping status sync.' );
-			return;
+			return $result;
 		}
 
-		// Fetch IDs only (cheap), oldest first, then skip orders whose Kunaki
-		// status is final. Mixed-cart orders stay "processing" after shipping
-		// until an admin completes them; without this skip they would take the
-		// oldest batch slots forever and starve newer orders of status updates.
-		/** @var int[] $order_ids */
-		$order_ids = wc_get_orders( array(
-			'status'       => array( 'processing' ),
-			'meta_key'     => Kunaki_Order_Fulfillment::META_KUNAKI_ORDER_ID,
-			'meta_compare' => 'EXISTS',
-			'limit'        => -1,
-			'orderby'      => 'date',
-			'order'        => 'ASC',
-			'return'       => 'ids',
-		) );
+		$order_ids = $this->get_pending_order_ids();
 
 		if ( empty( $order_ids ) ) {
 			Kunaki_Logger::debug( 'No pending orders to sync.' );
-			return;
+			return $result;
 		}
 
-		$api     = new Kunaki_API_Client();
-		$cb      = new Kunaki_Circuit_Breaker();
-		$checked = 0;
+		$api = new Kunaki_API_Client();
+		$cb  = new Kunaki_Circuit_Breaker();
 
 		foreach ( $order_ids as $order_id ) {
-			if ( $limit > 0 && $checked >= $limit ) {
+			if ( $limit > 0 && $result['checked'] >= $limit ) {
 				break;
 			}
-			if ( 'open' === $cb->get_state()['state'] ) {
+			if ( ! $cb->allows_request() ) {
 				Kunaki_Logger::info( 'Circuit breaker is open — stopping sync batch.' );
 				break;
 			}
 			$order = wc_get_order( $order_id );
-			if ( ! $order || $this->is_sync_finished( $order ) ) {
+			if ( ! $order ) {
 				continue;
 			}
 			try {
-				$this->sync_single_order( $order, $api );
+				if ( $this->sync_single_order( $order, $api ) ) {
+					$result['updated']++;
+				}
 			} catch ( \Throwable $e ) {
 				Kunaki_Logger::error( 'Sync failed.', array( 'order_id' => $order_id, 'error' => $e->getMessage() ) );
 			}
-			$checked++;
+			$result['checked']++;
 		}
 
-		Kunaki_Logger::info( 'Order status sync complete.', array( 'orders_checked' => $checked ) );
+		Kunaki_Logger::info( 'Order status sync complete.', array( 'orders_checked' => $result['checked'], 'orders_updated' => $result['updated'] ) );
+
+		return $result;
 	}
 
 	/**
-	 * Whether an order has reached a final Kunaki status and needs no more polling.
+	 * Get IDs of orders that still need polling, oldest first.
 	 *
-	 * SHIPPED and DECLINED never change afterwards. Orders with notes still
-	 * pending from an interrupted sync are not finished — they must be revisited
-	 * so the notes get sent.
+	 * Mixed-cart orders stay "processing" after shipping until an admin completes
+	 * them. SHIPPED and DECLINED never change afterwards, so these are excluded
+	 * here without loading each order, and can't take up the batch limit and
+	 * starve newer orders. Orders with notes still pending from an interrupted
+	 * sync stay included so the notes get sent.
 	 *
-	 * @param WC_Order $order WooCommerce order.
-	 * @return bool
+	 * Finished orders are subtracted in PHP because NOT EXISTS meta queries can
+	 * return false positives under HPOS, and a new order has no status meta yet.
+	 * Queries use meta_key/meta_value because WooCommerce silently ignores
+	 * meta_query on order queries unless HPOS is enabled.
+	 *
+	 * @return int[]
 	 */
-	private function is_sync_finished( $order ) {
-		if ( '' !== (string) $order->get_meta( '_kunaki_sync_note_pending' ) ) {
-			return false;
+	public function get_pending_order_ids() {
+		$base = array(
+			'status' => array( 'processing' ),
+			'limit'  => -1,
+			'return' => 'ids',
+		);
+
+		/** @var int[] $order_ids */
+		$order_ids = wc_get_orders( $base + array(
+			'meta_key'     => Kunaki_Order_Fulfillment::META_KUNAKI_ORDER_ID,
+			'meta_compare' => 'EXISTS',
+			'orderby'      => 'date',
+			'order'        => 'ASC',
+		) );
+
+		if ( empty( $order_ids ) ) {
+			return array();
 		}
-		return in_array( $order->get_meta( '_kunaki_order_status' ), array( 'SHIPPED', 'DECLINED' ), true );
+
+		/** @var int[] $finished */
+		$finished = wc_get_orders( $base + array(
+			'meta_key'     => Kunaki_Order_Fulfillment::META_KUNAKI_STATUS,
+			'meta_value'   => array( 'SHIPPED', 'DECLINED' ),
+			'meta_compare' => 'IN',
+		) );
+
+		if ( empty( $finished ) ) {
+			return $order_ids;
+		}
+
+		/** @var int[] $pending_notes */
+		$pending_notes = wc_get_orders( $base + array(
+			'meta_key'     => '_kunaki_sync_note_pending',
+			'meta_compare' => 'EXISTS',
+		) );
+
+		return array_values( array_diff( $order_ids, array_diff( $finished, $pending_notes ) ) );
 	}
 
 	/**
@@ -93,13 +124,14 @@ class Kunaki_Order_Status_Sync {
 	 *
 	 * @param WC_Order          $order WooCommerce order.
 	 * @param Kunaki_API_Client $api   API client instance.
+	 * @return bool Whether the order's Kunaki status changed.
 	 */
 	private function sync_single_order( $order, $api ) {
 		$order_id        = $order->get_id();
 		$kunaki_order_id = $order->get_meta( Kunaki_Order_Fulfillment::META_KUNAKI_ORDER_ID );
 
 		if ( empty( $kunaki_order_id ) ) {
-			return;
+			return false;
 		}
 
 		// Acquire per-order lock to prevent concurrent sync processing.
@@ -121,11 +153,11 @@ class Kunaki_Order_Status_Sync {
 
 		if ( ! $acquired ) {
 			Kunaki_Logger::debug( 'Could not acquire sync lock.', array( 'order_id' => $order_id ) );
-			return;
+			return false;
 		}
 
 		try {
-			$this->process_sync( $order, $api, $kunaki_order_id );
+			return $this->process_sync( $order, $api, $kunaki_order_id );
 		} finally {
 			$wpdb->delete( $wpdb->options, array( 'option_name' => $lock_option ) );
 		}
@@ -142,6 +174,7 @@ class Kunaki_Order_Status_Sync {
 	 * @param WC_Order          $order            WooCommerce order.
 	 * @param Kunaki_API_Client $api              API client instance.
 	 * @param string            $kunaki_order_id  Kunaki order ID.
+	 * @return bool Whether the order's Kunaki status changed.
 	 */
 	private function process_sync( $order, $api, $kunaki_order_id ) {
 		$order_id = $order->get_id();
@@ -150,14 +183,14 @@ class Kunaki_Order_Status_Sync {
 		$pending = $order->get_meta( '_kunaki_sync_note_pending' );
 		if ( '' !== $pending ) {
 			$this->send_pending_notes( $order );
-			return;
+			return false;
 		}
 
 		$result = $api->get_order_status( $kunaki_order_id );
 
 		if ( is_wp_error( $result ) ) {
 			Kunaki_Logger::error( 'Failed to get Kunaki status.', array( 'order_id' => $order_id, 'error' => $result->get_error_message() ) );
-			return;
+			return false;
 		}
 
 		$kunaki_status = $result['status'];
@@ -168,7 +201,7 @@ class Kunaki_Order_Status_Sync {
 
 		// Skip if status hasn't changed.
 		if ( $previous_status === $kunaki_status ) {
-			return;
+			return false;
 		}
 
 		$order->update_meta_data( '_kunaki_order_status', $kunaki_status );
@@ -254,11 +287,13 @@ class Kunaki_Order_Status_Sync {
 			Kunaki_Logger::error( 'save() failed during sync.', array( 'order_id' => $order_id, 'error' => $e->getMessage() ) );
 			// Pending notes meta remains in memory (unsaved); next cron run will
 			// re-detect the status change, rebuild notes, and retry the save.
-			return;
+			return false;
 		}
 
 		// Now safe — meta is persisted, so the next cron run won't retry.
 		$this->send_pending_notes( $order, $notes_json );
+
+		return true;
 	}
 
 	/**
@@ -307,7 +342,7 @@ class Kunaki_Order_Status_Sync {
 
 		// Fallback for orders submitted before the snapshot was stored.
 		foreach ( $order->get_items() as $item ) {
-			if ( ! Kunaki_Product_Meta::is_kunaki_product( $item->get_product_id() ) ) {
+			if ( '' === Kunaki_Product_Meta::get_kunaki_id_for_item( $item->get_product_id(), $item->get_variation_id() ) ) {
 				return false;
 			}
 		}

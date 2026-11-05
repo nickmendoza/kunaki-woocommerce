@@ -22,7 +22,7 @@ This plugin addresses these concerns through atomic locking, idempotent submissi
 - **Live Shipping Rates** -- Real-time Kunaki shipping options and prices at checkout, cached via transients.
 - **Idempotent Order Submission** -- Orders are submitted to Kunaki exactly once, protected by atomic locks and multi-layer duplicate prevention.
 - **Order Tracking** -- Cron-based polling syncs Kunaki status and emails customers their tracking number.
-- **Product Linking** -- Link any WooCommerce product to a Kunaki disc via its 10-character Product ID.
+- **Product Linking** -- Link any WooCommerce product or individual variation to a Kunaki disc via its 10-character Product ID. Variations without their own ID use the parent product's.
 - **Mixed Cart Handling** -- Splits checkout into separate shipments for Kunaki and non-Kunaki products, each with its own shipping method selection. Submits only Kunaki items to Kunaki; defers order completion when non-Kunaki items are present.
 - **Retry Queue** -- Admin page listing failed submissions with error details, attempt counts, and one-click retry buttons. Per-order retry on the order edit page.
 - **HPOS Compatible** -- Declares compatibility with WooCommerce High-Performance Order Storage.
@@ -68,13 +68,18 @@ This plugin addresses these concerns through atomic locking, idempotent submissi
 | Setting | Description |
 |---------|-------------|
 | Kunaki Email | Your Kunaki publisher account email |
-| Password | Your Kunaki account password (encrypted at rest) |
+| Password | Your Kunaki account password (encrypted at rest, never shown after saving; leave blank to keep the saved one) |
 | Mode | `Test` (no real orders manufactured) or `Live` (production) |
 | Sync Interval | How often to poll Kunaki for status updates (default: 15 min, range: 5--1440 min) |
 | Max Retry Attempts | Maximum total attempts for a failed submission before requiring manual intervention (default: 3, range: 1--10) |
 | Debug Logging | Log full API requests/responses (credentials redacted) to WooCommerce > Status > Logs |
 | Failure Threshold | Number of consecutive API failures before the circuit breaker trips (default: 5, range: 2--20) |
 | Cooldown Period | Minutes to wait before allowing a probe request after the circuit trips (default: 5, range: 1--60 min) |
+| Remove Data on Uninstall | Also delete Kunaki order IDs, tracking details, and product IDs when the plugin is deleted (default: off, so order history is kept) |
+
+### Shipping Countries
+
+Kunaki only ships to the [countries on its list](https://kunaki.com/XMLService.htm), about 45 of WooCommerce's 250. Customers elsewhere see WooCommerce's "no shipping options" message, because Kunaki returns no options for them. To avoid that, limit **WooCommerce > Settings > General > Selling location(s)** or your shipping zones to those countries.
 
 ## Architecture Overview
 
@@ -97,7 +102,7 @@ includes/
   class-kunaki-cli-command.php           WP-CLI commands (bulk status sync)
   class-kunaki-logger.php                Structured JSON log wrapper with debug gating
   encryption.php                         AES-256-GCM encrypt/decrypt helpers
-uninstall.php                            Option cleanup on plugin deletion
+uninstall.php                            Cleanup on plugin deletion (order and product data only if opted in)
 ```
 
 ### Event-Driven Order Submission
@@ -156,8 +161,8 @@ When the Kunaki API returns an error or the HTTP request fails, the plugin recor
 When the Kunaki API suffers sustained outages, the circuit breaker prevents the plugin from hammering the endpoint with requests that will time out. It tracks consecutive infrastructure failures (HTTP errors, non-200 status codes, XML parse errors) across all API callers — order submission, status sync, and shipping rate lookups.
 
 - **Closed** (normal): all requests proceed. A counter tracks consecutive failures.
-- **Open** (tripped): after the configured failure threshold (default: 5), all API calls return immediately with a `WP_Error`. Cron handlers (retry queue, status sync) break out of their batch loops as soon as they detect the open circuit, avoiding pointless lock churn. An admin notice alerts the store owner.
-- **Half-open** (probe): after the cooldown period (default: 5 minutes), one request is allowed through. If it succeeds, the circuit closes. If it fails, the circuit re-opens for another cooldown period.
+- **Open** (tripped): after the configured failure threshold (default: 5), all API calls return immediately with a `WP_Error`. Cron handlers (retry queue, status sync) stop their batch loops until the cooldown has passed, avoiding pointless lock churn. An admin notice alerts the store owner.
+- **Half-open** (probe): after the cooldown period (default: 5 minutes), one request is allowed through. Cron handlers send it too, so a store with no checkout traffic still recovers. An atomic claim ensures concurrent requests can't all probe at once. If it succeeds, the circuit closes. If it fails, the circuit re-opens for another cooldown period.
 
 API business logic errors (Kunaki `ErrorCode != 0`) do not count toward the threshold — they indicate the API is responding, not that it's down.
 
@@ -175,7 +180,7 @@ All critical state transitions are deterministic and replay-safe.
 
 The Kunaki password is encrypted using AES-256-GCM before storage in `wp_options`. The encryption key is derived from WordPress's `AUTH_SALT` via SHA-256. Each encryption generates a fresh 12-byte random nonce. The stored value is `base64(nonce || tag || ciphertext)`.
 
-If decryption fails (typically after salt rotation during site migration), the plugin sets a persistent flag and displays an admin notice prompting the user to re-enter their password.
+If decryption fails (typically after salt rotation during site migration), the plugin sets a persistent flag and displays an admin notice prompting the user to re-enter their password. The flag clears itself if the password can be decrypted again, for example after the previous salts are restored.
 
 Encryption and decryption are applied transparently via `pre_update_option` and `option_{name}` filters. No plaintext password is stored in the database at any point after initial save.
 
@@ -183,7 +188,7 @@ Encryption and decryption are applied transparently via `pre_update_option` and 
 
 - Credentials appear in API payloads only for authenticated operations (order submission and status polling). Shipping rate lookups are unauthenticated.
 - All API request/response logging automatically redacts `<UserId>` and `<Password>` XML elements before writing to the WooCommerce log.
-- The settings page renders the password field as `type="password"`.
+- The settings page never sends the saved password to the browser. The field is always blank, and submitting it blank keeps the saved password.
 
 ## Testing Strategy
 

@@ -110,9 +110,8 @@ class Kunaki_Dashboard_Widget {
 	/**
 	 * Query live order counts from the database.
 	 *
-	 * Uses only flat meta_query arrays (no nested relation => 'OR') for
-	 * reliable behaviour with both the legacy post-meta store and HPOS
-	 * custom order tables.
+	 * Uses top-level meta_key/meta_value args, not meta_query: WooCommerce
+	 * silently ignores meta_query on order queries unless HPOS is enabled.
 	 *
 	 * "Action needed" and "Retrying" match exactly what the Kunaki Failures
 	 * page lists, since both link there.
@@ -123,10 +122,9 @@ class Kunaki_Dashboard_Widget {
 		// All submitted processing orders.
 		/** @var int[] $submitted */
 		$submitted = wc_get_orders( array(
-			'status'     => 'processing',
-			'meta_query' => array(
-				array( 'key' => Kunaki_Order_Fulfillment::META_KUNAKI_SUBMITTED, 'value' => 'yes' ),
-			),
+			'status'       => 'processing',
+			'meta_key'     => Kunaki_Order_Fulfillment::META_KUNAKI_SUBMITTED,
+			'meta_value'   => 'yes',
 			'limit'  => -1,
 			'return' => 'ids',
 		) );
@@ -134,10 +132,9 @@ class Kunaki_Dashboard_Widget {
 		// Shipped but still processing (mixed carts needing manual completion).
 		/** @var int[] $shipped */
 		$shipped = wc_get_orders( array(
-			'status'     => 'processing',
-			'meta_query' => array(
-				array( 'key' => '_kunaki_order_status', 'value' => 'SHIPPED' ),
-			),
+			'status'       => 'processing',
+			'meta_key'     => '_kunaki_order_status',
+			'meta_value'   => 'SHIPPED',
 			'limit'  => -1,
 			'return' => 'ids',
 		) );
@@ -145,10 +142,9 @@ class Kunaki_Dashboard_Widget {
 		// Exhausted retries.
 		/** @var int[] $exhausted */
 		$exhausted = wc_get_orders( array(
-			'status'     => 'processing',
-			'meta_query' => array(
-				array( 'key' => Kunaki_Order_Fulfillment::META_FULFILLMENT_EXHAUSTED, 'compare' => 'EXISTS' ),
-			),
+			'status'       => 'processing',
+			'meta_key'     => Kunaki_Order_Fulfillment::META_FULFILLMENT_EXHAUSTED,
+			'meta_compare' => 'EXISTS',
 			'limit'  => -1,
 			'return' => 'ids',
 		) );
@@ -157,10 +153,9 @@ class Kunaki_Dashboard_Widget {
 		// processing for resubmission.
 		/** @var int[] $declined */
 		$declined = wc_get_orders( array(
-			'status'     => array( 'processing', 'on-hold' ),
-			'meta_query' => array(
-				array( 'key' => Kunaki_Order_Fulfillment::META_KUNAKI_STATUS, 'value' => 'DECLINED' ),
-			),
+			'status'       => array( 'processing', 'on-hold' ),
+			'meta_key'     => Kunaki_Order_Fulfillment::META_KUNAKI_STATUS,
+			'meta_value'   => 'DECLINED',
 			'limit'  => -1,
 			'return' => 'ids',
 		) );
@@ -169,10 +164,9 @@ class Kunaki_Dashboard_Widget {
 		// Computed via array_diff — HPOS NOT EXISTS meta queries can return false positives.
 		/** @var int[] $with_error */
 		$with_error = wc_get_orders( array(
-			'status'     => 'processing',
-			'meta_query' => array(
-				array( 'key' => Kunaki_Order_Fulfillment::META_FULFILLMENT_ERROR, 'compare' => 'EXISTS' ),
-			),
+			'status'       => 'processing',
+			'meta_key'     => Kunaki_Order_Fulfillment::META_FULFILLMENT_ERROR,
+			'meta_compare' => 'EXISTS',
 			'limit'  => -1,
 			'return' => 'ids',
 		) );
