@@ -6,6 +6,13 @@ class Kunaki_Circuit_Breaker {
 	const OPTION_KEY = 'kunaki_wc_circuit_breaker';
 
 	/**
+	 * How long one probe holds the half-open state, in seconds. Longer than the
+	 * API timeouts, so a probe that crashed without reporting can't block
+	 * recovery but a slow one isn't joined by others.
+	 */
+	const PROBE_TIMEOUT = 60;
+
+	/**
 	 * Error codes that indicate infrastructure failure (trip the circuit).
 	 * API business logic errors (kunaki_api_error) are excluded — those
 	 * mean the API is responding correctly to a bad request.
@@ -22,38 +29,92 @@ class Kunaki_Circuit_Breaker {
 	 * @return true|WP_Error True if allowed, WP_Error if circuit is open.
 	 */
 	public function pre_request() {
-		$state = $this->get_state();
+		$raw   = get_option( self::OPTION_KEY, '' );
+		$state = $this->decode_state( $raw );
 
 		if ( 'closed' === $state['state'] ) {
 			return true;
 		}
 
-		if ( 'open' === $state['state'] ) {
-			$cooldown = absint( get_option( 'kunaki_wc_circuit_cooldown', 5 ) ) * MINUTE_IN_SECONDS;
-			if ( $cooldown < MINUTE_IN_SECONDS ) {
-				$cooldown = 5 * MINUTE_IN_SECONDS;
-			}
-			$elapsed = time() - $state['opened_at'];
+		$wait = $this->seconds_until_probe( $state );
 
-			if ( $elapsed >= $cooldown ) {
-				$state['state'] = 'half_open';
-				$this->save_state( $state );
-				Kunaki_Logger::info( 'Circuit breaker: open -> half_open (allowing probe request).' );
-				return true;
-			}
-
-			return new \WP_Error(
-				'kunaki_circuit_open',
-				sprintf(
-					/* translators: %d: seconds until next retry */
-					__( 'Kunaki API circuit breaker is open. Next retry in %d seconds.', 'kunaki-woocommerce' ),
-					$cooldown - $elapsed
-				)
-			);
+		// Only one request may probe. Others would each wait out a full API
+		// timeout against a service that is probably still down — at checkout,
+		// that's every customer.
+		if ( 0 === $wait && $this->claim_probe( $raw, $state ) ) {
+			Kunaki_Logger::info( 'Circuit breaker: half_open (allowing probe request).' );
+			return true;
 		}
 
-		// half_open: allow the probe through.
-		return true;
+		return new \WP_Error(
+			'kunaki_circuit_open',
+			sprintf(
+				/* translators: %d: seconds until next retry */
+				__( 'Kunaki API circuit breaker is open. Next retry in %d seconds.', 'kunaki-woocommerce' ),
+				max( $wait, 1 )
+			)
+		);
+	}
+
+	/**
+	 * Whether a request could currently go through, without claiming the probe.
+	 *
+	 * Batch jobs check this rather than the raw state: stopping whenever the
+	 * state is "open" would mean they never probe, and a store with no checkout
+	 * traffic would stay paused until someone intervened.
+	 *
+	 * @return bool
+	 */
+	public function allows_request() {
+		$state = $this->get_state();
+		return 'closed' === $state['state'] || 0 === $this->seconds_until_probe( $state );
+	}
+
+	/**
+	 * Seconds until a probe may be sent. 0 if one may be sent now.
+	 *
+	 * @param array $state Circuit state (open or half_open).
+	 * @return int
+	 */
+	private function seconds_until_probe( $state ) {
+		if ( 'half_open' === $state['state'] ) {
+			return max( 0, self::PROBE_TIMEOUT - ( time() - $state['probe_at'] ) );
+		}
+
+		$cooldown = absint( get_option( 'kunaki_wc_circuit_cooldown', 5 ) ) * MINUTE_IN_SECONDS;
+		if ( $cooldown < MINUTE_IN_SECONDS ) {
+			$cooldown = 5 * MINUTE_IN_SECONDS;
+		}
+		return max( 0, $cooldown - ( time() - $state['opened_at'] ) );
+	}
+
+	/**
+	 * Atomically claim the probe. Exactly one concurrent caller wins.
+	 *
+	 * The update only matches if the stored state is unchanged since it was read,
+	 * so a second process that read the same state updates no rows.
+	 *
+	 * @param string $raw   Stored option value the caller's decision was based on.
+	 * @param array  $state That value, decoded.
+	 * @return bool
+	 */
+	private function claim_probe( $raw, $state ) {
+		global $wpdb;
+
+		$state['state']    = 'half_open';
+		$state['probe_at'] = time();
+
+		$claimed = $wpdb->update(
+			$wpdb->options,
+			array( 'option_value' => wp_json_encode( $state ) ),
+			array(
+				'option_name'  => self::OPTION_KEY,
+				'option_value' => $raw,
+			)
+		);
+		wp_cache_delete( self::OPTION_KEY, 'options' );
+
+		return 1 === $claimed;
 	}
 
 	/**
@@ -77,14 +138,23 @@ class Kunaki_Circuit_Breaker {
 	 * @return array
 	 */
 	public function get_state() {
+		return $this->decode_state( get_option( self::OPTION_KEY, '' ) );
+	}
+
+	/**
+	 * Decode a stored circuit state.
+	 *
+	 * @param mixed $raw Stored option value.
+	 * @return array
+	 */
+	private function decode_state( $raw ) {
 		$default = array(
 			'state'           => 'closed',
 			'failure_count'   => 0,
 			'last_failure_at' => 0,
 			'opened_at'       => 0,
+			'probe_at'        => 0,
 		);
-
-		$raw = get_option( self::OPTION_KEY, '' );
 
 		if ( empty( $raw ) ) {
 			return $default;

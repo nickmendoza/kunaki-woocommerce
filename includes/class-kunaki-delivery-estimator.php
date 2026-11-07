@@ -70,10 +70,9 @@ class Kunaki_Delivery_Estimator {
 	 */
 	private function compute_manufacturing_stats() {
 		$orders = wc_get_orders( array(
-			'meta_query' => array(
-				array( 'key' => self::META_SUBMITTED_AT, 'compare' => 'EXISTS' ),
-				array( 'key' => self::META_SHIPPED_AT, 'compare' => 'EXISTS' ),
-			),
+			// Orders missing the submitted timestamp are skipped below.
+			'meta_key'     => self::META_SHIPPED_AT,
+			'meta_compare' => 'EXISTS',
 			'limit'   => self::MAX_SAMPLE_SIZE,
 			'orderby' => 'date',
 			'order'   => 'DESC',

@@ -51,10 +51,11 @@ function update_option( string $key, $value, $autoload = null ): bool { return t
 function delete_option( string $key ): bool { return true; }
 function get_post_meta( int $post_id, string $key = '', bool $single = false ) { return ''; }
 function update_post_meta( int $post_id, string $key, $value ): bool { return true; }
+function delete_post_meta( int $post_id, string $key ): bool { return true; }
 function get_transient( string $key ) { return false; }
 function set_transient( string $key, $value, int $expiration = 0 ): bool { return true; }
 function delete_transient( string $key ): bool { return true; }
-function delete_site_transient( string $key ): bool { return true; }
+function wp_cache_delete( string $key, string $group = '' ): bool { return true; }
 function wp_remote_post( string $url, array $args = [] ) { return []; }
 function wp_remote_retrieve_response_code( $response ): int { return 200; }
 function wp_remote_retrieve_body( $response ): string { return ''; }
@@ -111,6 +112,10 @@ function wp_add_dashboard_widget( string $widget_id, string $widget_name, callab
 /** @return array<int|string, mixed> */
 function wp_list_pluck( array $list, string $field ): array { return array_column( $list, $field ); }
 
+class WP_Post {
+	public int $ID = 0;
+}
+
 // WP-CLI stub.
 class WP_CLI {
 	/** @param mixed $message */
@@ -135,10 +140,16 @@ class WooCommerce {
 	/** @var WC_Cart|null */
 	public $cart;
 	public function __construct() { $this->countries = new WC_Countries(); }
+	public function shipping(): WC_Shipping { return new WC_Shipping(); }
 }
 
 class WC_Cart {
 	public function get_cart(): array { return []; }
+	public function calculate_shipping(): array { return []; }
+}
+
+class WC_Shipping {
+	public function get_packages(): array { return []; }
 }
 
 class WC_Countries {
@@ -212,6 +223,7 @@ class WC_Order {
 
 class WC_Order_Item_Product {
 	public function get_product_id(): int { return 0; }
+	public function get_variation_id(): int { return 0; }
 	public function get_quantity(): int { return 0; }
 }
 

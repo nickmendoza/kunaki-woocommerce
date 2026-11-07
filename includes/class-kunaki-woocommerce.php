@@ -37,6 +37,8 @@ class Kunaki_WooCommerce {
 		add_filter( 'woocommerce_package_rates', array( $this, 'filter_package_rates' ), 10, 2 );
 		add_filter( 'woocommerce_no_shipping_available_html', array( $this, 'rates_unavailable_message' ) );
 		add_filter( 'woocommerce_cart_no_shipping_available_html', array( $this, 'rates_unavailable_message' ) );
+		add_filter( 'render_block_woocommerce/cart', array( $this, 'block_rates_unavailable_notice' ) );
+		add_filter( 'render_block_woocommerce/checkout', array( $this, 'block_rates_unavailable_notice' ) );
 
 		// Settings tab.
 		add_filter( 'woocommerce_get_settings_pages', array( $this, 'add_settings_page' ) );
@@ -140,7 +142,7 @@ class Kunaki_WooCommerce {
 			$non_kunaki_items = array();
 
 			foreach ( $package['contents'] as $key => $item ) {
-				if ( Kunaki_Product_Meta::is_kunaki_product( $item['product_id'] ) ) {
+				if ( '' !== Kunaki_Product_Meta::get_kunaki_id_for_cart_item( $item ) ) {
 					$kunaki_items[ $key ] = $item;
 				} else {
 					$non_kunaki_items[ $key ] = $item;
@@ -190,7 +192,7 @@ class Kunaki_WooCommerce {
 	 */
 	private function package_has_kunaki_items( $package ) {
 		foreach ( $package['contents'] as $item ) {
-			if ( Kunaki_Product_Meta::is_kunaki_product( $item['product_id'] ) ) {
+			if ( '' !== Kunaki_Product_Meta::get_kunaki_id_for_cart_item( $item ) ) {
 				return true;
 			}
 		}
@@ -211,11 +213,38 @@ class Kunaki_WooCommerce {
 		}
 		$cart = function_exists( 'WC' ) && WC()->cart ? WC()->cart->get_cart() : array();
 		foreach ( $cart as $item ) {
-			if ( Kunaki_Product_Meta::is_kunaki_product( $item['product_id'] ) ) {
+			if ( '' !== Kunaki_Product_Meta::get_kunaki_id_for_cart_item( $item ) ) {
 				return esc_html__( 'Shipping rates for discs are temporarily unavailable. Please try again in a few minutes.', 'kunaki-woocommerce' );
 			}
 		}
 		return $html;
+	}
+
+	/**
+	 * Show the outage message above the cart and checkout blocks.
+	 *
+	 * The blocks don't use the classic no-shipping filters: their message is
+	 * built into WooCommerce's JavaScript. It's only shown when a disc package
+	 * really has no rates, because rates cached before the outage still work.
+	 *
+	 * @param string $block_content Rendered block HTML.
+	 * @return string
+	 */
+	public function block_rates_unavailable_notice( $block_content ) {
+		$message = $this->rates_unavailable_message( '' );
+		if ( '' === $message ) {
+			return $block_content;
+		}
+
+		WC()->cart->calculate_shipping();
+
+		foreach ( WC()->shipping()->get_packages() as $package ) {
+			if ( empty( $package['rates'] ) && $this->package_has_kunaki_items( $package ) ) {
+				return '<div class="wc-block-components-notice-banner is-info" role="status"><div class="wc-block-components-notice-banner__content">' . $message . '</div></div>' . $block_content;
+			}
+		}
+
+		return $block_content;
 	}
 
 	/**
@@ -231,7 +260,7 @@ class Kunaki_WooCommerce {
 		$has_non_kunaki = false;
 
 		foreach ( $package['contents'] as $item ) {
-			if ( Kunaki_Product_Meta::is_kunaki_product( $item['product_id'] ) ) {
+			if ( '' !== Kunaki_Product_Meta::get_kunaki_id_for_cart_item( $item ) ) {
 				$has_kunaki = true;
 			} else {
 				$has_non_kunaki = true;

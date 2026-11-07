@@ -37,20 +37,17 @@ class Kunaki_Retry_Queue {
 
 		$queries = array(
 			$base + array(
-				'meta_query' => array(
-					array( 'key' => Kunaki_Order_Fulfillment::META_FULFILLMENT_ERROR, 'compare' => 'EXISTS' ),
-				),
+				'meta_key'     => Kunaki_Order_Fulfillment::META_FULFILLMENT_ERROR,
+				'meta_compare' => 'EXISTS',
 			),
 			$base + array(
-				'meta_query' => array(
-					array( 'key' => Kunaki_Order_Fulfillment::META_FULFILLMENT_EXHAUSTED, 'value' => 'yes' ),
-				),
+				'meta_key'     => Kunaki_Order_Fulfillment::META_FULFILLMENT_EXHAUSTED,
+				'meta_value'   => 'yes',
 			),
 			array(
-				'status'     => array( 'processing', 'on-hold' ),
-				'meta_query' => array(
-					array( 'key' => Kunaki_Order_Fulfillment::META_KUNAKI_STATUS, 'value' => 'DECLINED' ),
-				),
+				'status'       => array( 'processing', 'on-hold' ),
+				'meta_key'     => Kunaki_Order_Fulfillment::META_KUNAKI_STATUS,
+				'meta_value'   => 'DECLINED',
 			) + $base,
 		);
 

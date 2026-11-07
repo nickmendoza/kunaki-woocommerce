@@ -2,7 +2,7 @@
 Contributors: mobilecodemedia
 Tags: kunaki, woocommerce, fulfillment, cd, shipping
 Requires at least: 5.8
-Tested up to: 6.9
+Tested up to: 7.1
 Stable tag: 1.3.4
 Requires PHP: 7.4
 License: GPLv2 or later

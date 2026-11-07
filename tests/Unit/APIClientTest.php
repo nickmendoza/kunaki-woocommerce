@@ -310,7 +310,9 @@ class APIClientTest extends KunakiTestCase {
 	public function test_redact_credentials() {
 		$client = new Kunaki_API_Client( 'u', 'p', 'TEST' );
 		$ref    = new \ReflectionMethod( Kunaki_API_Client::class, 'redact_credentials' );
-		$ref->setAccessible( true );
+		if ( PHP_VERSION_ID < 80100 ) {
+			$ref->setAccessible( true );
+		}
 
 		$xml    = '<Order><UserId>me@example.com</UserId><Password>s3cr3t</Password><Mode>LIVE</Mode></Order>';
 		$result = $ref->invoke( $client, $xml );
@@ -455,6 +457,24 @@ class APIClientTest extends KunakiTestCase {
 		$this->assertSame( 'Germany', Kunaki_API_Client::get_country_name( 'DE', $file ) );
 
 		unlink( $file );
+	}
+
+	/**
+	 * @dataProvider kunaki_spelling_provider
+	 */
+	public function test_get_country_name_uses_kunaki_spelling( $code, $expected ) {
+		// Must not depend on WooCommerce's spelling at all.
+		Functions\expect( 'WC' )->never();
+
+		$this->assertSame( $expected, Kunaki_API_Client::get_country_name( $code, '/nonexistent/countries.php' ) );
+	}
+
+	public function kunaki_spelling_provider() {
+		return array(
+			'Türkiye' => array( 'TR', 'Turkey' ),
+			'Vatican' => array( 'VA', 'Vatican City' ),
+			'Czechia' => array( 'CZ', 'Czech Republic' ),
+		);
 	}
 
 	public function test_get_country_name_strips_code_from_fallback_list() {

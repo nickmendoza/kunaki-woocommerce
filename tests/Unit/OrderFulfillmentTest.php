@@ -311,13 +311,88 @@ class OrderFulfillmentTest extends KunakiTestCase {
 		$this->fulfillment->handle_order_processing( 100, $order );
 	}
 
+	public function test_submission_uses_variation_kunaki_id() {
+		$item = Mockery::mock( 'WC_Order_Item_Product' );
+		$item->shouldReceive( 'get_product_id' )->andReturn( 42 );
+		$item->shouldReceive( 'get_variation_id' )->andReturn( 43 );
+		$item->shouldReceive( 'get_quantity' )->andReturn( 1 );
+
+		$order = $this->create_submittable_order( array( $item ) );
+
+		Functions\when( 'get_post_meta' )->alias( function ( $id ) {
+			return array( 42 => 'PXPARENT01', 43 => 'PXVARIANT1' )[ $id ] ?? '';
+		} );
+
+		Functions\when( 'get_option' )->alias( function ( $key, $default = '' ) {
+			return $default;
+		} );
+
+		$sent = '';
+		$xml  = '<Response><ErrorCode>0</ErrorCode><OrderId>KUN1</OrderId></Response>';
+		Functions\when( 'wp_remote_post' )->alias( function ( $url, $args ) use ( &$sent, $xml ) {
+			$sent = $args['body'];
+			return array( 'body' => $xml );
+		} );
+		Functions\when( 'wp_remote_retrieve_response_code' )->justReturn( 200 );
+		Functions\when( 'wp_remote_retrieve_body' )->justReturn( $xml );
+		$this->setup_shipping_methods_on_order( $order );
+		$this->setup_address_on_order( $order, 'US', 'CA' );
+		$order->shouldIgnoreMissing();
+
+		$this->fulfillment->handle_order_processing( 100, $order );
+
+		$this->assertStringContainsString( 'PXVARIANT1', $sent );
+		$this->assertStringNotContainsString( 'PXPARENT01', $sent );
+	}
+
+	public function test_deactivation_hands_queued_orders_to_retry_queue() {
+		$action = Mockery::mock( 'ActionScheduler_Action' );
+		$action->shouldReceive( 'get_args' )->andReturn( array( 'order_id' => 100 ) );
+
+		$order = Mockery::mock( 'WC_Order' );
+		$order->shouldReceive( 'get_id' )->andReturn( 100 );
+		$order->shouldReceive( 'get_status' )->andReturn( 'processing' );
+		$order->shouldReceive( 'get_meta' )->with( Kunaki_Order_Fulfillment::META_KUNAKI_SUBMITTED )->andReturn( '' );
+		$order->shouldReceive( 'get_meta' )->with( Kunaki_Order_Fulfillment::META_FULFILLMENT_ATTEMPTS )->andReturn( '' );
+		$order->shouldReceive( 'update_meta_data' )->with( Kunaki_Order_Fulfillment::META_FULFILLMENT_FAILED, Mockery::type( 'string' ) )->once();
+		$order->shouldReceive( 'update_meta_data' )->with( Kunaki_Order_Fulfillment::META_FULFILLMENT_ERROR, Mockery::pattern( '/deactivated/' ) )->once();
+		// Not Kunaki's fault, so it must not use up a retry attempt.
+		$order->shouldNotReceive( 'update_meta_data' )->with( Kunaki_Order_Fulfillment::META_FULFILLMENT_ATTEMPTS, Mockery::any() );
+		$order->shouldReceive( 'save_meta_data' )->once();
+		$order->shouldReceive( 'add_order_note' )->once();
+
+		Functions\when( 'wc_get_order' )->justReturn( $order );
+		Functions\expect( 'as_get_scheduled_actions' )->once()->andReturn( array( $action ) );
+		// Hook only: with a group too, Action Scheduler only cancels jobs with no args.
+		Functions\expect( 'as_unschedule_all_actions' )->once()->with( 'kunaki_wc_submit_order' );
+
+		$this->fulfillment->park_queued_submissions();
+	}
+
+	public function test_deactivation_ignores_orders_not_needing_submission() {
+		$action = Mockery::mock( 'ActionScheduler_Action' );
+		$action->shouldReceive( 'get_args' )->andReturn( array( 'order_id' => 100 ) );
+
+		$cancelled = Mockery::mock( 'WC_Order' );
+		$cancelled->shouldReceive( 'get_status' )->andReturn( 'cancelled' );
+		$cancelled->shouldNotReceive( 'update_meta_data' );
+
+		Functions\when( 'wc_get_order' )->justReturn( $cancelled );
+		Functions\expect( 'as_get_scheduled_actions' )->once()->andReturn( array( $action ) );
+		Functions\expect( 'as_unschedule_all_actions' )->once();
+
+		$this->fulfillment->park_queued_submissions();
+	}
+
 	public function test_mixed_cart_sets_all_items_no() {
 		$item_kunaki = Mockery::mock( 'WC_Order_Item_Product' );
 		$item_kunaki->shouldReceive( 'get_product_id' )->andReturn( 42 );
+		$item_kunaki->shouldReceive( 'get_variation_id' )->andReturn( 0 );
 		$item_kunaki->shouldReceive( 'get_quantity' )->andReturn( 1 );
 
 		$item_other = Mockery::mock( 'WC_Order_Item_Product' );
 		$item_other->shouldReceive( 'get_product_id' )->andReturn( 99 );
+		$item_other->shouldReceive( 'get_variation_id' )->andReturn( 0 );
 		$item_other->shouldReceive( 'get_quantity' )->andReturn( 1 );
 
 		$order = $this->create_submittable_order( array( $item_kunaki, $item_other ) );
@@ -376,10 +451,12 @@ class OrderFulfillmentTest extends KunakiTestCase {
 
 		$item1 = Mockery::mock( 'WC_Order_Item_Product' );
 		$item1->shouldReceive( 'get_product_id' )->andReturn( 42 );
+		$item1->shouldReceive( 'get_variation_id' )->andReturn( 0 );
 		$item1->shouldReceive( 'get_quantity' )->andReturn( 2 );
 
 		$item2 = Mockery::mock( 'WC_Order_Item_Product' );
 		$item2->shouldReceive( 'get_product_id' )->andReturn( 43 );
+		$item2->shouldReceive( 'get_variation_id' )->andReturn( 0 );
 		$item2->shouldReceive( 'get_quantity' )->andReturn( 3 );
 
 		$order = $this->create_submittable_order( array( $item1, $item2 ) );
@@ -491,6 +568,7 @@ class OrderFulfillmentTest extends KunakiTestCase {
 		if ( null === $items ) {
 			$item = Mockery::mock( 'WC_Order_Item_Product' );
 			$item->shouldReceive( 'get_product_id' )->andReturn( 42 );
+			$item->shouldReceive( 'get_variation_id' )->andReturn( 0 );
 			$item->shouldReceive( 'get_quantity' )->andReturn( 1 );
 			$items = array( $item );
 		}
@@ -571,6 +649,7 @@ class OrderFulfillmentTest extends KunakiTestCase {
 
 		$item = Mockery::mock( 'WC_Order_Item_Product' );
 		$item->shouldReceive( 'get_product_id' )->andReturn( 42 );
+		$item->shouldReceive( 'get_variation_id' )->andReturn( 0 );
 		$item->shouldReceive( 'get_quantity' )->andReturn( 1 );
 
 		$order = Mockery::mock( 'WC_Order' );
@@ -629,6 +708,7 @@ class OrderFulfillmentTest extends KunakiTestCase {
 
 		$item = Mockery::mock( 'WC_Order_Item_Product' );
 		$item->shouldReceive( 'get_product_id' )->andReturn( 42 );
+		$item->shouldReceive( 'get_variation_id' )->andReturn( 0 );
 		$item->shouldReceive( 'get_quantity' )->andReturn( 1 );
 
 		$order = Mockery::mock( 'WC_Order' );
@@ -869,6 +949,7 @@ class OrderFulfillmentTest extends KunakiTestCase {
 
 		$item = Mockery::mock( 'WC_Order_Item_Product' );
 		$item->shouldReceive( 'get_product_id' )->andReturn( 42 );
+		$item->shouldReceive( 'get_variation_id' )->andReturn( 0 );
 		$item->shouldReceive( 'get_quantity' )->andReturn( 1 );
 
 		$shipping_item = Mockery::mock( 'WC_Order_Item_Shipping' );
@@ -1032,6 +1113,7 @@ class OrderFulfillmentTest extends KunakiTestCase {
 
 		$item = Mockery::mock( 'WC_Order_Item_Product' );
 		$item->shouldReceive( 'get_product_id' )->andReturn( 42 );
+		$item->shouldReceive( 'get_variation_id' )->andReturn( 0 );
 		$item->shouldReceive( 'get_quantity' )->andReturn( 1 );
 
 		$order = Mockery::mock( 'WC_Order' );

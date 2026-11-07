@@ -55,7 +55,9 @@ class WooCommerceBootstrapTest extends KunakiTestCase {
 
 		$ref = new \ReflectionClass( Kunaki_WooCommerce::class );
 		$prop = $ref->getProperty( 'instance' );
-		$prop->setAccessible( true );
+		if ( PHP_VERSION_ID < 80100 ) {
+			$prop->setAccessible( true );
+		}
 		$prop->setValue( null, null );
 
 		Kunaki_WooCommerce::instance();
@@ -166,7 +168,9 @@ class WooCommerceBootstrapTest extends KunakiTestCase {
 		// Reset singleton for a clean test.
 		$ref = new \ReflectionClass( Kunaki_WooCommerce::class );
 		$prop = $ref->getProperty( 'instance' );
-		$prop->setAccessible( true );
+		if ( PHP_VERSION_ID < 80100 ) {
+			$prop->setAccessible( true );
+		}
 		$prop->setValue( null, null );
 
 		return Kunaki_WooCommerce::instance();

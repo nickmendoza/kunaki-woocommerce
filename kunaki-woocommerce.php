@@ -13,7 +13,7 @@
  * Requires at least: 5.8
  * Requires PHP: 7.4
  * WC requires at least: 6.0
- * WC tested up to: 9.0
+ * WC tested up to: 11.2
  */
 
 defined( 'ABSPATH' ) || exit;
@@ -24,11 +24,16 @@ define( 'KUNAKI_WC_PLUGIN_DIR', plugin_dir_path( __FILE__ ) );
 define( 'KUNAKI_WC_PLUGIN_URL', plugin_dir_url( __FILE__ ) );
 define( 'KUNAKI_WC_PLUGIN_BASENAME', plugin_basename( __FILE__ ) );
 
-// Declare HPOS compatibility.
+// Declare HPOS and cart/checkout blocks compatibility.
 add_action( 'before_woocommerce_init', function () {
 	if ( class_exists( \Automattic\WooCommerce\Utilities\FeaturesUtil::class ) ) {
 		\Automattic\WooCommerce\Utilities\FeaturesUtil::declare_compatibility(
 			'custom_order_tables',
+			__FILE__,
+			true
+		);
+		\Automattic\WooCommerce\Utilities\FeaturesUtil::declare_compatibility(
+			'cart_checkout_blocks',
 			__FILE__,
 			true
 		);
@@ -203,6 +208,9 @@ register_activation_hook( __FILE__, function () {
 
 // Deactivation: unschedule cron and reset circuit breaker.
 register_deactivation_hook( __FILE__, function () {
+	if ( class_exists( 'Kunaki_Order_Fulfillment' ) ) {
+		( new Kunaki_Order_Fulfillment() )->park_queued_submissions();
+	}
 	wp_clear_scheduled_hook( 'kunaki_wc_sync_order_status' );
 	wp_clear_scheduled_hook( 'kunaki_wc_retry_failed_orders' );
 	delete_option( 'kunaki_wc_circuit_breaker' );

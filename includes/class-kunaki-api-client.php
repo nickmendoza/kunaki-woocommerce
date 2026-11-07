@@ -4,6 +4,19 @@ defined( 'ABSPATH' ) || exit;
 class Kunaki_API_Client {
 
 	const ENDPOINT = 'https://kunaki.com/XMLService.ASP';
+
+	/**
+	 * Countries Kunaki ships to, but spells differently from WooCommerce.
+	 *
+	 * An unrecognised name isn't an API error: Kunaki returns success with no
+	 * shipping options, so customers just see "no shipping options". Checked
+	 * against https://kunaki.com/XMLService.htm and the live API.
+	 */
+	const COUNTRY_NAME_OVERRIDES = array(
+		'CZ' => 'Czech Republic', // Some WooCommerce versions use "Czechia".
+		'TR' => 'Turkey',         // WooCommerce uses "Türkiye".
+		'VA' => 'Vatican City',   // WooCommerce uses "Vatican".
+	);
 	const TIMEOUT  = 30;
 
 	/**
@@ -151,6 +164,10 @@ class Kunaki_API_Client {
 	 */
 	public static function get_country_name( $country_code, $countries_file = null ) {
 		static $cache = array();
+
+		if ( isset( self::COUNTRY_NAME_OVERRIDES[ $country_code ] ) ) {
+			return self::COUNTRY_NAME_OVERRIDES[ $country_code ];
+		}
 
 		if ( null === $countries_file && defined( 'WC_PLUGIN_FILE' ) ) {
 			$countries_file = dirname( WC_PLUGIN_FILE ) . '/i18n/countries.php';
