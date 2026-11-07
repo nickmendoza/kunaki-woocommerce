@@ -87,8 +87,10 @@ class CLICommandTest extends KunakiTestCase {
 			->andReturnUsing( function ( $args ) use ( &$call_count ) {
 				$call_count++;
 				if ( 2 === $call_count ) {
-					// sync_all_pending_orders should receive limit=5.
-					$this->assertSame( 5, $args['limit'] );
+					// The sync query fetches all IDs; the limit is applied while
+					// iterating (see OrderStatusSyncTest::test_sync_respects_custom_limit).
+					$this->assertSame( -1, $args['limit'] );
+					$this->assertSame( 'ids', $args['return'] );
 					return array();
 				}
 				return array( 100, 200, 300, 400, 500, 600, 700 );

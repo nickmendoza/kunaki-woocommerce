@@ -21,36 +21,68 @@ class Kunaki_Order_Status_Sync {
 			return;
 		}
 
-		$orders = wc_get_orders( array(
+		// Fetch IDs only (cheap), oldest first, then skip orders whose Kunaki
+		// status is final. Mixed-cart orders stay "processing" after shipping
+		// until an admin completes them; without this skip they would take the
+		// oldest batch slots forever and starve newer orders of status updates.
+		/** @var int[] $order_ids */
+		$order_ids = wc_get_orders( array(
 			'status'       => array( 'processing' ),
 			'meta_key'     => Kunaki_Order_Fulfillment::META_KUNAKI_ORDER_ID,
 			'meta_compare' => 'EXISTS',
-			'limit'        => $limit,
+			'limit'        => -1,
 			'orderby'      => 'date',
 			'order'        => 'ASC',
+			'return'       => 'ids',
 		) );
 
-		if ( empty( $orders ) ) {
+		if ( empty( $order_ids ) ) {
 			Kunaki_Logger::debug( 'No pending orders to sync.' );
 			return;
 		}
 
-		$api = new Kunaki_API_Client();
-		$cb  = new Kunaki_Circuit_Breaker();
+		$api     = new Kunaki_API_Client();
+		$cb      = new Kunaki_Circuit_Breaker();
+		$checked = 0;
 
-		foreach ( $orders as $order ) {
+		foreach ( $order_ids as $order_id ) {
+			if ( $limit > 0 && $checked >= $limit ) {
+				break;
+			}
 			if ( 'open' === $cb->get_state()['state'] ) {
 				Kunaki_Logger::info( 'Circuit breaker is open — stopping sync batch.' );
 				break;
 			}
+			$order = wc_get_order( $order_id );
+			if ( ! $order || $this->is_sync_finished( $order ) ) {
+				continue;
+			}
 			try {
 				$this->sync_single_order( $order, $api );
 			} catch ( \Throwable $e ) {
-				Kunaki_Logger::error( 'Sync failed.', array( 'order_id' => $order->get_id(), 'error' => $e->getMessage() ) );
+				Kunaki_Logger::error( 'Sync failed.', array( 'order_id' => $order_id, 'error' => $e->getMessage() ) );
 			}
+			$checked++;
 		}
 
-		Kunaki_Logger::info( 'Order status sync complete.', array( 'orders_checked' => count( $orders ) ) );
+		Kunaki_Logger::info( 'Order status sync complete.', array( 'orders_checked' => $checked ) );
+	}
+
+	/**
+	 * Whether an order has reached a final Kunaki status and needs no more polling.
+	 *
+	 * SHIPPED and DECLINED never change afterwards. Orders with notes still
+	 * pending from an interrupted sync are not finished — they must be revisited
+	 * so the notes get sent.
+	 *
+	 * @param WC_Order $order WooCommerce order.
+	 * @return bool
+	 */
+	private function is_sync_finished( $order ) {
+		if ( '' !== (string) $order->get_meta( '_kunaki_sync_note_pending' ) ) {
+			return false;
+		}
+		return in_array( $order->get_meta( '_kunaki_order_status' ), array( 'SHIPPED', 'DECLINED' ), true );
 	}
 
 	/**

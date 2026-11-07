@@ -358,13 +358,13 @@ class OrderStatusSyncTest extends KunakiTestCase {
 			->with( Kunaki_Order_Fulfillment::META_KUNAKI_ORDER_ID )
 			->andReturn( 'KUN200' );
 		$order2->shouldReceive( 'get_meta' )
-			->with( '_kunaki_order_status' )->andReturn( 'SHIPPED' );
+			->with( '_kunaki_order_status' )->andReturn( 'PROCESSING' );
 		$order2->shouldReceive( 'get_meta' )
 			->with( '_kunaki_sync_note_pending' )->andReturn( '' );
 
 		$this->mock_wc_get_orders( array( $order1, $order2 ) );
 
-		// First API call throws, second returns unchanged status (SHIPPED).
+		// First API call throws, second returns unchanged status (PROCESSING).
 		$call_count = 0;
 		Functions\expect( 'wp_remote_post' )->twice()
 			->andReturnUsing( function () use ( &$call_count ) {
@@ -373,14 +373,14 @@ class OrderStatusSyncTest extends KunakiTestCase {
 					throw new \RuntimeException( 'Network failure' );
 				}
 				$xml = '<Response><ErrorCode>0</ErrorCode><OrderId>KUN200</OrderId>'
-					. '<OrderStatus>SHIPPED</OrderStatus><TrackingType>NA</TrackingType>'
+					. '<OrderStatus>PROCESSING</OrderStatus><TrackingType>NA</TrackingType>'
 					. '<TrackingId>NA</TrackingId></Response>';
 				return array( 'body' => $xml );
 			} );
 		Functions\expect( 'wp_remote_retrieve_response_code' )->zeroOrMoreTimes()->andReturn( 200 );
 		Functions\expect( 'wp_remote_retrieve_body' )->zeroOrMoreTimes()
 			->andReturn( '<Response><ErrorCode>0</ErrorCode><OrderId>KUN200</OrderId>'
-				. '<OrderStatus>SHIPPED</OrderStatus><TrackingType>NA</TrackingType>'
+				. '<OrderStatus>PROCESSING</OrderStatus><TrackingType>NA</TrackingType>'
 				. '<TrackingId>NA</TrackingId></Response>' );
 
 		// Second order skips (unchanged status), but the point is it was reached.
@@ -442,26 +442,79 @@ class OrderStatusSyncTest extends KunakiTestCase {
 		$this->sync->sync_all_pending_orders();
 	}
 
-	public function test_sync_respects_custom_limit() {
+	public function test_sync_queries_all_order_ids() {
 		Functions\expect( 'wc_get_orders' )->once()
 			->with( Mockery::on( function ( $args ) {
-				return 10 === $args['limit'];
-			} ) )
-			->andReturn( array() );
-
-		$this->sync->sync_all_pending_orders( 10 );
-		$this->addToAssertionCount( 1 );
-	}
-
-	public function test_sync_default_limit_is_50() {
-		Functions\expect( 'wc_get_orders' )->once()
-			->with( Mockery::on( function ( $args ) {
-				return 50 === $args['limit'];
+				return -1 === $args['limit'] && 'ids' === $args['return'] && 'ASC' === $args['order'];
 			} ) )
 			->andReturn( array() );
 
 		$this->sync->sync_all_pending_orders();
 		$this->addToAssertionCount( 1 );
+	}
+
+	public function test_sync_respects_custom_limit() {
+		$orders = array(
+			$this->create_order_mock( 'KUN1', 'PROCESSING' ),
+			$this->create_order_mock( 'KUN2', 'PROCESSING' ),
+			$this->create_order_mock( 'KUN3', 'PROCESSING' ),
+		);
+		$this->mock_wc_get_orders( $orders );
+		$this->mock_api_unchanged( 'PROCESSING', 2 );
+
+		$this->sync->sync_all_pending_orders( 2 );
+	}
+
+	public function test_sync_default_limit_is_50() {
+		$orders = array();
+		for ( $i = 0; $i < 51; $i++ ) {
+			$orders[] = $this->create_order_mock( 'KUN' . $i, 'PROCESSING' );
+		}
+		$this->mock_wc_get_orders( $orders );
+		$this->mock_api_unchanged( 'PROCESSING', 50 );
+
+		$this->sync->sync_all_pending_orders();
+	}
+
+	/**
+	 * Orders at a final Kunaki status (e.g. shipped mixed carts still in
+	 * processing) must be skipped without an API call and must not use up
+	 * batch slots, or they would starve newer orders.
+	 */
+	public function test_sync_skips_final_status_orders_without_using_batch_slots() {
+		$shipped  = $this->create_order_mock( 'KUN1', 'SHIPPED' );
+		$declined = $this->create_order_mock( 'KUN2', 'DECLINED' );
+		$fresh    = $this->create_order_mock( 'KUN3', 'PROCESSING' );
+
+		$this->mock_wc_get_orders( array( $shipped, $declined, $fresh ) );
+		// Limit of 1: the slot must go to the non-final order.
+		$this->mock_api_unchanged( 'PROCESSING', 1 );
+
+		$shipped->shouldNotReceive( 'save' );
+		$declined->shouldNotReceive( 'save' );
+
+		$this->sync->sync_all_pending_orders( 1 );
+	}
+
+	public function test_sync_does_not_skip_final_status_with_pending_notes() {
+		$pending = wp_json_encode( array(
+			array( 'text' => 'Kunaki order shipped! Carrier: USPS, Tracking: 9400111', 'is_customer' => true ),
+		) );
+
+		$order = Mockery::mock( 'WC_Order' );
+		$order->shouldReceive( 'get_id' )->andReturn( 100 );
+		$order->shouldReceive( 'get_meta' )->with( Kunaki_Order_Fulfillment::META_KUNAKI_ORDER_ID )->andReturn( 'KUN123' );
+		$order->shouldReceive( 'get_meta' )->with( '_kunaki_order_status' )->andReturn( 'SHIPPED' );
+		$order->shouldReceive( 'get_meta' )->with( '_kunaki_sync_note_pending' )->andReturn( $pending );
+
+		$this->mock_wc_get_orders( array( $order ) );
+
+		$order->shouldReceive( 'add_order_note' )->with( Mockery::pattern( '/USPS.*9400111/' ), true )->once();
+		$order->shouldReceive( 'delete_meta_data' )->with( '_kunaki_sync_note_pending' )->once();
+		$order->shouldReceive( 'save_meta_data' )->once();
+		Functions\expect( 'wp_remote_post' )->never();
+
+		$this->sync->sync_all_pending_orders();
 	}
 
 	public function test_credentials_invalid_sync_bails_early() {
@@ -559,8 +612,16 @@ class OrderStatusSyncTest extends KunakiTestCase {
 		return $order;
 	}
 
+	/**
+	 * Sync queries order IDs, then loads each with wc_get_order().
+	 * IDs are positional (1-based) so mocks can share a get_id() value.
+	 */
 	private function mock_wc_get_orders( $orders ) {
-		Functions\expect( 'wc_get_orders' )->once()->andReturn( $orders );
+		$ids = empty( $orders ) ? array() : range( 1, count( $orders ) );
+		Functions\expect( 'wc_get_orders' )->once()->andReturn( $ids );
+		Functions\when( 'wc_get_order' )->alias( function ( $id ) use ( $orders ) {
+			return $orders[ $id - 1 ] ?? false;
+		} );
 	}
 
 	private function mock_api_status( $order_id, $status, $tracking_type, $tracking_id ) {
@@ -575,6 +636,14 @@ class OrderStatusSyncTest extends KunakiTestCase {
 		Functions\expect( 'wp_remote_post' )->once()->andReturn( array( 'body' => $xml ) );
 		Functions\expect( 'wp_remote_retrieve_response_code' )->once()->andReturn( 200 );
 		Functions\expect( 'wp_remote_retrieve_body' )->once()->andReturn( $xml );
+	}
+
+	private function mock_api_unchanged( $status, $times ) {
+		$xml = "<Response><ErrorCode>0</ErrorCode><OrderId>X</OrderId><OrderStatus>{$status}</OrderStatus>"
+			. '<TrackingType>NA</TrackingType><TrackingId>NA</TrackingId></Response>';
+		Functions\expect( 'wp_remote_post' )->times( $times )->andReturn( array( 'body' => $xml ) );
+		Functions\expect( 'wp_remote_retrieve_response_code' )->times( $times )->andReturn( 200 );
+		Functions\expect( 'wp_remote_retrieve_body' )->times( $times )->andReturn( $xml );
 	}
 
 	private function mock_wpdb_lock( $acquired = true ) {

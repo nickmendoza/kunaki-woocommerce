@@ -64,6 +64,15 @@ class Kunaki_Dashboard_Widget {
 		echo '<span class="kunaki-count">' . esc_html( (string) $counts['retrying'] ) . '</span>';
 		echo '</li>';
 
+		// Mixed carts: Kunaki shipped the discs, but the order stays processing
+		// until the admin ships the other items and completes it.
+		echo '<li>';
+		echo '<a href="' . esc_url( $orders_url ) . '">';
+		echo esc_html__( 'Discs shipped, rest of order pending', 'kunaki-woocommerce' );
+		echo '</a> ';
+		echo '<span class="kunaki-count">' . esc_html( (string) $counts['ready_to_complete'] ) . '</span>';
+		echo '</li>';
+
 		echo '</ul>';
 
 		$estimator = new Kunaki_Delivery_Estimator();
@@ -84,11 +93,12 @@ class Kunaki_Dashboard_Widget {
 	/**
 	 * Get cached order counts, refreshing from the database if stale.
 	 *
-	 * @return array{fulfilling: int, action_needed: int, retrying: int}
+	 * @return array{fulfilling: int, action_needed: int, retrying: int, ready_to_complete: int}
 	 */
 	public function get_counts() {
 		$cached = get_transient( self::TRANSIENT_KEY );
-		if ( is_array( $cached ) ) {
+		// Ignore caches written by older versions with fewer keys.
+		if ( is_array( $cached ) && isset( $cached['fulfilling'], $cached['action_needed'], $cached['retrying'], $cached['ready_to_complete'] ) ) {
 			return $cached;
 		}
 
@@ -104,7 +114,10 @@ class Kunaki_Dashboard_Widget {
 	 * reliable behaviour with both the legacy post-meta store and HPOS
 	 * custom order tables.
 	 *
-	 * @return array{fulfilling: int, action_needed: int, retrying: int}
+	 * "Action needed" and "Retrying" match exactly what the Kunaki Failures
+	 * page lists, since both link there.
+	 *
+	 * @return array{fulfilling: int, action_needed: int, retrying: int, ready_to_complete: int}
 	 */
 	private function query_counts() {
 		// All submitted processing orders.
@@ -140,6 +153,18 @@ class Kunaki_Dashboard_Widget {
 			'return' => 'ids',
 		) );
 
+		// Declined by Kunaki — on-hold (as sync leaves them) or moved back to
+		// processing for resubmission.
+		/** @var int[] $declined */
+		$declined = wc_get_orders( array(
+			'status'     => array( 'processing', 'on-hold' ),
+			'meta_query' => array(
+				array( 'key' => Kunaki_Order_Fulfillment::META_KUNAKI_STATUS, 'value' => 'DECLINED' ),
+			),
+			'limit'  => -1,
+			'return' => 'ids',
+		) );
+
 		// Failed submissions awaiting automatic retry.
 		// Computed via array_diff — HPOS NOT EXISTS meta queries can return false positives.
 		/** @var int[] $with_error */
@@ -154,9 +179,10 @@ class Kunaki_Dashboard_Widget {
 		$retrying = array_diff( $with_error, $submitted, $exhausted );
 
 		return array(
-			'fulfilling'    => count( array_diff( $submitted, $shipped ) ),
-			'action_needed' => count( array_unique( array_merge( $exhausted, $shipped ) ) ),
-			'retrying'      => count( $retrying ),
+			'fulfilling'        => count( array_diff( $submitted, $shipped, $declined ) ),
+			'action_needed'     => count( array_unique( array_merge( $exhausted, $declined ) ) ),
+			'retrying'          => count( $retrying ),
+			'ready_to_complete' => count( $shipped ),
 		);
 	}
 }

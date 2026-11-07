@@ -4,6 +4,12 @@ defined( 'ABSPATH' ) || exit;
 
 class WC_Shipping_Kunaki extends WC_Shipping_Method {
 
+	/** Transient set while Kunaki rate lookups are failing for infrastructure reasons. */
+	const UNAVAILABLE_TRANSIENT = 'kunaki_wc_rates_unavailable';
+
+	/** How long a failed lookup is cached before trying the API again. */
+	const ERROR_TTL = 2 * MINUTE_IN_SECONDS;
+
 	public function __construct( $instance_id = 0 ) {
 		$this->id                 = 'kunaki_shipping';
 		$this->instance_id        = absint( $instance_id );
@@ -72,7 +78,7 @@ class WC_Shipping_Kunaki extends WC_Shipping_Method {
 		}
 
 		$country_code = $package['destination']['country'];
-		$country      = $this->get_kunaki_country_name( $country_code );
+		$country      = Kunaki_API_Client::get_country_name( $country_code );
 		// Kunaki only accepts state/province for US and CA.
 		$state        = in_array( $country_code, array( 'US', 'CA' ), true )
 			? $package['destination']['state']
@@ -90,11 +96,26 @@ class WC_Shipping_Kunaki extends WC_Shipping_Method {
 		if ( false !== $cached && is_array( $cached ) ) {
 			$options = $cached;
 		} else {
+			// A recent failure for this exact lookup — don't make the customer
+			// wait on another API timeout on every cart refresh.
+			$error_key = 'kunaki_ship_err_' . md5( $country . $state . $postal_code . wp_json_encode( $kunaki_products ) );
+			if ( false !== get_transient( $error_key ) ) {
+				return;
+			}
+
 			$api     = new Kunaki_API_Client();
 			$options = $api->get_shipping_options( $country, $state, $postal_code, array_values( $kunaki_products ) );
 
 			if ( is_wp_error( $options ) ) {
 				Kunaki_Logger::error( 'Shipping calculation failed.', array( 'error' => $options->get_error_message() ) );
+				set_transient( $error_key, 1, self::ERROR_TTL );
+
+				// Outage (not a bad address): tell customers rates are temporarily
+				// unavailable, and make WooCommerce recalculate once it clears.
+				$outage_codes = array_merge( Kunaki_Circuit_Breaker::TRIPPABLE_ERROR_CODES, array( 'kunaki_circuit_open' ) );
+				if ( in_array( $options->get_error_code(), $outage_codes, true ) ) {
+					set_transient( self::UNAVAILABLE_TRANSIENT, time(), self::ERROR_TTL );
+				}
 				return;
 			}
 
@@ -123,18 +144,5 @@ class WC_Shipping_Kunaki extends WC_Shipping_Method {
 				),
 			) );
 		}
-	}
-
-	/**
-	 * Convert WooCommerce ISO country code to Kunaki full country name.
-	 *
-	 * @param string $country_code ISO 3166-1 alpha-2 code.
-	 * @return string Full country name.
-	 */
-	private function get_kunaki_country_name( $country_code ) {
-		$countries = WC()->countries->get_countries();
-		$name      = isset( $countries[ $country_code ] ) ? $countries[ $country_code ] : '';
-		// Strip parenthetical codes like "(US)" that some WooCommerce installs append.
-		return preg_replace( '/\s*\([A-Z]{2}\)$/', '', $name );
 	}
 }

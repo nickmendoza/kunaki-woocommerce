@@ -52,7 +52,7 @@ class DashboardWidgetTest extends KunakiTestCase {
 		Functions\expect( 'get_option' )->zeroOrMoreTimes()->andReturn( '' );
 		Functions\when( 'get_transient' )->justReturn( false );
 		Functions\when( 'set_transient' )->justReturn( true );
-		Functions\expect( 'wc_get_orders' )->times( 5 )->andReturn( array() );
+		Functions\expect( 'wc_get_orders' )->times( 6 )->andReturn( array() );
 		Functions\when( 'admin_url' )->returnArg();
 
 		ob_start();
@@ -71,16 +71,17 @@ class DashboardWidgetTest extends KunakiTestCase {
 		Functions\when( 'set_transient' )->justReturn( true );
 		Functions\when( 'admin_url' )->returnArg();
 
-		// submitted: [1,2,3,4], shipped: [4], exhausted: [10], retrying: [30,31,32,33]
-		// fulfilling = diff([1,2,3,4], [4]) = 3
-		// action_needed = unique(merge([10], [4])) = 2
-		// retrying = 4
+		// submitted: [1,2,3,4,5], shipped: [4], exhausted: [10], declined: [5], retrying: [30,31,32,33]
+		// fulfilling = diff([1,2,3,4,5], [4], [5]) = 3
+		// action_needed = unique(merge([10], [5])) = 2 (same orders the Failures page lists)
+		// retrying = 4, ready_to_complete = 1
 		Functions\expect( 'wc_get_orders' )
-			->times( 5 )
+			->times( 6 )
 			->andReturn(
-				array( 1, 2, 3, 4 ),    // submitted
-				array( 4 ),             // shipped
-				array( 10 ),            // exhausted
+				array( 1, 2, 3, 4, 5 ),  // submitted
+				array( 4 ),              // shipped
+				array( 10 ),             // exhausted
+				array( 5 ),              // declined
 				array( 30, 31, 32, 33 ), // retrying
 				array()                  // estimator (no data)
 			);
@@ -92,6 +93,7 @@ class DashboardWidgetTest extends KunakiTestCase {
 		$this->assertMatchesRegularExpression( '/Fulfilling.*?>3</', $html );
 		$this->assertMatchesRegularExpression( '/Action needed.*?>2</', $html );
 		$this->assertMatchesRegularExpression( '/Retrying.*?>4</', $html );
+		$this->assertMatchesRegularExpression( '/rest of order pending.*?>1</', $html );
 	}
 
 	public function test_render_deduplicates_action_needed() {
@@ -100,13 +102,14 @@ class DashboardWidgetTest extends KunakiTestCase {
 		Functions\when( 'set_transient' )->justReturn( true );
 		Functions\when( 'admin_url' )->returnArg();
 
-		// Order 5 is both exhausted AND shipped — should only count once.
+		// Order 5 is both exhausted AND declined — should only count once.
 		Functions\expect( 'wc_get_orders' )
-			->times( 5 )
+			->times( 6 )
 			->andReturn(
 				array(),        // submitted
-				array( 5 ),    // shipped
-				array( 5, 6 ), // exhausted (5 overlaps with shipped)
+				array(),        // shipped
+				array( 5, 6 ), // exhausted
+				array( 5 ),    // declined (overlaps with exhausted)
 				array(),        // retrying
 				array()         // estimator (no data)
 			);
@@ -123,7 +126,7 @@ class DashboardWidgetTest extends KunakiTestCase {
 		Functions\when( 'admin_url' )->returnArg();
 
 		// Return cached dashboard counts; estimator stats return false (no data).
-		$dashboard_counts = array( 'fulfilling' => 7, 'action_needed' => 1, 'retrying' => 0 );
+		$dashboard_counts = array( 'fulfilling' => 7, 'action_needed' => 1, 'retrying' => 0, 'ready_to_complete' => 2 );
 		Functions\when( 'get_transient' )->alias( function ( $key ) use ( $dashboard_counts ) {
 			if ( Kunaki_Dashboard_Widget::TRANSIENT_KEY === $key ) {
 				return $dashboard_counts;
@@ -140,6 +143,27 @@ class DashboardWidgetTest extends KunakiTestCase {
 		$this->assertMatchesRegularExpression( '/Fulfilling.*?>7</', $html );
 		$this->assertMatchesRegularExpression( '/Action needed.*?>1</', $html );
 		$this->assertMatchesRegularExpression( '/Retrying.*?>0</', $html );
+		$this->assertMatchesRegularExpression( '/rest of order pending.*?>2</', $html );
+	}
+
+	public function test_render_ignores_cache_from_older_version() {
+		Functions\expect( 'get_option' )->zeroOrMoreTimes()->andReturn( '' );
+		Functions\when( 'admin_url' )->returnArg();
+		Functions\when( 'set_transient' )->justReturn( true );
+		// Pre-upgrade cache lacks ready_to_complete — must be recomputed, not used.
+		Functions\when( 'get_transient' )->alias( function ( $key ) {
+			if ( Kunaki_Dashboard_Widget::TRANSIENT_KEY === $key ) {
+				return array( 'fulfilling' => 7, 'action_needed' => 1, 'retrying' => 0 );
+			}
+			return false;
+		} );
+		Functions\expect( 'wc_get_orders' )->times( 6 )->andReturn( array() );
+
+		ob_start();
+		$this->widget->render_widget();
+		$html = ob_get_clean();
+
+		$this->assertMatchesRegularExpression( '/Fulfilling.*?>0</', $html );
 	}
 
 	public function test_render_shows_circuit_breaker_open_warning() {
@@ -156,7 +180,7 @@ class DashboardWidgetTest extends KunakiTestCase {
 		Functions\expect( 'get_option' )->zeroOrMoreTimes()->andReturn( '' );
 		Functions\when( 'get_transient' )->justReturn( false );
 		Functions\when( 'set_transient' )->justReturn( true );
-		Functions\expect( 'wc_get_orders' )->times( 5 )->andReturn( array() );
+		Functions\expect( 'wc_get_orders' )->times( 6 )->andReturn( array() );
 		Functions\when( 'admin_url' )->returnArg();
 
 		ob_start();
@@ -181,7 +205,7 @@ class DashboardWidgetTest extends KunakiTestCase {
 		Functions\expect( 'get_option' )->zeroOrMoreTimes()->andReturn( '' );
 		Functions\when( 'get_transient' )->justReturn( false );
 		Functions\when( 'set_transient' )->justReturn( true );
-		Functions\expect( 'wc_get_orders' )->times( 5 )->andReturn( array() );
+		Functions\expect( 'wc_get_orders' )->times( 6 )->andReturn( array() );
 		Functions\when( 'admin_url' )->returnArg();
 
 		ob_start();
@@ -196,7 +220,7 @@ class DashboardWidgetTest extends KunakiTestCase {
 		Functions\expect( 'get_option' )->zeroOrMoreTimes()->andReturn( '' );
 		Functions\when( 'get_transient' )->justReturn( false );
 		Functions\when( 'set_transient' )->justReturn( true );
-		Functions\expect( 'wc_get_orders' )->times( 5 )->andReturn( array() );
+		Functions\expect( 'wc_get_orders' )->times( 6 )->andReturn( array() );
 
 		$urls = array();
 		Functions\expect( 'admin_url' )->zeroOrMoreTimes()->andReturnUsing( function ( $path ) use ( &$urls ) {

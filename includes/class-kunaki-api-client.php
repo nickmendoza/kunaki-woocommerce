@@ -6,6 +6,12 @@ class Kunaki_API_Client {
 	const ENDPOINT = 'https://kunaki.com/XMLService.ASP';
 	const TIMEOUT  = 30;
 
+	/**
+	 * Shorter timeout for rate lookups — they block the customer's cart and
+	 * checkout page, while order submissions run in the background.
+	 */
+	const RATES_TIMEOUT = 10;
+
 	private $user_id;
 	private $password;
 	private $mode;
@@ -42,7 +48,7 @@ class Kunaki_API_Client {
 
 		$xml .= '</ShippingOptions>';
 
-		$response = $this->send_request( $xml );
+		$response = $this->send_request( $xml, self::RATES_TIMEOUT );
 
 		if ( is_wp_error( $response ) ) {
 			return $response;
@@ -131,6 +137,55 @@ class Kunaki_API_Client {
 	}
 
 	/**
+	 * Convert an ISO 3166-1 alpha-2 code to the English country name Kunaki expects.
+	 *
+	 * WC()->countries->get_countries() returns names translated into the site
+	 * language (e.g. "Vereinigte Staaten" on a German site), which Kunaki
+	 * rejects. This loads WooCommerce's country list with translation disabled.
+	 * Falls back to the translated list for codes not in that file (e.g. ones
+	 * added by the woocommerce_countries filter).
+	 *
+	 * @param string      $country_code  ISO country code.
+	 * @param string|null $countries_file Path to WooCommerce's i18n/countries.php (for tests).
+	 * @return string English country name, or '' if unknown.
+	 */
+	public static function get_country_name( $country_code, $countries_file = null ) {
+		static $cache = array();
+
+		if ( null === $countries_file && defined( 'WC_PLUGIN_FILE' ) ) {
+			$countries_file = dirname( WC_PLUGIN_FILE ) . '/i18n/countries.php';
+		}
+
+		$cache_key = (string) $countries_file;
+		if ( ! isset( $cache[ $cache_key ] ) ) {
+			$cache[ $cache_key ] = array();
+			if ( $countries_file && is_readable( $countries_file ) ) {
+				$untranslate = function ( $translation, $text ) {
+					return $text;
+				};
+				add_filter( 'gettext_woocommerce', $untranslate, PHP_INT_MAX, 2 );
+				try {
+					$english = include $countries_file;
+				} finally {
+					remove_filter( 'gettext_woocommerce', $untranslate, PHP_INT_MAX );
+				}
+				if ( is_array( $english ) ) {
+					$cache[ $cache_key ] = $english;
+				}
+			}
+		}
+
+		$name = $cache[ $cache_key ][ $country_code ] ?? '';
+		if ( '' === $name ) {
+			$countries = WC()->countries->get_countries();
+			$name      = $countries[ $country_code ] ?? '';
+		}
+
+		// Strip parenthetical codes like "(US)" that WooCommerce appends.
+		return (string) preg_replace( '/\s*\([A-Z]{2}\)$/', '', $name );
+	}
+
+	/**
 	 * Get product image URL from Kunaki.
 	 *
 	 * @param string $product_id Kunaki product ID.
@@ -144,10 +199,11 @@ class Kunaki_API_Client {
 	/**
 	 * Send raw XML to the Kunaki endpoint and parse the response.
 	 *
-	 * @param string $xml Raw XML body.
+	 * @param string $xml     Raw XML body.
+	 * @param int    $timeout Request timeout in seconds.
 	 * @return SimpleXMLElement|WP_Error
 	 */
-	private function send_request( $xml ) {
+	private function send_request( $xml, $timeout = self::TIMEOUT ) {
 		$allowed = $this->circuit_breaker->pre_request();
 		if ( is_wp_error( $allowed ) ) {
 			Kunaki_Logger::error( 'Circuit breaker prevented request.', array( 'error' => $allowed->get_error_message() ) );
@@ -157,7 +213,7 @@ class Kunaki_API_Client {
 		Kunaki_Logger::debug( 'API request.', array( 'body' => $this->redact_credentials( $xml ) ) );
 
 		$response = wp_remote_post( self::ENDPOINT, array(
-			'timeout' => self::TIMEOUT,
+			'timeout' => $timeout,
 			'headers' => array(
 				'Content-Type' => 'text/xml; charset=utf-8',
 			),

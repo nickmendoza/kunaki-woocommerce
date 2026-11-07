@@ -70,6 +70,7 @@ function wp_clear_scheduled_hook( string $hook ): void {}
 function wp_get_schedule( string $hook ): string { return ''; }
 function add_action( string $tag, $callback, int $priority = 10, int $accepted_args = 1 ): bool { return true; }
 function add_filter( string $tag, $callback, int $priority = 10, int $accepted_args = 1 ): bool { return true; }
+function remove_filter( string $tag, $callback, int $priority = 10 ): bool { return true; }
 function register_activation_hook( string $file, $callback ): void {}
 function register_deactivation_hook( string $file, $callback ): void {}
 function plugin_dir_path( string $file ): string { return __DIR__ . '/'; }
@@ -131,7 +132,13 @@ function WC(): WooCommerce { return new WooCommerce(); }
 class WooCommerce {
 	/** @var WC_Countries */
 	public $countries;
+	/** @var WC_Cart|null */
+	public $cart;
 	public function __construct() { $this->countries = new WC_Countries(); }
+}
+
+class WC_Cart {
+	public function get_cart(): array { return []; }
 }
 
 class WC_Countries {

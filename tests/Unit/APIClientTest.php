@@ -441,4 +441,51 @@ class APIClientTest extends KunakiTestCase {
 		);
 		Functions\when( 'update_option' )->justReturn( true );
 	}
+
+	public function test_get_country_name_uses_untranslated_woocommerce_list() {
+		$file = tempnam( sys_get_temp_dir(), 'kunaki_countries_' );
+		file_put_contents( $file, "<?php return array( 'US' => __( 'United States (US)', 'woocommerce' ), 'DE' => __( 'Germany', 'woocommerce' ) );" );
+
+		\Brain\Monkey\Filters\expectAdded( 'gettext_woocommerce' )->once();
+		Functions\expect( 'remove_filter' )->once()->with( 'gettext_woocommerce', Mockery::type( 'Closure' ), PHP_INT_MAX )->andReturn( true );
+		// Translated list must not be consulted for known codes.
+		Functions\expect( 'WC' )->never();
+
+		$this->assertSame( 'United States', Kunaki_API_Client::get_country_name( 'US', $file ) );
+		$this->assertSame( 'Germany', Kunaki_API_Client::get_country_name( 'DE', $file ) );
+
+		unlink( $file );
+	}
+
+	public function test_get_country_name_strips_code_from_fallback_list() {
+		$countries = Mockery::mock( 'WC_Countries' );
+		$countries->shouldReceive( 'get_countries' )->andReturn( array( 'GB' => 'United Kingdom (UK)' ) );
+		$wc            = Mockery::mock( 'WooCommerce' );
+		$wc->countries = $countries;
+		Functions\when( 'WC' )->justReturn( $wc );
+
+		$this->assertSame( 'United Kingdom', Kunaki_API_Client::get_country_name( 'GB', '/nonexistent/countries.php' ) );
+		$this->assertSame( '', Kunaki_API_Client::get_country_name( 'ZZ', '/nonexistent/countries.php' ) );
+	}
+
+	public function test_untranslate_filter_returns_original_text() {
+		$file = tempnam( sys_get_temp_dir(), 'kunaki_countries_' );
+		// Simulate WordPress running the gettext_woocommerce filter on a German site.
+		file_put_contents( $file, "<?php return array( 'US' => \$GLOBALS['kunaki_test_gettext']( 'Vereinigte Staaten (US)', 'United States (US)' ) );" );
+
+		$captured = null;
+		\Brain\Monkey\Filters\expectAdded( 'gettext_woocommerce' )->once()
+			->whenHappen( function ( $callback ) use ( &$captured ) {
+				$captured = $callback;
+			} );
+		Functions\when( 'remove_filter' )->justReturn( true );
+		$GLOBALS['kunaki_test_gettext'] = function ( $translation, $text ) use ( &$captured ) {
+			return $captured( $translation, $text );
+		};
+
+		$this->assertSame( 'United States', Kunaki_API_Client::get_country_name( 'US', $file ) );
+
+		unset( $GLOBALS['kunaki_test_gettext'] );
+		unlink( $file );
+	}
 }
