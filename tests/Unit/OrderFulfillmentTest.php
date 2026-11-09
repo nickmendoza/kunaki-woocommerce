@@ -1358,7 +1358,9 @@ class OrderFulfillmentTest extends KunakiTestCase {
 		$this->fulfillment->display_kunaki_order_info( $order );
 		$html = ob_get_clean();
 
-		$this->assertStringContainsString( 'Kunaki will still manufacture and ship it', $html );
+		// Sync never refreshes cancelled orders, so the warning must stay true
+		// after the admin cancels at Kunaki — it can't flatly claim Kunaki ships it.
+		$this->assertStringContainsString( 'Unless it was also cancelled with Kunaki directly, Kunaki will still manufacture and ship it', $html );
 		$this->assertStringContainsString( 'shipping address was changed', $html );
 	}
 
