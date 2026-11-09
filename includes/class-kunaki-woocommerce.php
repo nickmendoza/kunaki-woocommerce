@@ -39,6 +39,7 @@ class Kunaki_WooCommerce {
 		add_filter( 'woocommerce_cart_no_shipping_available_html', array( $this, 'rates_unavailable_message' ) );
 		add_filter( 'render_block_woocommerce/cart', array( $this, 'block_rates_unavailable_notice' ) );
 		add_filter( 'render_block_woocommerce/checkout', array( $this, 'block_rates_unavailable_notice' ) );
+		add_action( 'woocommerce_store_api_cart_errors', array( $this, 'unsupported_country_cart_error' ) );
 
 		// Settings tab.
 		add_filter( 'woocommerce_get_settings_pages', array( $this, 'add_settings_page' ) );
@@ -200,7 +201,8 @@ class Kunaki_WooCommerce {
 	}
 
 	/**
-	 * Replace WooCommerce's generic "no shipping options" text during a Kunaki outage.
+	 * Replace WooCommerce's generic "no shipping options" text when the plugin
+	 * knows why discs can't be shipped.
 	 *
 	 * Without this, customers see a message suggesting their address is wrong.
 	 *
@@ -208,16 +210,77 @@ class Kunaki_WooCommerce {
 	 * @return string
 	 */
 	public function rates_unavailable_message( $html ) {
-		if ( false === get_transient( 'kunaki_wc_rates_unavailable' ) ) {
-			return $html;
+		$message = $this->get_unsupported_country_message();
+		if ( '' === $message ) {
+			// The country is checked first because it won't fix itself by waiting.
+			$message = $this->get_outage_message();
 		}
-		$cart = function_exists( 'WC' ) && WC()->cart ? WC()->cart->get_cart() : array();
-		foreach ( $cart as $item ) {
+		return '' === $message ? $html : esc_html( $message );
+	}
+
+	/**
+	 * Tell block cart and checkout customers that Kunaki doesn't ship to their country.
+	 *
+	 * The blocks show these errors as a notice and refresh them whenever the
+	 * cart or address changes. WooCommerce already blocks checkout here,
+	 * because the disc package has no shipping rate.
+	 *
+	 * @param WP_Error $errors Cart errors.
+	 */
+	public function unsupported_country_cart_error( $errors ) {
+		$message = $this->get_unsupported_country_message();
+		if ( '' !== $message ) {
+			$errors->add( 'kunaki_country_not_supported', $message );
+		}
+	}
+
+	/**
+	 * Message for a cart with discs going to a country Kunaki doesn't ship to.
+	 *
+	 * @return string Plain text, or '' if it doesn't apply.
+	 */
+	private function get_unsupported_country_message() {
+		$country = function_exists( 'WC' ) && WC()->customer ? (string) WC()->customer->get_shipping_country() : '';
+		if ( '' === $country || Kunaki_API_Client::is_supported_country( $country ) || ! $this->cart_has_kunaki_items() ) {
+			return '';
+		}
+
+		// The customer sees the name in the site's language.
+		$countries = WC()->countries->get_countries();
+		return sprintf(
+			/* translators: %s: country name */
+			__( 'Sorry, discs can\'t be shipped to %s. To check out, remove the discs from your cart or use a shipping address in another country.', 'kunaki-woocommerce' ),
+			$countries[ $country ] ?? $country
+		);
+	}
+
+	/**
+	 * Message for a cart with discs while Kunaki's rate lookups are failing.
+	 *
+	 * @return string Plain text, or '' if it doesn't apply.
+	 */
+	private function get_outage_message() {
+		if ( false === get_transient( 'kunaki_wc_rates_unavailable' ) || ! $this->cart_has_kunaki_items() ) {
+			return '';
+		}
+		return __( 'Shipping rates for discs are temporarily unavailable. Please try again in a few minutes.', 'kunaki-woocommerce' );
+	}
+
+	/**
+	 * Whether the current cart contains any Kunaki product.
+	 *
+	 * @return bool
+	 */
+	private function cart_has_kunaki_items() {
+		if ( ! function_exists( 'WC' ) || ! WC()->cart ) {
+			return false;
+		}
+		foreach ( WC()->cart->get_cart() as $item ) {
 			if ( '' !== Kunaki_Product_Meta::get_kunaki_id_for_cart_item( $item ) ) {
-				return esc_html__( 'Shipping rates for discs are temporarily unavailable. Please try again in a few minutes.', 'kunaki-woocommerce' );
+				return true;
 			}
 		}
-		return $html;
+		return false;
 	}
 
 	/**
@@ -227,11 +290,17 @@ class Kunaki_WooCommerce {
 	 * built into WooCommerce's JavaScript. It's only shown when a disc package
 	 * really has no rates, because rates cached before the outage still work.
 	 *
+	 * Unsupported countries are reported through unsupported_country_cart_error()
+	 * instead, which the blocks keep up to date as the address changes.
+	 *
 	 * @param string $block_content Rendered block HTML.
 	 * @return string
 	 */
 	public function block_rates_unavailable_notice( $block_content ) {
-		$message = $this->rates_unavailable_message( '' );
+		if ( '' !== $this->get_unsupported_country_message() ) {
+			return $block_content;
+		}
+		$message = esc_html( $this->get_outage_message() );
 		if ( '' === $message ) {
 			return $block_content;
 		}

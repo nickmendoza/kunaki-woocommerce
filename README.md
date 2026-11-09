@@ -79,7 +79,11 @@ This plugin addresses these concerns through atomic locking, idempotent submissi
 
 ### Shipping Countries
 
-Kunaki only ships to the [countries on its list](https://kunaki.com/XMLService.htm), about 45 of WooCommerce's 250. Customers elsewhere see WooCommerce's "no shipping options" message, because Kunaki returns no options for them. To avoid that, limit **WooCommerce > Settings > General > Selling location(s)** or your shipping zones to those countries.
+Kunaki only ships to the 45 [countries on its list](https://kunaki.com/XMLService.htm). When a cart with discs has a shipping address anywhere else, the cart and checkout say *"Sorry, discs can't be shipped to <country>"* and tell the customer to remove the discs or use another address. WooCommerce won't let them check out with the discs. Products that aren't discs can still be bought and shipped as usual. The plugin doesn't call Kunaki for these countries, so the customer isn't kept waiting.
+
+"Yugoslavia" is on Kunaki's list, but Serbia and Montenegro are treated as unsupported, because it's unknown whether Kunaki delivers there under that name.
+
+If your store only sells discs, you can also limit **WooCommerce > Settings > General > Selling location(s)** to these countries, so customers elsewhere can't choose them at all.
 
 ## Architecture Overview
 
@@ -196,7 +200,7 @@ The test suite runs entirely outside WordPress. No WordPress installation, no da
 
 This isolation strategy means tests execute in seconds, run in CI without infrastructure, and validate plugin logic without conflating it with WordPress behavior.
 
-261 unit tests cover:
+330 unit tests cover:
 
 | Area | What's Validated |
 |------|-----------------|
@@ -227,6 +231,16 @@ Run a specific test file or filter by name:
 composer test -- tests/Unit/APIClientTest.php
 composer test -- --filter "shipped"
 ```
+
+### Real-install checks
+
+Mocks can't catch everything. For example, WooCommerce ignores `meta_query` on order queries unless HPOS is enabled, and that passed every unit test. `tests/e2e/` runs the plugin on a real WordPress and WooCommerce in Docker, under both HPOS and legacy order storage, with Kunaki's API faked:
+
+```bash
+tests/e2e/run.sh
+```
+
+It needs Docker and Python 3, and takes a few minutes. See [tests/e2e/README.md](tests/e2e/README.md) for what it covers.
 
 ## Roadmap
 

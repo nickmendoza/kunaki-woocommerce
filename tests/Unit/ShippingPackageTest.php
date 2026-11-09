@@ -103,16 +103,92 @@ class ShippingPackageTest extends KunakiTestCase {
 		$this->mock_cart( array( array( 'product_id' => 10 ) ), $packages );
 	}
 
-	private function mock_cart( $items, $packages = array() ) {
+	private function mock_cart( $items, $packages = array(), $country = 'US' ) {
 		$cart = \Mockery::mock( 'WC_Cart' );
 		$cart->shouldReceive( 'get_cart' )->andReturn( $items );
 		$cart->shouldReceive( 'calculate_shipping' );
 		$shipping = \Mockery::mock( 'WC_Shipping' );
 		$shipping->shouldReceive( 'get_packages' )->andReturn( $packages );
-		$wc       = \Mockery::mock( 'WooCommerce' );
-		$wc->cart = $cart;
+		$customer = \Mockery::mock( 'WC_Customer' );
+		$customer->shouldReceive( 'get_shipping_country' )->andReturn( $country );
+		$countries = \Mockery::mock( 'WC_Countries' );
+		$countries->shouldReceive( 'get_countries' )->andReturn( array( 'BR' => 'Brasil', 'US' => 'United States (US)' ) );
+		$wc            = \Mockery::mock( 'WooCommerce' );
+		$wc->cart      = $cart;
+		$wc->customer  = $customer;
+		$wc->countries = $countries;
 		$wc->shouldReceive( 'shipping' )->andReturn( $shipping );
 		Functions\when( 'WC' )->justReturn( $wc );
+	}
+
+	public function test_no_shipping_message_names_unsupported_country_for_disc_carts() {
+		Functions\when( 'get_post_meta' )->justReturn( 'PX00ZJTM4R' );
+		$this->mock_cart( array( array( 'product_id' => 10 ) ), array(), 'BR' );
+
+		$html = $this->instance->rates_unavailable_message( 'No shipping options were found.' );
+
+		// Uses the site-language name, since the customer reads it.
+		$this->assertStringContainsString( 'discs can&#039;t be shipped to Brasil', $html );
+	}
+
+	public function test_unsupported_country_message_wins_over_outage_message() {
+		Functions\when( 'get_transient' )->justReturn( 1700000000 );
+		Functions\when( 'get_post_meta' )->justReturn( 'PX00ZJTM4R' );
+		$this->mock_cart( array( array( 'product_id' => 10 ) ), array(), 'BR' );
+
+		$html = $this->instance->rates_unavailable_message( 'default' );
+
+		$this->assertStringContainsString( 'shipped to Brasil', $html );
+		$this->assertStringNotContainsString( 'temporarily unavailable', $html );
+	}
+
+	public function test_no_country_message_without_discs_or_address() {
+		Functions\when( 'get_post_meta' )->justReturn( '' );
+		$this->mock_cart( array( array( 'product_id' => 20 ) ), array(), 'BR' );
+		$this->assertSame( 'default', $this->instance->rates_unavailable_message( 'default' ) );
+
+		Functions\when( 'get_post_meta' )->justReturn( 'PX00ZJTM4R' );
+		$this->mock_cart( array( array( 'product_id' => 10 ) ), array(), '' );
+		$this->assertSame( 'default', $this->instance->rates_unavailable_message( 'default' ) );
+	}
+
+	public function test_block_cart_error_added_for_unsupported_country() {
+		Functions\when( 'get_post_meta' )->justReturn( 'PX00ZJTM4R' );
+		$this->mock_cart( array( array( 'product_id' => 10 ) ), array(), 'BR' );
+		$errors = new \WP_Error();
+
+		$this->instance->unsupported_country_cart_error( $errors );
+
+		$messages = $errors->get_error_messages( 'kunaki_country_not_supported' );
+		$this->assertCount( 1, $messages );
+		// Plain text: the blocks render it as text, so escaping would show entities.
+		$this->assertStringContainsString( "discs can't be shipped to Brasil", $messages[0] );
+	}
+
+	public function test_no_block_cart_error_for_supported_country_or_non_disc_cart() {
+		Functions\when( 'get_post_meta' )->justReturn( 'PX00ZJTM4R' );
+		$this->mock_cart( array( array( 'product_id' => 10 ) ), array(), 'US' );
+		$errors = new \WP_Error();
+		$this->instance->unsupported_country_cart_error( $errors );
+		$this->assertSame( '', $errors->get_error_code() );
+
+		Functions\when( 'get_post_meta' )->justReturn( '' );
+		$this->mock_cart( array( array( 'product_id' => 20 ) ), array(), 'BR' );
+		$this->instance->unsupported_country_cart_error( $errors );
+		$this->assertSame( '', $errors->get_error_code() );
+	}
+
+	public function test_block_outage_banner_not_shown_for_unsupported_country() {
+		// The cart error already explains it; the outage banner would contradict it.
+		Functions\when( 'get_transient' )->justReturn( 1700000000 );
+		Functions\when( 'get_post_meta' )->justReturn( 'PX00ZJTM4R' );
+		$this->mock_cart(
+			array( array( 'product_id' => 10 ) ),
+			array( array( 'contents' => array( array( 'product_id' => 10 ) ), 'rates' => array() ) ),
+			'BR'
+		);
+
+		$this->assertSame( '<div>checkout</div>', $this->instance->block_rates_unavailable_notice( '<div>checkout</div>' ) );
 	}
 
 	public function test_mixed_cart_splits_into_two_packages() {
