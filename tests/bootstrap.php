@@ -63,6 +63,22 @@ if ( ! class_exists( 'WP_Error' ) ) {
 		public function get_error_data() {
 			return $this->data;
 		}
+
+		/** @var array<string, string[]> Errors added after construction. */
+		protected $added = array();
+
+		public function add( $code, $message, $data = '' ) {
+			if ( '' === $this->code ) {
+				$this->code    = $code;
+				$this->message = $message;
+				$this->data    = $data;
+			}
+			$this->added[ $code ][] = $message;
+		}
+
+		public function get_error_messages( $code ) {
+			return $this->added[ $code ] ?? array();
+		}
 	}
 }
 
