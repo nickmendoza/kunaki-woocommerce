@@ -232,6 +232,16 @@ composer test -- tests/Unit/APIClientTest.php
 composer test -- --filter "shipped"
 ```
 
+### Real-install checks
+
+Mocks can't catch everything. For example, WooCommerce ignores `meta_query` on order queries unless HPOS is enabled, and that passed every unit test. `tests/e2e/` runs the plugin on a real WordPress and WooCommerce in Docker, under both HPOS and legacy order storage, with Kunaki's API faked:
+
+```bash
+tests/e2e/run.sh
+```
+
+It needs Docker and Python 3, and takes a few minutes. See [tests/e2e/README.md](tests/e2e/README.md) for what it covers.
+
 ## Roadmap
 
 These are planned or under consideration. No guarantees on timeline.

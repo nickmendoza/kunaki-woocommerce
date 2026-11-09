@@ -4,3 +4,5 @@ vendor/
 .phpunit.cache/
 .phpunit.result.cache
 composer.lock
+tests/e2e/out.txt
+tests/e2e/err-full.txt
