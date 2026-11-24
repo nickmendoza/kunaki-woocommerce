@@ -3,7 +3,7 @@ Contributors: mobilecodemedia
 Tags: kunaki, woocommerce, fulfillment, cd, shipping
 Requires at least: 5.8
 Tested up to: 7.1
-Stable tag: 1.3.4
+Stable tag: 1.4.0
 Requires PHP: 7.4
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
@@ -26,7 +26,9 @@ Kunaki WooCommerce connects your WooCommerce store to [Kunaki's](https://kunaki.
 * **Dashboard Widget** — At-a-glance order summary on the WordPress dashboard: fulfilling, action needed, and retrying counts.
 * **Credential Encryption** — Your Kunaki password is encrypted at rest with AES-256-GCM.
 * **WP-CLI Support** — `wp kunaki sync` for on-demand bulk status sync.
-* **HPOS Compatible** — Fully compatible with WooCommerce High-Performance Order Storage.
+* **Delivery Estimates** — Shows estimated delivery dates at checkout, based on past manufacturing times.
+* **Classic and Block Checkout** — Works with the classic cart and checkout pages and with the cart and checkout blocks.
+* **HPOS and Legacy Storage** — Works with WooCommerce High-Performance Order Storage and with legacy order storage.
 
 **Reliability:**
 
@@ -84,7 +86,7 @@ Yes. Your Kunaki password is encrypted using AES-256-GCM before being stored in 
 
 = Does this plugin work with HPOS? =
 
-Yes. The plugin declares full compatibility with WooCommerce High-Performance Order Storage (custom order tables).
+Yes. The plugin works with WooCommerce High-Performance Order Storage (custom order tables) and with legacy post-based order storage.
 
 == Screenshots ==
 
@@ -93,6 +95,24 @@ Yes. The plugin declares full compatibility with WooCommerce High-Performance Or
 3. **Product Linking** — Enter the 10-character Kunaki Product ID on any product's General tab.
 
 == Changelog ==
+
+= 1.4.0 =
+* Feat: Predictive delivery estimates at checkout, based on past manufacturing times and transit days.
+* Feat: Customers with discs going to a country Kunaki doesn't ship to now see "Sorry, discs can't be shipped to <country>" instead of WooCommerce's generic no-shipping message. The plugin no longer calls Kunaki for these countries.
+* Feat: During a Kunaki outage, carts with discs say shipping rates are temporarily unavailable.
+* Feat: Support for the WooCommerce cart and checkout blocks.
+* Feat: Variations can have their own Kunaki Product ID, or use the parent's.
+* Feat: Orders declined by Kunaki can be resubmitted with an explicit retry. This creates a new Kunaki order, so it never happens automatically.
+* Change: Deleting the plugin now keeps order history and product links. A new "Remove Data on Uninstall" setting deletes them.
+* Change: The saved password is never sent to the browser. The field is always blank, and leaving it blank keeps the saved password.
+* Change: Order submission runs in the background through Action Scheduler, so checkout no longer waits on Kunaki.
+* Fix: Order queries returned the wrong orders on legacy (non-HPOS) order storage, which skewed dashboard counts and retries.
+* Fix: Shipping rates for Turkey and Vatican City.
+* Fix: The circuit breaker could stay tripped on stores with no checkout traffic.
+* Fix: Shipped and declined orders no longer crowd newer orders out of status sync.
+* Fix: Addresses sent to Kunaki use English country names whatever the site language.
+* Fix: The order page warns when an order is cancelled, refunded, or has its address changed while still pending at Kunaki.
+* Tested up to WordPress 7.1 and WooCommerce 11.2.
 
 = 1.3.4 =
 * Fix: Add delete_site_transient stub for PHPStan compatibility.
@@ -120,6 +140,9 @@ Yes. The plugin declares full compatibility with WooCommerce High-Performance Or
 * Fix: Reset retry budget when admin manually retries an exhausted order.
 
 == Upgrade Notice ==
+
+= 1.4.0 =
+Deleting the plugin now keeps order history and product links unless you turn on "Remove Data on Uninstall". Adds block checkout support, delivery estimates, and a clear message for countries Kunaki doesn't ship to.
 
 = 1.3.0 =
 Adds mixed cart support — orders with both Kunaki and non-Kunaki products now get separate shipping packages at checkout.
