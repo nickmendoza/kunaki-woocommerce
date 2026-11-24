@@ -83,7 +83,7 @@ Kunaki only ships to the 45 [countries on its list](https://kunaki.com/XMLServic
 
 "Yugoslavia" is on Kunaki's list, but Serbia and Montenegro are treated as unsupported, because it's unknown whether Kunaki delivers there under that name.
 
-If your store only sells discs, you can also limit **WooCommerce > Settings > General > Selling location(s)** to these countries, so customers elsewhere can't choose them at all.
+If your store only sells discs, you can also limit **WooCommerce > Settings > General > Shipping location(s)** to these countries, so customers can't choose another shipping address at all. Prefer this to limiting selling locations, which also limits billing addresses and would stop someone abroad sending discs to a supported country.
 
 ## Architecture Overview
 

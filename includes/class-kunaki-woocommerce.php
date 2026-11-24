@@ -245,12 +245,13 @@ class Kunaki_WooCommerce {
 			return '';
 		}
 
-		// The customer sees the name in the site's language.
+		// The customer sees the name in the site's language. Some names hold
+		// HTML entities (Cura&ccedil;ao), which the blocks would show as typed.
 		$countries = WC()->countries->get_countries();
 		return sprintf(
 			/* translators: %s: country name */
 			__( 'Sorry, discs can\'t be shipped to %s. To check out, remove the discs from your cart or use a shipping address in another country.', 'kunaki-woocommerce' ),
-			$countries[ $country ] ?? $country
+			html_entity_decode( $countries[ $country ] ?? $country, ENT_QUOTES, 'UTF-8' )
 		);
 	}
 

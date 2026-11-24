@@ -112,7 +112,7 @@ class ShippingPackageTest extends KunakiTestCase {
 		$customer = \Mockery::mock( 'WC_Customer' );
 		$customer->shouldReceive( 'get_shipping_country' )->andReturn( $country );
 		$countries = \Mockery::mock( 'WC_Countries' );
-		$countries->shouldReceive( 'get_countries' )->andReturn( array( 'BR' => 'Brasil', 'US' => 'United States (US)' ) );
+		$countries->shouldReceive( 'get_countries' )->andReturn( array( 'BR' => 'Brasil', 'CW' => 'Cura&ccedil;ao', 'US' => 'United States (US)' ) );
 		$wc            = \Mockery::mock( 'WooCommerce' );
 		$wc->cart      = $cart;
 		$wc->customer  = $customer;
@@ -163,6 +163,20 @@ class ShippingPackageTest extends KunakiTestCase {
 		$this->assertCount( 1, $messages );
 		// Plain text: the blocks render it as text, so escaping would show entities.
 		$this->assertStringContainsString( "discs can't be shipped to Brasil", $messages[0] );
+	}
+
+	public function test_country_names_with_html_entities_are_decoded() {
+		Functions\when( 'get_post_meta' )->justReturn( 'PX00ZJTM4R' );
+		$this->mock_cart( array( array( 'product_id' => 10 ) ), array(), 'CW' );
+		$errors = new \WP_Error();
+
+		$this->instance->unsupported_country_cart_error( $errors );
+		$html = $this->instance->rates_unavailable_message( 'default' );
+
+		$messages = $errors->get_error_messages( 'kunaki_country_not_supported' );
+		$this->assertStringContainsString( 'shipped to Curaçao.', $messages[0] );
+		// Classic path: escaped once, not double-encoded.
+		$this->assertStringContainsString( 'shipped to Curaçao.', $html );
 	}
 
 	public function test_no_block_cart_error_for_supported_country_or_non_disc_cart() {
