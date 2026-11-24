@@ -849,8 +849,11 @@ class Kunaki_Order_Fulfillment {
 			}
 
 			if ( self::is_pending_at_kunaki( $order ) ) {
+				// Status sync only polls processing orders, so this order's Kunaki
+				// status is never refreshed after cancellation. Word the warning so
+				// it stays true after the admin cancels it with Kunaki.
 				if ( in_array( $order->get_status(), array( 'cancelled', 'refunded' ), true ) ) {
-					echo '<p class="kunaki-error">' . esc_html__( 'This order was cancelled or refunded in WooCommerce, but Kunaki will still manufacture and ship it. Cancel it with Kunaki directly.', 'kunaki-woocommerce' ) . '</p>';
+					echo '<p class="kunaki-error">' . esc_html__( 'This order was cancelled or refunded in WooCommerce after it was sent to Kunaki. Unless it was also cancelled with Kunaki directly, Kunaki will still manufacture and ship it.', 'kunaki-woocommerce' ) . '</p>';
 				}
 				$sent_hash = (string) $order->get_meta( self::META_ADDRESS_HASH );
 				if ( '' !== $sent_hash && self::get_address_hash( $order ) !== $sent_hash ) {

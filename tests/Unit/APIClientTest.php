@@ -477,6 +477,19 @@ class APIClientTest extends KunakiTestCase {
 		);
 	}
 
+	public function test_supported_countries_match_kunaki_list() {
+		// Kunaki's list has 45 names; Yugoslavia is deliberately not mapped.
+		$this->assertCount( 44, Kunaki_API_Client::SUPPORTED_COUNTRIES );
+		$this->assertSame( Kunaki_API_Client::SUPPORTED_COUNTRIES, array_unique( Kunaki_API_Client::SUPPORTED_COUNTRIES ) );
+
+		foreach ( array( 'US', 'CA', 'GB', 'DE', 'TR', 'VA', 'CZ', 'GL', 'GI' ) as $code ) {
+			$this->assertTrue( Kunaki_API_Client::is_supported_country( $code ), $code );
+		}
+		foreach ( array( 'BR', 'IN', 'ZA', 'RS', 'ME', 'PR', '', 'us' ) as $code ) {
+			$this->assertFalse( Kunaki_API_Client::is_supported_country( $code ), $code );
+		}
+	}
+
 	public function test_get_country_name_strips_code_from_fallback_list() {
 		$countries = Mockery::mock( 'WC_Countries' );
 		$countries->shouldReceive( 'get_countries' )->andReturn( array( 'GB' => 'United Kingdom (UK)' ) );

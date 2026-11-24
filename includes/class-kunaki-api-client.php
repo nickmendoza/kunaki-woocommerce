@@ -17,6 +17,21 @@ class Kunaki_API_Client {
 		'TR' => 'Turkey',         // WooCommerce uses "Türkiye".
 		'VA' => 'Vatican City',   // WooCommerce uses "Vatican".
 	);
+
+	/**
+	 * ISO codes of the countries on Kunaki's list at https://kunaki.com/XMLService.htm.
+	 *
+	 * Kunaki returns no shipping options for any other country. "Yugoslavia" is
+	 * on Kunaki's list but isn't mapped: it's unknown whether Kunaki delivers
+	 * to Serbia or Montenegro under that name.
+	 */
+	const SUPPORTED_COUNTRIES = array(
+		'AU', 'AT', 'BE', 'BG', 'CA', 'CN', 'CY', 'CZ', 'DK', 'EE', 'FI',
+		'FR', 'DE', 'GI', 'GL', 'HK', 'HU', 'IS', 'IE', 'IT', 'JP', 'LV',
+		'LI', 'LT', 'LU', 'MX', 'NL', 'NZ', 'NO', 'PL', 'PT', 'RO', 'SG',
+		'SK', 'SI', 'ES', 'SE', 'CH', 'TW', 'TR', 'UA', 'GB', 'US', 'VA',
+	);
+
 	const TIMEOUT  = 30;
 
 	/**
@@ -147,6 +162,16 @@ class Kunaki_API_Client {
 			'tracking_type' => (string) $response->TrackingType,
 			'tracking_id'   => (string) $response->TrackingId,
 		);
+	}
+
+	/**
+	 * Whether Kunaki ships to a country.
+	 *
+	 * @param string $country_code ISO country code.
+	 * @return bool
+	 */
+	public static function is_supported_country( $country_code ) {
+		return in_array( $country_code, self::SUPPORTED_COUNTRIES, true );
 	}
 
 	/**

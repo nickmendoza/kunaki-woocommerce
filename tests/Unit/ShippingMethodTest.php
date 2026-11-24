@@ -339,6 +339,27 @@ class ShippingMethodTest extends KunakiTestCase {
 		$this->assertEmpty( $shipping->get_rates_added() );
 	}
 
+	public function test_unsupported_country_skips_api_call() {
+		// Kunaki would return no options for Brazil, so don't make the customer wait on it.
+		Functions\when( 'get_post_meta' )->justReturn( 'PXZZ111111' );
+		Functions\when( 'get_transient' )->justReturn( false );
+		// WooCommerce knows Brazil, so only the supported-country check stops the call.
+		$wc_countries = Mockery::mock( 'WC_Countries' );
+		$wc_countries->shouldReceive( 'get_countries' )->andReturn( array( 'BR' => 'Brazil' ) );
+		$wc = Mockery::mock( 'WooCommerce' );
+		$wc->countries = $wc_countries;
+		Functions\when( 'WC' )->justReturn( $wc );
+		Functions\expect( 'wp_remote_post' )->never();
+		Functions\expect( 'set_transient' )->never();
+
+		$shipping = new WC_Shipping_Kunaki();
+		$shipping->calculate_shipping( $this->build_package(
+			array( array( 'product_id' => 10, 'quantity' => 1 ) ), 'BR', '', '01000-000'
+		) );
+
+		$this->assertEmpty( $shipping->get_rates_added() );
+	}
+
 	// --- Helpers ---
 
 	private function build_package( $items, $country = 'US', $state = 'CA', $postcode = '90210' ) {

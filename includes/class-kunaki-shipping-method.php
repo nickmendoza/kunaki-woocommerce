@@ -77,6 +77,13 @@ class WC_Shipping_Kunaki extends WC_Shipping_Method {
 		}
 
 		$country_code = $package['destination']['country'];
+
+		// Kunaki would return no options anyway. Skip the call so the customer
+		// isn't kept waiting; Kunaki_WooCommerce explains why there are no rates.
+		if ( ! Kunaki_API_Client::is_supported_country( $country_code ) ) {
+			return;
+		}
+
 		$country      = Kunaki_API_Client::get_country_name( $country_code );
 		// Kunaki only accepts state/province for US and CA.
 		$state        = in_array( $country_code, array( 'US', 'CA' ), true )

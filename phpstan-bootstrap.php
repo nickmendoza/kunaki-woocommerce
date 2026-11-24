@@ -5,7 +5,7 @@
 
 // WordPress constants.
 define( 'ABSPATH', __DIR__ . '/' );
-define( 'KUNAKI_WC_VERSION', '1.3.3' );
+define( 'KUNAKI_WC_VERSION', '1.4.0' );
 define( 'KUNAKI_WC_PLUGIN_FILE', __DIR__ . '/kunaki-woocommerce.php' );
 define( 'KUNAKI_WC_PLUGIN_DIR', __DIR__ . '/' );
 define( 'KUNAKI_WC_PLUGIN_URL', 'https://example.com/wp-content/plugins/kunaki-woocommerce/' );
@@ -40,6 +40,8 @@ class WP_Error {
 	public function get_error_message(): string { return $this->message; }
 	/** @return mixed */
 	public function get_error_data() { return $this->data; }
+	/** @param mixed $data */
+	public function add( string $code, string $message, $data = '' ): void {}
 }
 
 /** @param mixed $thing */
@@ -139,8 +141,14 @@ class WooCommerce {
 	public $countries;
 	/** @var WC_Cart|null */
 	public $cart;
+	/** @var WC_Customer|null */
+	public $customer;
 	public function __construct() { $this->countries = new WC_Countries(); }
 	public function shipping(): WC_Shipping { return new WC_Shipping(); }
+}
+
+class WC_Customer {
+	public function get_shipping_country(): string { return ''; }
 }
 
 class WC_Cart {
