@@ -19,13 +19,14 @@ This plugin addresses these concerns through atomic locking, idempotent submissi
 
 ## Features
 
-- **Live Shipping Rates** -- Real-time Kunaki shipping options and prices at checkout, cached via transients.
+- **Live Shipping Rates** -- Real-time Kunaki shipping options and prices at checkout, cached via transients. During a Kunaki outage, carts with discs say rates are temporarily unavailable instead of showing WooCommerce's generic "no shipping options" message.
+- **Classic and Block Checkout** -- Works with both the classic cart and checkout pages and the WooCommerce cart and checkout blocks.
 - **Idempotent Order Submission** -- Orders are submitted to Kunaki exactly once, protected by atomic locks and multi-layer duplicate prevention.
 - **Order Tracking** -- Cron-based polling syncs Kunaki status and emails customers their tracking number.
 - **Product Linking** -- Link any WooCommerce product or individual variation to a Kunaki disc via its 10-character Product ID. Variations without their own ID use the parent product's.
 - **Mixed Cart Handling** -- Splits checkout into separate shipments for Kunaki and non-Kunaki products, each with its own shipping method selection. Submits only Kunaki items to Kunaki; defers order completion when non-Kunaki items are present.
 - **Retry Queue** -- Admin page listing failed submissions with error details, attempt counts, and one-click retry buttons. Per-order retry on the order edit page.
-- **HPOS Compatible** -- Declares compatibility with WooCommerce High-Performance Order Storage.
+- **HPOS and Legacy Storage** -- Works with WooCommerce High-Performance Order Storage and with legacy post-based order storage.
 - **Automatic Retry** -- Failed submissions are retried automatically via cron with linear backoff and a configurable attempt limit.
 - **API Circuit Breaker** -- Detects sustained Kunaki API failures and temporarily halts outbound requests, preserving retry budgets and surfacing an admin notice. Automatically probes for recovery.
 - **Structured Logging** -- JSON-formatted log entries with contextual fields (order ID, error details) for machine-parseable log aggregation.
@@ -48,6 +49,16 @@ This plugin addresses these concerns through atomic locking, idempotent submissi
 4. Navigate to **WooCommerce > Settings > Kunaki** and enter your Kunaki publisher email and password. Set mode to **Test** for development or **Live** for production.
 5. Under **WooCommerce > Settings > Shipping > Shipping Zones**, add "Kunaki Shipping" as a shipping method to the appropriate zone(s).
 6. Edit any WooCommerce product and enter its Kunaki Product ID in the General tab.
+
+### Updating
+
+The plugin doesn't update itself. To install a new version:
+
+1. Download the new `kunaki-woocommerce-x.x.x.zip` from the [latest GitHub release](https://github.com/nickmendoza/kunaki-woocommerce/releases/latest).
+2. In WordPress, go to **Plugins > Add New > Upload Plugin** and upload it.
+3. When WordPress says the plugin is already installed, choose **Replace current with uploaded**.
+
+Settings, order data, and product links are kept. Don't delete the plugin to update it: deleting runs the uninstall cleanup, which removes your settings, and also order and product data if **Remove Data on Uninstall** is on.
 
 ### Screenshots
 
@@ -115,11 +126,15 @@ Order submission is triggered by the `woocommerce_order_status_processing` hook.
 
 ### Cron-Based Status Polling
 
-A WP-Cron event (`kunaki_wc_sync_order_status`) runs on a configurable interval (default: 15 minutes, range: 5--1440). It queries all WooCommerce orders in "processing" status that have a stored Kunaki Order ID, polls the Kunaki API for each, and handles status transitions: SHIPPED triggers tracking delivery and optional auto-completion, DECLINED moves the order to on-hold, and intermediate statuses (PROCESSING, APPROVED, PENDING) log admin notes.
+A WP-Cron event (`kunaki_wc_sync_order_status`) runs on a configurable interval (default: 15 minutes, range: 5--1440). It queries WooCommerce orders in "processing" status that have a stored Kunaki Order ID, skipping those Kunaki has already marked SHIPPED or DECLINED, polls the Kunaki API for each, and handles status transitions: SHIPPED triggers tracking delivery and optional auto-completion, DECLINED moves the order to on-hold, and intermediate statuses (PROCESSING, APPROVED, PENDING) log admin notes.
+
+### Resubmitting Declined Orders
+
+A declined order is never resubmitted automatically. To try again, an admin moves it back to "processing" and clicks retry on the order page or the Failures page. This clears the old Kunaki order details and submits a **new** Kunaki order, which is manufactured and billed separately. The old Kunaki Order ID is kept in an order note.
 
 ### Performance Considerations
 
-- Status polling queries only orders in "processing" status with a stored Kunaki Order ID -- not the full order table.
+- Status polling queries only orders in "processing" status with a stored Kunaki Order ID -- not the full order table. Orders already shipped or declined are excluded without loading them, so they can't crowd out newer orders.
 - Locks are short-lived and self-cleaning; expired locks are pruned atomically before each acquisition attempt.
 - Shipping rates are cached via transients (30-minute TTL) to minimize outbound API calls during checkout.
 
@@ -200,7 +215,7 @@ The test suite runs entirely outside WordPress. No WordPress installation, no da
 
 This isolation strategy means tests execute in seconds, run in CI without infrastructure, and validate plugin logic without conflating it with WordPress behavior.
 
-330 unit tests cover:
+331 unit tests cover:
 
 | Area | What's Validated |
 |------|-----------------|
@@ -216,8 +231,10 @@ This isolation strategy means tests execute in seconds, run in CI without infras
 | Delivery Estimator | Transit day parsing, business-to-calendar conversion, percentile statistics, transient caching, date range formatting, end-to-end estimate generation |
 | Dashboard Widget | Hook registration, capability gating, zero/mixed-state count rendering, circuit breaker warning display, manufacturing time stats, URL generation |
 | Settings | Settings field definitions, sanitization callbacks, defaults and range enforcement |
-| Shipping Packages | Mixed cart splitting, per-package rate filtering, destination preservation, package naming, contents_cost recalculation, multi-package splitting |
-| Bootstrap | Hook registration, component loading, cron scheduling, HPOS declaration |
+| Shipping Packages | Mixed cart splitting, per-package rate filtering, destination preservation, package naming, contents_cost recalculation, multi-package splitting, unsupported-country and outage messages on classic and block checkout |
+| Order Queries | Every order query works under legacy storage as well as HPOS (no `meta_query`, which WooCommerce ignores without HPOS) |
+| Bootstrap | Shipping method registration, hook registration, singleton orchestrator, admin asset loading per screen |
+| Uninstall | Order history and product links kept by default, locks and cached rates always removed, all data removed when the store opts in |
 | Encryption | AES-256-GCM round-trip, invalid/corrupt input handling, salt rotation detection |
 
 ```bash
