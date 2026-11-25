@@ -293,6 +293,11 @@ class Kunaki_Order_Status_Sync {
 		// Now safe — meta is persisted, so the next cron run won't retry.
 		$this->send_pending_notes( $order, $notes_json );
 
+		if ( 'DECLINED' === $kunaki_status ) {
+			/** This action is documented in Kunaki_Order_Fulfillment::record_failure(). */
+			do_action( 'kunaki_wc_order_needs_attention', $order_id, 'declined', (string) $kunaki_order_id );
+		}
+
 		return true;
 	}
 

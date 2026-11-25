@@ -15,14 +15,21 @@ delete_option( 'kunaki_wc_circuit_breaker' );
 delete_option( 'kunaki_wc_circuit_threshold' );
 delete_option( 'kunaki_wc_circuit_cooldown' );
 delete_option( 'kunaki_wc_delete_data_on_uninstall' );
+delete_option( 'kunaki_wc_alerts_enabled' );
+delete_option( 'kunaki_wc_alert_email_enabled' );
+delete_option( 'kunaki_wc_alert_email_address' );
+delete_option( 'kunaki_wc_alert_slack_enabled' );
+delete_option( 'kunaki_wc_alert_slack_webhook' );
+delete_option( 'kunaki_wc_alert_outage_open' );
 
 wp_clear_scheduled_hook( 'kunaki_wc_sync_order_status' );
 wp_clear_scheduled_hook( 'kunaki_wc_retry_failed_orders' );
 
-// Pending background submissions (Action Scheduler ships with WooCommerce).
+// Pending background submissions and alerts (Action Scheduler ships with WooCommerce).
 if ( function_exists( 'as_unschedule_all_actions' ) ) {
 	// Hook only: passed a group as well, this would only cancel jobs with no args.
 	as_unschedule_all_actions( 'kunaki_wc_submit_order' );
+	as_unschedule_all_actions( 'kunaki_wc_send_alert' );
 }
 
 global $wpdb;

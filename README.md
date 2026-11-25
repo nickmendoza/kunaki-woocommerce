@@ -32,6 +32,7 @@ This plugin addresses these concerns through atomic locking, idempotent submissi
 - **Structured Logging** -- JSON-formatted log entries with contextual fields (order ID, error details) for machine-parseable log aggregation.
 - **WP-CLI Support** -- `wp kunaki sync` command for on-demand bulk status sync with `--dry-run` and `--limit` options.
 - **Predictive Delivery Estimates** -- Displays estimated delivery date ranges at checkout based on historical manufacturing times and parsed transit durations.
+- **Email and Slack Alerts** -- Optional alerts when an order needs you (it failed every retry, can't be sent until something is fixed, or Kunaki declined it), and when Kunaki's API goes down and comes back. Off by default.
 - **Dashboard Widget** -- At-a-glance Kunaki order summary on the WordPress dashboard: fulfilling, action needed, and retrying counts with circuit breaker status and average manufacturing time.
 - **Credential Encryption** -- Passwords encrypted at rest with AES-256-GCM.
 
@@ -87,6 +88,9 @@ Settings, order data, and product links are kept. Don't delete the plugin to upd
 | Failure Threshold | Number of consecutive API failures before the circuit breaker trips (default: 5, range: 2--20) |
 | Cooldown Period | Minutes to wait before allowing a probe request after the circuit trips (default: 5, range: 1--60 min) |
 | Remove Data on Uninstall | Also delete Kunaki order IDs, tracking details, and product IDs when the plugin is deleted (default: off, so order history is kept) |
+| Enable Alerts | Send email and Slack alerts (default: off). See [Alerts](#alerts) |
+| Email Alerts / Alert Email Address | Send alerts by email (default: on, once alerts are enabled). A blank address uses the site admin email |
+| Slack Alerts / Slack Webhook URL | Post alerts to a Slack incoming webhook (default: off). Only `https://hooks.slack.com/` URLs are saved |
 
 ### Shipping Countries
 
@@ -187,6 +191,21 @@ API business logic errors (Kunaki `ErrorCode != 0`) do not count toward the thre
 
 When the circuit is open, order submission failures do not increment the retry attempt counter, preserving the retry budget for when the API recovers.
 
+### Alerts
+
+Failed orders and outages show up in WordPress admin, but nobody sees them there overnight. With **Enable Alerts** on, the plugin sends an email, a Slack message, or both when:
+
+- **An order runs out of retries.** It still wasn't accepted after the configured number of attempts.
+- **An order fails in a way retrying won't fix**, such as having no Kunaki shipping method. It needs a person straight away.
+- **Kunaki declines an order.** The order is moved to on-hold. Resubmitting it creates a new Kunaki order, which is billed separately.
+- **Kunaki's API goes down** (the circuit breaker trips), and again **when it recovers**.
+
+Each order alert names the order, says what went wrong, and links to it. Alerts are sent in the background through Action Scheduler, so checkout never waits on email or Slack.
+
+An unstable API doesn't flood you. There is one outage alert per outage, however often the circuit trips and re-trips. The recovery alert is only sent once the API has stayed up for 15 minutes. If an outage lasts more than a day, it alerts again.
+
+For other integrations, the plugin fires public actions after each change is saved: `kunaki_wc_order_needs_attention( $order_id, $reason, $message )`, where `$reason` is `retries_exhausted`, `permanent_failure` or `declined`, plus `kunaki_wc_circuit_breaker_opened` and `kunaki_wc_circuit_breaker_closed`.
+
 ### Email Duplication Prevention
 
 The status sync saves all meta and status changes via `$order->save()` before adding any customer-facing order notes. If `save()` fails, no notes are persisted and the next cron run retries from a clean state. To handle the crash window between a successful `save()` and `add_order_note()`, pending notes are stored in order meta atomically with the status change. If the process dies after save but before the note is sent, the next cron run detects the pending note, delivers it, and clears the flag.
@@ -215,7 +234,7 @@ The test suite runs entirely outside WordPress. No WordPress installation, no da
 
 This isolation strategy means tests execute in seconds, run in CI without infrastructure, and validate plugin logic without conflating it with WordPress behavior.
 
-331 unit tests cover:
+377 unit tests cover:
 
 | Area | What's Validated |
 |------|-----------------|
@@ -226,6 +245,7 @@ This isolation strategy means tests execute in seconds, run in CI without infras
 | Product Meta | 10-character alphanumeric validation, capability checks, admin column rendering, safe handling of absent POST fields |
 | Logger | Debug gating based on settings, log level routing, structured JSON context, invalid UTF-8 fallback |
 | Retry Queue | AJAX handler permission and input validation, `prepare_for_retry` guard clauses, admin page hook registration |
+| Alerts | Master and channel switches, background queueing, one alert per outage however the API flaps, delayed recovery alert, the message for each order case, error text capping, admin email fallback, Slack URL allowlist, and that each event only fires after its change is saved |
 | Circuit Breaker | State transitions (closed/open/half_open), threshold and cooldown configuration, error classification (infrastructure vs. business logic), probe recovery, admin state reporting |
 | CLI Command | Dry-run listing, limit enforcement, sync dispatch, empty-queue handling |
 | Delivery Estimator | Transit day parsing, business-to-calendar conversion, percentile statistics, transient caching, date range formatting, end-to-end estimate generation |

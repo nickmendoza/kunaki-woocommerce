@@ -89,4 +89,80 @@ case 'misc':
  (new Kunaki_Order_Status_Sync())->sync_all_pending_orders(); t('sync cron probes and closes circuit after cooldown (no checkout traffic)','closed'===$a->get_state()['state'],$a->get_state());
  $c=\Automattic\WooCommerce\Utilities\FeaturesUtil::get_compatible_plugins_for_feature('cart_checkout_blocks'); echo 'blocks-compat: '.wp_json_encode($c)."\n";
  break;
+case 'alerts':
+ // No mail server in the container: capture mail and Slack posts instead of sending them.
+ $GLOBALS['mails']=[]; $GLOBALS['slack']=[];
+ // WooCommerce's own order emails go through wp_mail too, so only count mail to the alert address.
+ add_filter('pre_wp_mail',function($r,$a){ if('ops@example.com'===($a['to']??'')) $GLOBALS['mails'][]=$a; return true; },10,2);
+ add_filter('pre_http_request',function($r,$args,$url){ if(false===strpos($url,'slack')) return $r; $GLOBALS['slack'][]=$url; return ['headers'=>[],'body'=>'ok','response'=>['code'=>200,'message'=>'OK'],'cookies'=>[]]; },5,3);
+ $pending=function(){ return as_get_scheduled_actions(['hook'=>'kunaki_wc_send_alert','status'=>'pending','per_page'=>-1],'ids'); };
+ $run_alerts=function() use($pending){ foreach($pending() as $a) ActionScheduler::runner()->process_action($a,'stage'); };
+ $reset=function(){ $GLOBALS['mails']=[]; $GLOBALS['slack']=[]; };
+ $subjects=function(){ return array_map(fn($m)=>$m['subject'],$GLOBALS['mails']); };
+ // An order with a disc but no Kunaki shipping line fails permanently.
+ $bad_order=function() use($ids){ $o=wc_create_order(); $o->add_product(wc_get_product($ids['disc']),1); $o->set_shipping_first_name('A');$o->set_shipping_last_name('B');$o->set_shipping_address_1('1 St');$o->set_shipping_city('NYC');$o->set_shipping_state('NY');$o->set_shipping_postcode('10001');$o->set_shipping_country('US'); $o->save(); $o->set_status('processing'); $o->save(); run_queue(); return $o->get_id(); };
+ foreach(wc_get_orders(['status'=>['processing'],'limit'=>-1,'return'=>'ids']) as $x) wc_get_order($x)->update_status('cancelled');
+ update_option('mock_kunaki_mode','ok'); delete_option('kunaki_wc_circuit_breaker'); delete_option('kunaki_wc_alert_outage_open');
+ foreach($pending() as $a) ActionScheduler::store()->cancel_action($a);
+
+ update_option('kunaki_wc_alerts_enabled','no'); update_option('kunaki_wc_alert_email_address','ops@example.com');
+ $id=$bad_order(); $run_alerts();
+ t('alerts off: permanent failure sends nothing', !$GLOBALS['mails'] && !$pending(), $GLOBALS['mails']);
+ t('order is marked as needing attention', 'yes'===wc_get_order($id)->get_meta('_kunaki_fulfillment_exhausted'));
+
+ update_option('kunaki_wc_alerts_enabled','yes'); update_option('kunaki_wc_alert_email_enabled','yes'); update_option('kunaki_wc_alert_email_address','ops@example.com');
+ update_option('kunaki_wc_alert_slack_enabled','yes'); update_option('kunaki_wc_alert_slack_webhook','https://hooks.slack.com/services/T0/B0/X0');
+ t('Slack webhook URL is saved', 'https://hooks.slack.com/services/T0/B0/X0'===get_option('kunaki_wc_alert_slack_webhook'));
+
+ $reset(); $id=$bad_order();
+ t('alert is queued, not sent during the request', !$GLOBALS['mails'] && 1===count($pending()), $GLOBALS['mails']);
+ $run_alerts(); $o=wc_get_order($id);
+ t('permanent failure emails the alert address once', 1===count($GLOBALS['mails']) && 'ops@example.com'===$GLOBALS['mails'][0]['to'], $GLOBALS['mails']);
+ t('email names the order and links to it', false!==strpos($GLOBALS['mails'][0]['subject']??'','#'.$o->get_order_number()) && false!==strpos($GLOBALS['mails'][0]['message']??'',$o->get_edit_order_url()), $GLOBALS['mails']);
+ t('email says what went wrong', false!==strpos($GLOBALS['mails'][0]['message']??'','No matching Kunaki shipping method'), $GLOBALS['mails']);
+ t('Slack gets the same alert', 1===count($GLOBALS['slack']) && 0===strpos($GLOBALS['slack'][0],'https://hooks.slack.com/'), $GLOBALS['slack']);
+
+ // Retries exhausted: the retry cron finds an order at the limit.
+ $reset(); $id=mk($ids['disc'],0,'processing'); foreach(as_get_scheduled_actions(['hook'=>'kunaki_wc_submit_order','status'=>'pending','per_page'=>-1],'ids') as $a) ActionScheduler::store()->cancel_action($a);
+ $o=wc_get_order($id); $o->update_meta_data('_kunaki_fulfillment_error','Connection timed out'); $o->update_meta_data('_kunaki_fulfillment_attempts',3); $o->update_meta_data('_kunaki_fulfillment_failed_at',gmdate('c',time()-DAY_IN_SECONDS)); $o->save();
+ do_action('kunaki_wc_retry_failed_orders'); $run_alerts();
+ $mine=array_values(array_filter($GLOBALS['mails'],fn($m)=>false!==strpos($m['subject'],'#'.wc_get_order($id)->get_order_number())));
+ t('retries exhausted sends one alert with the last error', 1===count($mine) && false!==strpos($mine[0]['message'],'Connection timed out') && false!==strpos($mine[0]['message'],'3 attempts'), $GLOBALS['mails']);
+ do_action('kunaki_wc_retry_failed_orders'); $run_alerts();
+ t('next retry run does not alert again', 1===count(array_filter($GLOBALS['mails'],fn($m)=>false!==strpos($m['subject'],'#'.wc_get_order($id)->get_order_number()))), $subjects());
+
+ // Declined by Kunaki, found by status sync.
+ $reset(); foreach(wc_get_orders(['status'=>['processing'],'limit'=>-1,'return'=>'ids']) as $x) wc_get_order($x)->update_status('cancelled');
+ $id=mk($ids['disc'],0,'processing'); foreach(as_get_scheduled_actions(['hook'=>'kunaki_wc_submit_order','status'=>'pending','per_page'=>-1],'ids') as $a) ActionScheduler::store()->cancel_action($a);
+ $o=wc_get_order($id); $o->update_meta_data('_kunaki_order_id','KDEC1'); $o->update_meta_data('_kunaki_submitted','yes'); $o->save();
+ update_option('mock_kunaki_status','DECLINED'); (new Kunaki_Order_Status_Sync())->sync_all_pending_orders(); $run_alerts();
+ t('declined order goes on hold', 'on-hold'===wc_get_order($id)->get_status());
+ t('declined order sends one alert naming the Kunaki order', 1===count($GLOBALS['mails']) && false!==strpos($GLOBALS['mails'][0]['subject'],'declined') && false!==strpos($GLOBALS['mails'][0]['message'],'KDEC1'), $GLOBALS['mails']);
+ update_option('mock_kunaki_status','PROCESSING');
+
+ // Outage: one alert per outage, recovery only once it stays up.
+ $reset(); $cb=new Kunaki_Circuit_Breaker(); $threshold=(int)get_option('kunaki_wc_circuit_threshold',5);
+ for($i=0;$i<$threshold;$i++) $cb->post_request(new WP_Error('http_request_failed','mock outage'));
+ $run_alerts();
+ t('circuit trip sends one outage alert', 'open'===$cb->get_state()['state'] && 1===count($GLOBALS['mails']) && false!==strpos($GLOBALS['mails'][0]['subject'],'outage'), $subjects());
+ update_option('kunaki_wc_circuit_breaker',wp_json_encode(['state'=>'half_open','failure_count'=>$threshold,'last_failure_at'=>time(),'opened_at'=>time()-999]),false);
+ $cb->post_request(new WP_Error('http_request_failed','still down')); $run_alerts();
+ t('failed recovery check does not alert again', 1===count($GLOBALS['mails']), $subjects());
+ update_option('kunaki_wc_circuit_breaker',wp_json_encode(['state'=>'half_open','failure_count'=>$threshold,'last_failure_at'=>time(),'opened_at'=>time()-999]),false);
+ $cb->post_request(simplexml_load_string('<R><ErrorCode>0</ErrorCode></R>'));
+ $next=as_next_scheduled_action('kunaki_wc_send_alert');
+ t('recovery is checked again in 15 minutes, not reported at once', 1===count($GLOBALS['mails']) && $next>=time()+14*MINUTE_IN_SECONDS, [$next,time()]);
+ $run_alerts();
+ t('recovery alert sent once the API is still up', 2===count($GLOBALS['mails']) && false!==strpos($GLOBALS['mails'][1]['subject'],'recovered'), $subjects());
+
+ update_option('kunaki_wc_alert_slack_webhook','https://evil.example/hook');
+ t('non-Slack webhook URL is not saved', ''===get_option('kunaki_wc_alert_slack_webhook'), get_option('kunaki_wc_alert_slack_webhook'));
+
+ // Leave one alert queued with alerts off, so deactivation can be checked to cancel it.
+ $bad_order(); update_option('kunaki_wc_alerts_enabled','no'); update_option('kunaki_wc_alert_slack_enabled','no');
+ t('an alert is left queued for the deactivation check', 1===count($pending()));
+ break;
+case 'alerts2':
+ t('deactivation cancels queued alerts', !as_get_scheduled_actions(['hook'=>'kunaki_wc_send_alert','status'=>'pending','per_page'=>-1],'ids'));
+ break;
 }

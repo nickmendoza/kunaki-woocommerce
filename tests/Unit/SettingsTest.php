@@ -22,8 +22,19 @@ class SettingsTest extends KunakiTestCase {
 	public function test_settings_returns_expected_fields() {
 		$fields = $this->settings->get_settings_for_default_section();
 
-		// (title + 7 fields + sectionend) + (title + 2 fields + sectionend) = 13
-		$this->assertCount( 13, $fields );
+		// (title + 7 fields + sectionend) + (title + 2 fields + sectionend)
+		// + alerts (title + 5 fields + sectionend) = 20
+		$this->assertCount( 20, $fields );
+	}
+
+	public function test_alerts_are_off_by_default_and_email_is_the_default_channel() {
+		$fields = $this->settings->get_settings_for_default_section();
+
+		$this->assertSame( 'no', $this->find_field( $fields, 'kunaki_wc_alerts_enabled' )['default'] );
+		$this->assertSame( 'yes', $this->find_field( $fields, 'kunaki_wc_alert_email_enabled' )['default'] );
+		$this->assertSame( 'no', $this->find_field( $fields, 'kunaki_wc_alert_slack_enabled' )['default'] );
+		$this->assertSame( '', $this->find_field( $fields, 'kunaki_wc_alert_email_address' )['default'] );
+		$this->assertSame( '', $this->find_field( $fields, 'kunaki_wc_alert_slack_webhook' )['default'] );
 	}
 
 	public function test_settings_field_ids() {

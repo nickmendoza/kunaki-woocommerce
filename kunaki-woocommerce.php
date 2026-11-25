@@ -56,6 +56,14 @@ function kunaki_wc_check_woocommerce() {
 // Load password encrypt/decrypt helpers.
 require_once __DIR__ . '/includes/encryption.php';
 
+// Loaded here, not with the other classes, because its Slack URL filters below
+// must work even when WooCommerce isn't active.
+require_once __DIR__ . '/includes/class-kunaki-alerts.php';
+
+// Only Slack webhook URLs can be saved. Both filters, so WP-CLI and imports are checked too.
+add_filter( 'pre_update_option_kunaki_wc_alert_slack_webhook', array( 'Kunaki_Alerts', 'validate_webhook_option' ) );
+add_filter( 'pre_add_option_kunaki_wc_alert_slack_webhook', array( 'Kunaki_Alerts', 'validate_webhook_option' ) );
+
 // Register password encrypt/decrypt filters early so they're active in all contexts.
 add_filter( 'pre_update_option_kunaki_wc_password', 'kunaki_wc_encrypt_password', 10, 1 );
 add_filter( 'option_kunaki_wc_password', 'kunaki_wc_decrypt_password', 10, 1 );
@@ -214,4 +222,11 @@ register_deactivation_hook( __FILE__, function () {
 	wp_clear_scheduled_hook( 'kunaki_wc_sync_order_status' );
 	wp_clear_scheduled_hook( 'kunaki_wc_retry_failed_orders' );
 	delete_option( 'kunaki_wc_circuit_breaker' );
+	// The breaker is reset above, so forget any outage it was in. Otherwise the
+	// next outage after reactivation wouldn't send an alert.
+	delete_option( Kunaki_Alerts::OUTAGE_FLAG );
+	if ( function_exists( 'as_unschedule_all_actions' ) ) {
+		// Hook only: passed a group as well, this would only cancel jobs with no args.
+		as_unschedule_all_actions( Kunaki_Alerts::SEND_ACTION );
+	}
 } );

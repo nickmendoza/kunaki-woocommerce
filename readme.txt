@@ -23,6 +23,7 @@ Kunaki WooCommerce connects your WooCommerce store to [Kunaki's](https://kunaki.
 * **Mixed Cart Handling** — Handles orders with both Kunaki and non-Kunaki products, splitting them into separate shipments with independent shipping method selection.
 * **Retry Queue** — Failed submissions are retried automatically with backoff. An admin page shows failed orders with error details and one-click retry.
 * **API Circuit Breaker** — Detects sustained API outages and pauses requests to preserve retry budgets. Automatically recovers when the API comes back.
+* **Email and Slack Alerts** — Optional alerts when an order needs you (it failed every retry, can't be sent until something is fixed, or Kunaki declined it), and when Kunaki's API goes down and comes back.
 * **Dashboard Widget** — At-a-glance order summary on the WordPress dashboard: fulfilling, action needed, and retrying counts.
 * **Credential Encryption** — Your Kunaki password is encrypted at rest with AES-256-GCM.
 * **WP-CLI Support** — `wp kunaki sync` for on-demand bulk status sync.
@@ -79,6 +80,10 @@ Failed orders are automatically retried with linear backoff (attempts × 15 minu
 = What if Kunaki's API goes down? =
 
 The built-in circuit breaker detects sustained failures and pauses all API calls. An admin notice alerts you. Once the API recovers, the circuit breaker automatically resumes normal operation and queued retries continue.
+
+= Can I be told when an order fails? =
+
+Yes. Under **WooCommerce > Settings > Kunaki > Alerts**, turn on alerts and choose email, Slack, or both. You'll get one message per order that needs you, and one when Kunaki's API goes down and when it recovers. Alerts are off by default.
 
 = Is my password stored securely? =
 

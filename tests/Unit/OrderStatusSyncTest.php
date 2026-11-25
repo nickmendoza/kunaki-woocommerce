@@ -2,6 +2,7 @@
 
 namespace Kunaki\Tests\Unit;
 
+use Brain\Monkey\Actions;
 use Brain\Monkey\Functions;
 use Mockery;
 use Kunaki_Order_Status_Sync;
@@ -117,6 +118,24 @@ class OrderStatusSyncTest extends KunakiTestCase {
 		$order->shouldReceive( 'delete_meta_data' )->with( '_kunaki_sync_note_pending' )->once();
 		$order->shouldReceive( 'save_meta_data' )->once();
 
+		Actions\expectDone( 'kunaki_wc_order_needs_attention' )->once()->with( 100, 'declined', 'KUN123' );
+
+		$this->sync->sync_all_pending_orders();
+	}
+
+	public function test_declined_that_was_not_saved_does_not_alert() {
+		$order = $this->create_order_mock( 'KUN123', '' );
+
+		$this->mock_api_status( 'KUN123', 'DECLINED', '', '' );
+		$this->mock_wc_get_orders( array( $order ) );
+
+		$order->shouldReceive( 'update_meta_data' )->withAnyArgs()->zeroOrMoreTimes();
+		$order->shouldReceive( 'set_status' )->zeroOrMoreTimes();
+		$order->shouldReceive( 'save' )->once()->andThrow( new \RuntimeException( 'DB down' ) );
+		$order->shouldNotReceive( 'add_order_note' );
+
+		Actions\expectDone( 'kunaki_wc_order_needs_attention' )->never();
+
 		$this->sync->sync_all_pending_orders();
 	}
 
@@ -137,6 +156,9 @@ class OrderStatusSyncTest extends KunakiTestCase {
 		$order->shouldReceive( 'add_order_note' )->with( Mockery::pattern( "/{$status}/" ), false )->once()->ordered();
 		$order->shouldReceive( 'delete_meta_data' )->with( '_kunaki_sync_note_pending' )->once();
 		$order->shouldReceive( 'save_meta_data' )->once();
+
+		// Only a decline needs a person.
+		Actions\expectDone( 'kunaki_wc_order_needs_attention' )->never();
 
 		$this->sync->sync_all_pending_orders();
 	}

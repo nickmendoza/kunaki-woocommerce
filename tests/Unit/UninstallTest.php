@@ -79,6 +79,29 @@ class UninstallTest extends KunakiTestCase {
 		$this->assertContains( '_kunaki_submitted_%', $this->deleted_keys );
 	}
 
+	public function test_alert_settings_and_queued_alerts_are_always_removed() {
+		$unscheduled = array();
+		Functions\when( 'as_unschedule_all_actions' )->alias( function ( $hook ) use ( &$unscheduled ) {
+			$unscheduled[] = func_get_args();
+			return 1;
+		} );
+
+		$deleted = $this->uninstall( 'no' );
+
+		foreach ( array(
+			'kunaki_wc_alerts_enabled',
+			'kunaki_wc_alert_email_enabled',
+			'kunaki_wc_alert_email_address',
+			'kunaki_wc_alert_slack_enabled',
+			'kunaki_wc_alert_slack_webhook',
+			'kunaki_wc_alert_outage_open',
+		) as $option ) {
+			$this->assertContains( $option, $deleted );
+		}
+		// Hook only, so jobs with arguments are cancelled too.
+		$this->assertContains( array( 'kunaki_wc_send_alert' ), $unscheduled );
+	}
+
 	private function uninstall( $delete_data ) {
 		$deleted = array();
 		// Like the real thing: reads see what's left after earlier deletes.
@@ -94,5 +117,6 @@ class UninstallTest extends KunakiTestCase {
 
 		$this->assertContains( 'kunaki_wc_password', $deleted );
 		$this->assertContains( 'kunaki_wc_delete_data_on_uninstall', $deleted );
+		return $deleted;
 	}
 }

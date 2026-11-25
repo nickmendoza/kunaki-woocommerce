@@ -64,6 +64,10 @@ class Kunaki_WooCommerce {
 		$dashboard = new Kunaki_Dashboard_Widget();
 		$dashboard->init();
 
+		// Email and Slack alerts. The class is loaded by the main plugin file.
+		$alerts = new Kunaki_Alerts();
+		$alerts->init();
+
 		// Admin assets.
 		add_action( 'admin_enqueue_scripts', array( $this, 'enqueue_admin_assets' ) );
 
