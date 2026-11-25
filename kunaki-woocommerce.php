@@ -60,9 +60,9 @@ require_once __DIR__ . '/includes/encryption.php';
 // must work even when WooCommerce isn't active.
 require_once __DIR__ . '/includes/class-kunaki-alerts.php';
 
-// Only Slack webhook URLs can be saved. Both filters, so WP-CLI and imports are checked too.
-add_filter( 'pre_update_option_kunaki_wc_alert_slack_webhook', array( 'Kunaki_Alerts', 'validate_webhook_option' ) );
-add_filter( 'pre_add_option_kunaki_wc_alert_slack_webhook', array( 'Kunaki_Alerts', 'validate_webhook_option' ) );
+// Only Slack webhook URLs can be saved. add_option() and update_option() both
+// run this filter, so WP-CLI and imports are checked too.
+add_filter( 'sanitize_option_kunaki_wc_alert_slack_webhook', array( 'Kunaki_Alerts', 'validate_webhook_option' ) );
 
 // Register password encrypt/decrypt filters early so they're active in all contexts.
 add_filter( 'pre_update_option_kunaki_wc_password', 'kunaki_wc_encrypt_password', 10, 1 );

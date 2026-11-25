@@ -202,7 +202,7 @@ Failed orders and outages show up in WordPress admin, but nobody sees them there
 
 Each order alert names the order, says what went wrong, and links to it. Alerts are sent in the background through Action Scheduler, so checkout never waits on email or Slack.
 
-An unstable API doesn't flood you. There is one outage alert per outage, however often the circuit trips and re-trips. The recovery alert is only sent once the API has stayed up for 15 minutes. If an outage lasts more than a day, it alerts again.
+An unstable API doesn't flood you. There is one outage alert per outage, however often the circuit trips and re-trips. The recovery alert waits 15 minutes and is only sent if the API is still up then. If an outage lasts more than a day, you get a reminder. An order alert that is still queued when someone deals with the order isn't sent.
 
 For other integrations, the plugin fires public actions after each change is saved: `kunaki_wc_order_needs_attention( $order_id, $reason, $message )`, where `$reason` is `retries_exhausted`, `permanent_failure` or `declined`, plus `kunaki_wc_circuit_breaker_opened` and `kunaki_wc_circuit_breaker_closed`.
 
@@ -234,7 +234,7 @@ The test suite runs entirely outside WordPress. No WordPress installation, no da
 
 This isolation strategy means tests execute in seconds, run in CI without infrastructure, and validate plugin logic without conflating it with WordPress behavior.
 
-377 unit tests cover:
+383 unit tests cover:
 
 | Area | What's Validated |
 |------|-----------------|

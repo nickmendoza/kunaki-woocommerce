@@ -57,23 +57,29 @@ class Kunaki_Alerts {
 
 	/**
 	 * Sanitize a Slack webhook URL before it's saved. Anything that isn't an
-	 * HTTP(S) URL on hooks.slack.com is stored as ''. Registered for both
-	 * pre_update_option and pre_add_option, so WP-CLI and imports are checked too.
+	 * https URL on hooks.slack.com is stored as ''. Registered on
+	 * sanitize_option, which add_option() and update_option() both run, so
+	 * WP-CLI and imports are checked too.
+	 *
+	 * Deliberately no DNS lookup (as wp_http_validate_url() does): this runs on
+	 * every save of the settings page, and a DNS hiccup would wipe a working URL.
 	 *
 	 * @param mixed $value Value being saved.
 	 * @return string
 	 */
 	public static function validate_webhook_option( $value ) {
 		$value = is_string( $value ) ? trim( $value ) : '';
-		if ( '' === $value || ! wp_http_validate_url( $value ) || ! self::is_slack_host( $value ) ) {
-			return '';
-		}
-		return esc_url_raw( $value );
+		return self::is_slack_webhook( $value ) ? esc_url_raw( $value ) : '';
 	}
 
-	private static function is_slack_host( $url ) {
-		$host = wp_parse_url( $url, PHP_URL_HOST );
-		return is_string( $host ) && self::SLACK_WEBHOOK_HOST === strtolower( $host );
+	private static function is_slack_webhook( $url ) {
+		$parts = wp_parse_url( $url );
+		return is_array( $parts )
+			&& isset( $parts['scheme'], $parts['host'] )
+			&& 'https' === strtolower( $parts['scheme'] )
+			&& self::SLACK_WEBHOOK_HOST === strtolower( $parts['host'] )
+			&& ! isset( $parts['user'] ) && ! isset( $parts['pass'] )
+			&& ( ! isset( $parts['port'] ) || 443 === (int) $parts['port'] );
 	}
 
 	public function handle_circuit_opened() {
@@ -167,7 +173,7 @@ class Kunaki_Alerts {
 
 		$message = $this->build_message( (string) $event, (int) $order_id, (string) $reason );
 		if ( null === $message ) {
-			Kunaki_Logger::error( 'Alert dropped: nothing to report.', array( 'event' => $event, 'order_id' => $order_id ) );
+			Kunaki_Logger::info( 'Alert not sent: the order no longer needs attention, or no longer exists.', array( 'event' => $event, 'order_id' => $order_id ) );
 			return;
 		}
 
@@ -219,6 +225,15 @@ class Kunaki_Alerts {
 	private function build_order_message( $order_id, $reason ) {
 		$order = function_exists( 'wc_get_order' ) ? wc_get_order( $order_id ) : false;
 		if ( ! $order ) {
+			return null;
+		}
+
+		// The admin may have dealt with it before this job ran, which also
+		// clears the details below. Nothing to report then.
+		$still_needed = self::REASON_DECLINED === $reason
+			? 'DECLINED' === $order->get_meta( Kunaki_Order_Fulfillment::META_KUNAKI_STATUS )
+			: 'yes' === $order->get_meta( Kunaki_Order_Fulfillment::META_FULFILLMENT_EXHAUSTED );
+		if ( ! $still_needed ) {
 			return null;
 		}
 
@@ -370,10 +385,20 @@ class Kunaki_Alerts {
 		}
 
 		// Checked again here in case the option was written without the save filter.
-		if ( ! self::is_slack_host( $webhook ) ) {
-			Kunaki_Logger::error( 'Alert Slack blocked: the webhook URL is not on ' . self::SLACK_WEBHOOK_HOST . '.' );
+		if ( ! self::is_slack_webhook( $webhook ) ) {
+			Kunaki_Logger::error( 'Alert Slack blocked: the webhook URL is not an https URL on ' . self::SLACK_WEBHOOK_HOST . '.' );
 			return false;
 		}
+
+		// Slack reads <...> as links and mentions (<!channel>), so error text
+		// from Kunaki or order data must be escaped.
+		$title  = self::slack_escape( $title );
+		$body   = self::slack_escape( $body );
+		$fields = array_map( function ( $field ) {
+			$field['title'] = self::slack_escape( (string) $field['title'] );
+			$field['value'] = self::slack_escape( (string) $field['value'] );
+			return $field;
+		}, $fields );
 
 		$response = wp_remote_post( $webhook, array(
 			'timeout'     => 5,
@@ -387,7 +412,7 @@ class Kunaki_Alerts {
 						'title'  => $title,
 						'text'   => $body,
 						'fields' => array_values( $fields ),
-						'footer' => 'Kunaki WooCommerce: ' . get_bloginfo( 'name' ),
+						'footer' => 'Kunaki WooCommerce: ' . self::slack_escape( (string) get_bloginfo( 'name' ) ),
 						'ts'     => time(),
 					),
 				),
@@ -407,6 +432,10 @@ class Kunaki_Alerts {
 
 		Kunaki_Logger::info( 'Alert Slack posted.' );
 		return true;
+	}
+
+	private static function slack_escape( $text ) {
+		return str_replace( array( '&', '<', '>' ), array( '&amp;', '&lt;', '&gt;' ), $text );
 	}
 
 	private function recipient_email() {

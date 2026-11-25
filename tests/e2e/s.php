@@ -157,6 +157,8 @@ case 'alerts':
 
  update_option('kunaki_wc_alert_slack_webhook','https://evil.example/hook');
  t('non-Slack webhook URL is not saved', ''===get_option('kunaki_wc_alert_slack_webhook'), get_option('kunaki_wc_alert_slack_webhook'));
+ delete_option('kunaki_wc_alert_slack_webhook'); add_option('kunaki_wc_alert_slack_webhook','http://hooks.slack.com/services/T0/B0/X0');
+ t('add_option is checked too, and plain http is refused', ''===get_option('kunaki_wc_alert_slack_webhook'), get_option('kunaki_wc_alert_slack_webhook'));
 
  // Leave one alert queued with alerts off, so deactivation can be checked to cancel it.
  $bad_order(); update_option('kunaki_wc_alerts_enabled','no'); update_option('kunaki_wc_alert_slack_enabled','no');

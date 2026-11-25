@@ -195,6 +195,26 @@ class CircuitBreakerTest extends KunakiTestCase {
 		$this->assertSame( 0, $saved['failure_count'] );
 	}
 
+	public function test_late_success_while_open_closes_circuit_and_reports_it() {
+		// A request that started before the trip succeeds afterwards.
+		$this->set_circuit_state( 'open', 5, time() - 10 );
+		Actions\expectDone( 'kunaki_wc_circuit_breaker_closed' )->once();
+
+		$cb = new Kunaki_Circuit_Breaker();
+		$cb->post_request( simplexml_load_string( '<R><ErrorCode>0</ErrorCode></R>' ) );
+
+		$saved = json_decode( $this->updated_options[ Kunaki_Circuit_Breaker::OPTION_KEY ], true );
+		$this->assertSame( 'closed', $saved['state'] );
+	}
+
+	public function test_success_while_closed_reports_nothing() {
+		$this->set_circuit_state( 'closed', 2 );
+		Actions\expectDone( 'kunaki_wc_circuit_breaker_closed' )->never();
+
+		( new Kunaki_Circuit_Breaker() )->post_request( simplexml_load_string( '<R><ErrorCode>0</ErrorCode></R>' ) );
+		$this->addToAssertionCount( 1 );
+	}
+
 	// ── post_request() failure ────────────────────────────────────────
 
 	public function test_failure_increments_count_below_threshold() {

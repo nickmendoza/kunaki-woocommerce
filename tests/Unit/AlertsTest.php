@@ -271,6 +271,20 @@ class AlertsTest extends KunakiTestCase {
 		$this->assertSame( array(), $this->jobs );
 	}
 
+	public function test_order_dealt_with_before_sending_is_not_alerted() {
+		$this->enable_alerts();
+		// The admin retried both before the jobs ran: exhausted flag and DECLINED status cleared.
+		$this->add_order( 1, array( '_kunaki_fulfillment_exhausted' => '' ) );
+		$this->add_order( 2, array( '_kunaki_order_status' => '' ) );
+		$alerts = new Kunaki_Alerts();
+
+		$alerts->execute_send( Kunaki_Alerts::EVENT_ORDER, 1, Kunaki_Alerts::REASON_RETRIES_EXHAUSTED );
+		$alerts->execute_send( Kunaki_Alerts::EVENT_ORDER, 1, Kunaki_Alerts::REASON_PERMANENT_FAILURE );
+		$alerts->execute_send( Kunaki_Alerts::EVENT_ORDER, 2, Kunaki_Alerts::REASON_DECLINED );
+
+		$this->assertSame( array(), $this->mails );
+	}
+
 	public function test_order_deleted_before_sending_is_dropped() {
 		$this->enable_alerts();
 
@@ -370,6 +384,18 @@ class AlertsTest extends KunakiTestCase {
 		$this->assertSame( '#1042', $payload['attachments'][0]['fields'][0]['value'] );
 	}
 
+	public function test_slack_text_is_escaped_so_it_cannot_mention_or_link() {
+		$this->enable_slack();
+		$this->add_order( 42, array( '_kunaki_fulfillment_last_error' => 'Bad address <!channel> & <https://evil.example|click>' ) );
+
+		( new Kunaki_Alerts() )->execute_send( Kunaki_Alerts::EVENT_ORDER, 42, Kunaki_Alerts::REASON_PERMANENT_FAILURE );
+
+		$body = $this->posts[0]['args']['body'];
+		$this->assertStringNotContainsString( '<!channel>', $body );
+		$this->assertStringContainsString( '&lt;!channel&gt; &amp; &lt;https:', json_decode( $body, true )['attachments'][0]['text'] );
+		$this->assertStringContainsString( '&lt;!channel&gt;', json_decode( $body, true )['attachments'][0]['fields'][1]['value'] );
+	}
+
 	public function test_recovery_slack_message_is_green() {
 		$this->enable_slack();
 		$this->rows[ Kunaki_Alerts::OUTAGE_FLAG ] = (string) time();
@@ -381,9 +407,10 @@ class AlertsTest extends KunakiTestCase {
 	}
 
 	public function test_slack_blocks_a_non_slack_url_stored_without_the_save_filter() {
-		$this->enable_slack( 'https://attacker.example/hook' );
-
-		( new Kunaki_Alerts() )->execute_send( Kunaki_Alerts::EVENT_CIRCUIT_OPENED );
+		foreach ( array( 'https://attacker.example/hook', 'http://hooks.slack.com/services/T/B/X' ) as $url ) {
+			$this->enable_slack( $url );
+			( new Kunaki_Alerts() )->execute_send( Kunaki_Alerts::EVENT_CIRCUIT_OPENED );
+		}
 
 		$this->assertSame( array(), $this->posts );
 	}
@@ -422,6 +449,8 @@ class AlertsTest extends KunakiTestCase {
 			'slack as subdomain'      => array( 'https://hooks.slack.com.evil.example/x', '' ),
 			'slack as userinfo'       => array( 'https://hooks.slack.com@evil.example/x', '' ),
 			'subdomain of slack host' => array( 'https://evil.hooks.slack.com/x', '' ),
+			'plain http'              => array( 'http://hooks.slack.com/services/T/B/X', '' ),
+			'other port'              => array( 'https://hooks.slack.com:8443/services/T/B/X', '' ),
 			'not a url'               => array( 'not a url', '' ),
 			'javascript scheme'       => array( 'javascript:alert(1)', '' ),
 			'empty'                   => array( '', '' ),
@@ -459,6 +488,7 @@ class AlertsTest extends KunakiTestCase {
 	}
 
 	private function add_order( $id, $meta = array() ) {
+		$meta += array( '_kunaki_fulfillment_exhausted' => 'yes', '_kunaki_order_status' => 'DECLINED' );
 		$order = Mockery::mock( 'WC_Order' );
 		$order->shouldReceive( 'get_order_number' )->andReturn( (string) ( 1000 + $id ) );
 		$order->shouldReceive( 'get_edit_order_url' )->andReturn( 'https://example.test/edit/' . $id );
@@ -495,9 +525,6 @@ class AlertsTest extends KunakiTestCase {
 		} );
 		Functions\when( 'admin_url' )->alias( function ( $path = '' ) {
 			return 'https://example.test/wp-admin/' . ltrim( $path, '/' );
-		} );
-		Functions\when( 'wp_http_validate_url' )->alias( function ( $url ) {
-			return false !== filter_var( $url, FILTER_VALIDATE_URL ) && in_array( parse_url( $url, PHP_URL_SCHEME ), array( 'http', 'https' ), true ) ? $url : false;
 		} );
 		Functions\when( 'wp_parse_url' )->alias( function ( $url, $component = -1 ) {
 			return parse_url( $url, $component );

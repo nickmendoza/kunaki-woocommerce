@@ -236,6 +236,11 @@ class Kunaki_Circuit_Breaker {
 
 		if ( 'half_open' === $previous ) {
 			Kunaki_Logger::info( 'Circuit breaker: half_open -> closed (probe request succeeded).' );
+		} elseif ( 'open' === $previous ) {
+			// A request that started before the circuit tripped succeeded afterwards.
+			Kunaki_Logger::info( 'Circuit breaker: open -> closed (an earlier request succeeded).' );
+		}
+		if ( 'closed' !== $previous ) {
 			do_action( 'kunaki_wc_circuit_breaker_closed', $state );
 		}
 	}
