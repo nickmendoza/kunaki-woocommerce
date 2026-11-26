@@ -94,7 +94,8 @@ case 'alerts':
  $GLOBALS['mails']=[]; $GLOBALS['slack']=[]; $GLOBALS['mail_ok']=true;
  // WooCommerce's own order emails go through wp_mail too, so only count mail to the alert address.
  // Setting mail_ok to false makes every send fail, as a broken mail server would.
- add_filter('pre_wp_mail',function($r,$a){ if('ops@example.com'===($a['to']??'')) $GLOBALS['mails'][]=$a; return $GLOBALS['mail_ok']; },10,2);
+ // Setting it to 'throw' makes a send to the alert address throw, as a broken mail plugin would.
+ add_filter('pre_wp_mail',function($r,$a){ $mine='ops@example.com'===($a['to']??''); if($mine) $GLOBALS['mails'][]=$a; if($mine && 'throw'===$GLOBALS['mail_ok']) throw new RuntimeException('mail plugin blew up'); return false!==$GLOBALS['mail_ok']; },10,2);
  add_filter('pre_http_request',function($r,$args,$url){ if(false===strpos($url,'slack')) return $r; $GLOBALS['slack'][]=$url; return ['headers'=>[],'body'=>'ok','response'=>['code'=>200,'message'=>'OK'],'cookies'=>[]]; },5,3);
  $pending=function(){ return as_get_scheduled_actions(['hook'=>'kunaki_wc_send_alert','status'=>'pending','per_page'=>-1],'ids'); };
  $run_alerts=function() use($pending){ foreach($pending() as $a) ActionScheduler::runner()->process_action($a,'stage'); };
@@ -193,7 +194,14 @@ case 'alerts':
  t('cancelled order still carries its failure', 'yes'===wc_get_order($id)->get_meta('_kunaki_fulfillment_exhausted') && 1===count($pending()), [wc_get_order($id)->get_meta('_kunaki_fulfillment_exhausted'),count($pending())]);
  $run_alerts();
  t('order cancelled before the resend is not alerted', 1===count($GLOBALS['mails']) && !$pending(), [$subjects(),count($pending())]);
+ // A send that throws counts as not delivered too: the alert is queued again, and the other channel is still tried.
+ $reset(); $GLOBALS['mail_ok']='throw'; $bad_order(); $run_alerts();
+ t('order alert whose email throws is queued again', 1===count($GLOBALS['mails']) && 1===count($pending()), [$subjects(),count($pending())]);
+ foreach($pending() as $a) ActionScheduler::store()->cancel_action($a);
  update_option('kunaki_wc_alert_slack_enabled','yes');
+ $reset(); $bad_order(); $run_alerts();
+ t('email that throws does not stop Slack', 1===count($GLOBALS['mails']) && 1===count($GLOBALS['slack']) && !$pending(), [$subjects(),$GLOBALS['slack'],count($pending())]);
+ $GLOBALS['mail_ok']=true;
 
  // The saved password can't be decrypted, as after a change of salts: one alert, and orders wait for it to be entered again.
  $reset(); global $wpdb; $wpdb->update($wpdb->options,['option_value'=>base64_encode(random_bytes(48))],['option_name'=>'kunaki_wc_password']); wp_cache_flush();

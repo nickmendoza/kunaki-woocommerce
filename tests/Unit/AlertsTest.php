@@ -30,6 +30,12 @@ class AlertsTest extends KunakiTestCase {
 	/** @var bool Whether the Slack request itself fails (timeout, DNS). */
 	private $slack_error = false;
 
+	/** @var bool Whether the Slack request throws, as a filter on it might. */
+	private $slack_throws = false;
+
+	/** @var bool Whether queueing a job throws. */
+	private $enqueue_throws = false;
+
 	/** @var array Queued Action Scheduler jobs: [ 'hook', 'args', 'group', 'when' ]. */
 	private $jobs = array();
 
@@ -54,6 +60,8 @@ class AlertsTest extends KunakiTestCase {
 		$this->posts           = array();
 		$this->slack_status    = 200;
 		$this->slack_error     = false;
+		$this->slack_throws    = false;
+		$this->enqueue_throws  = false;
 		$this->jobs            = array();
 		$this->enqueue_return  = 123;
 		$this->schedule_return = 456;
@@ -882,7 +890,93 @@ class AlertsTest extends KunakiTestCase {
 		( new Kunaki_Alerts() )->init();
 	}
 
+	// ── A send that throws ─────────────────────────────────────────────
+
+	public function test_email_that_throws_does_not_stop_slack() {
+		$this->enable_slack();
+		$this->options[ Kunaki_Alerts::OPT_EMAIL_ENABLED ] = 'yes';
+		$this->options[ Kunaki_Alerts::OPT_EMAIL_ADDRESS ] = 'alerts@example.com';
+		$this->mail_return                                 = function () {
+			throw new \RuntimeException( 'mail plugin blew up' );
+		};
+		$alerts = new Kunaki_Alerts();
+
+		$alerts->handle_circuit_opened();
+		$this->run_jobs();
+
+		$this->assertCount( 1, $this->posts, 'Slack is still tried.' );
+		$this->assertArrayHasKey( Kunaki_Alerts::OUTAGE_FLAG, $this->rows, 'Slack delivered it, so the outage counts as reported.' );
+		$this->assertTrue( $this->logged( 'mail plugin blew up' ), 'The log is the only place the failed email shows.' );
+	}
+
+	/**
+	 * @dataProvider channels_that_throw
+	 */
+	public function test_outage_alert_whose_send_throws_is_sent_again_at_the_next_failed_check( $channel ) {
+		$this->use_only_a_channel_that_throws( $channel );
+		$alerts = new Kunaki_Alerts();
+
+		$alerts->handle_circuit_opened();
+		$this->run_jobs();
+
+		$this->assertArrayNotHasKey( Kunaki_Alerts::OUTAGE_FLAG, $this->rows, 'An alert nobody received must not count as sent.' );
+
+		$alerts->handle_circuit_opened();          // The next failed recovery check.
+
+		$this->assertCount( 1, $this->jobs, 'So the next failed check alerts again.' );
+	}
+
+	/**
+	 * @dataProvider channels_that_throw
+	 */
+	public function test_order_alert_whose_send_throws_is_sent_again_later( $channel ) {
+		$this->use_only_a_channel_that_throws( $channel );
+		$this->add_order( 42 );
+
+		( new Kunaki_Alerts() )->handle_order_needs_attention( 42, Kunaki_Alerts::REASON_RETRIES_EXHAUSTED );
+		$this->run_jobs();
+
+		$this->assertCount( 1, $this->jobs, 'Nothing else would bring this alert back.' );
+		$this->assertSame( array( 'order_needs_attention', 42, 'retries_exhausted', 1 ), $this->jobs[0]['args'] );
+	}
+
+	public function channels_that_throw() {
+		return array(
+			'email throws' => array( 'email' ),
+			'Slack throws' => array( 'slack' ),
+		);
+	}
+
+	public function test_outage_alert_that_throws_while_being_queued_does_not_count_as_sent() {
+		$this->enable_alerts();
+		$this->enqueue_throws = true;
+		$alerts               = new Kunaki_Alerts();
+
+		$alerts->handle_circuit_opened();
+
+		$this->assertSame( array(), $this->rows, 'Nothing was queued, so the outage must not count as reported.' );
+
+		$this->enqueue_throws = false;
+		$alerts->handle_circuit_opened();          // The next failed recovery check.
+		$this->run_jobs();
+
+		$this->assertCount( 1, $this->mails );
+	}
+
 	// ── Helpers ────────────────────────────────────────────────────────
+
+	/** Turn on one channel only, and make its send throw, as a broken mail plugin or a filter on the request would. */
+	private function use_only_a_channel_that_throws( $channel ) {
+		if ( 'email' === $channel ) {
+			$this->enable_alerts();
+			$this->mail_return = function () {
+				throw new \RuntimeException( 'mail plugin blew up' );
+			};
+			return;
+		}
+		$this->enable_slack();
+		$this->slack_throws = true;
+	}
 
 	private function enable_alerts( $email = 'alerts@example.com' ) {
 		$this->options[ Kunaki_Alerts::OPT_ENABLED ]       = 'yes';
@@ -965,6 +1059,9 @@ class AlertsTest extends KunakiTestCase {
 		} );
 		Functions\when( 'wp_remote_post' )->alias( function ( $url, $args ) use ( $test ) {
 			$test->posts[] = array( 'url' => $url, 'args' => $args );
+			if ( $test->slack_throws ) {
+				throw new \RuntimeException( 'request filter blew up' );
+			}
 			if ( $test->slack_error ) {
 				return new \WP_Error( 'http_request_failed', 'Could not resolve host: hooks.slack.com' );
 			}
@@ -974,6 +1071,9 @@ class AlertsTest extends KunakiTestCase {
 			return $test->slack_status;
 		} );
 		Functions\when( 'as_enqueue_async_action' )->alias( function ( $hook, $args, $group ) use ( $test ) {
+			if ( $test->enqueue_throws ) {
+				throw new \RuntimeException( 'Error saving action' );
+			}
 			if ( $test->enqueue_return ) {
 				$test->jobs[] = array( 'hook' => $hook, 'args' => $args, 'group' => $group, 'when' => time() );
 			}

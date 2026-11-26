@@ -34,7 +34,7 @@ class Kunaki_Alerts {
 	// written with INSERT IGNORE when the outage alert is queued, so only one
 	// concurrent request wins. It's deleted when the recovery alert is sent, when
 	// the API recovers while alerts are off, or straight away if the outage
-	// alert couldn't be delivered, so the next failed check tries again. Its
+	// alert couldn't be queued or delivered, so the next failed check tries again. Its
 	// value is when it was set; after a day it counts as stale.
 	const OUTAGE_FLAG       = 'kunaki_wc_alert_outage_open';
 	const OUTAGE_FLAG_STALE = DAY_IN_SECONDS;
@@ -99,7 +99,15 @@ class Kunaki_Alerts {
 		if ( ! $this->alerts_enabled() || ! $this->claim_outage_flag() ) {
 			return;
 		}
-		$this->dispatch( self::EVENT_CIRCUIT_OPENED );
+
+		try {
+			$this->dispatch( self::EVENT_CIRCUIT_OPENED );
+		} catch ( \Throwable $e ) {
+			// Nothing was queued, so the outage mustn't count as reported.
+			// Released, the next failed check alerts again.
+			$this->release_outage_flag();
+			Kunaki_Logger::error( 'Outage alert could not be queued. It will be sent again at the next failed check.', array( 'error' => $e->getMessage() ) );
+		}
 	}
 
 	public function handle_circuit_closed() {
@@ -212,12 +220,23 @@ class Kunaki_Alerts {
 
 		$delivered = false;
 
+		// A send that throws (a mail plugin, a filter on the request) counts as
+		// not delivered. Left uncaught, it would skip the other channel, and
+		// the handling below for an alert that reached nobody.
 		if ( 'yes' === get_option( self::OPT_EMAIL_ENABLED, 'yes' ) ) {
-			$delivered = $this->send_email( $this->site_tag() . ' ' . $message['title'], $message['body'] );
+			try {
+				$delivered = $this->send_email( $this->site_tag() . ' ' . $message['title'], $message['body'] );
+			} catch ( \Throwable $e ) {
+				Kunaki_Logger::error( 'Alert email threw while sending.', array( 'error' => $e->getMessage() ) );
+			}
 		}
 
 		if ( 'yes' === get_option( self::OPT_SLACK_ENABLED, 'no' ) ) {
-			$delivered = $this->send_slack( $message['title'], $message['body'], $message['fields'], $message['severity'] ) || $delivered;
+			try {
+				$delivered = $this->send_slack( $message['title'], $message['body'], $message['fields'], $message['severity'] ) || $delivered;
+			} catch ( \Throwable $e ) {
+				Kunaki_Logger::error( 'Alert Slack threw while sending.', array( 'error' => $e->getMessage() ) );
+			}
 		}
 
 		// An outage alert that reached nobody mustn't count as sent. Without
