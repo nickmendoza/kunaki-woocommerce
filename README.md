@@ -202,7 +202,7 @@ Failed orders and outages show up in WordPress admin, but nobody sees them there
 
 Each order alert names the order, says what went wrong, and links to it. Alerts are sent in the background through Action Scheduler, so checkout never waits on email or Slack.
 
-An unstable API doesn't flood you. There is one outage alert per outage, however often the circuit trips and re-trips. The recovery alert waits 15 minutes and is only sent if the API is still up then. If an outage lasts more than a day, you get a reminder. If an outage alert can't be delivered, it's sent again at the next failed check. An order alert that is still queued when someone deals with the order isn't sent.
+An unstable API doesn't flood you. There is one outage alert per outage, however often the circuit trips and re-trips. The recovery alert waits 15 minutes and is only sent if the API is still up then. If an outage lasts more than a day, you get a reminder. If an outage alert can't be delivered, it's sent again at the next failed check. If an order alert can't be delivered, it's sent again an hour later, up to three times. An order alert that is still queued when someone deals with the order isn't sent.
 
 For other integrations, the plugin fires public actions after each change is saved: `kunaki_wc_order_needs_attention( $order_id, $reason, $message )`, where `$reason` is `retries_exhausted`, `permanent_failure` or `declined`, plus `kunaki_wc_circuit_breaker_opened` and `kunaki_wc_circuit_breaker_closed`. An exception thrown by a listener is caught and logged, so it can't interrupt fulfillment.
 
@@ -234,7 +234,7 @@ The test suite runs entirely outside WordPress. No WordPress installation, no da
 
 This isolation strategy means tests execute in seconds, run in CI without infrastructure, and validate plugin logic without conflating it with WordPress behavior.
 
-404 unit tests cover:
+412 unit tests cover:
 
 | Area | What's Validated |
 |------|-----------------|
@@ -245,7 +245,7 @@ This isolation strategy means tests execute in seconds, run in CI without infras
 | Product Meta | 10-character alphanumeric validation, capability checks, admin column rendering, safe handling of absent POST fields |
 | Logger | Debug gating based on settings, log level routing, structured JSON context, invalid UTF-8 fallback |
 | Retry Queue | AJAX handler permission and input validation, `prepare_for_retry` guard clauses, admin page hook registration |
-| Alerts | Master and channel switches, background queueing, one alert per outage however the API flaps, delayed recovery alert, the message for each order case, error text capping, admin email fallback, Slack URL allowlist, and that each event only fires after its change is saved |
+| Alerts | Master and channel switches, background queueing, one alert per outage however the API flaps, delayed recovery alert, resending an order alert that wasn't delivered, the message for each order case, error text capping, admin email fallback, Slack URL allowlist, and that each event only fires after its change is saved |
 | Circuit Breaker | State transitions (closed/open/half_open), threshold and cooldown configuration, error classification (infrastructure vs. business logic), probe recovery, admin state reporting |
 | CLI Command | Dry-run listing, limit enforcement, sync dispatch, empty-queue handling |
 | Delivery Estimator | Transit day parsing, business-to-calendar conversion, percentile statistics, transient caching, date range formatting, end-to-end estimate generation |

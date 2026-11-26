@@ -168,6 +168,28 @@ case 'alerts':
  t('next failed check sends the outage alert', 2===count($GLOBALS['mails']) && false!==strpos($GLOBALS['mails'][1]['subject'],'outage') && null!==$flag(), $subjects());
  delete_option('kunaki_wc_circuit_breaker'); delete_option('kunaki_wc_alert_outage_open'); update_option('kunaki_wc_alert_slack_enabled','yes');
 
+ // Alerts turned off before the API recovers: the outage is forgotten, so the next one alerts.
+ $reset(); for($i=0;$i<$threshold;$i++) $cb->post_request(new WP_Error('http_request_failed','mock outage'));
+ $run_alerts(); update_option('kunaki_wc_alerts_enabled','no');
+ update_option('kunaki_wc_circuit_breaker',wp_json_encode(['state'=>'half_open','failure_count'=>$threshold,'last_failure_at'=>time(),'opened_at'=>time()-999]),false);
+ $cb->post_request(simplexml_load_string('<R><ErrorCode>0</ErrorCode></R>'));
+ t('recovery while alerts are off forgets the outage', 1===count($GLOBALS['mails']) && null===$flag() && !$pending(), [$subjects(),$flag(),count($pending())]);
+ update_option('kunaki_wc_alerts_enabled','yes');
+ for($i=0;$i<$threshold;$i++) $cb->post_request(new WP_Error('http_request_failed','mock outage'));
+ $run_alerts();
+ t('next outage after alerts are turned back on is alerted', 2===count($GLOBALS['mails']) && false!==strpos($GLOBALS['mails'][1]['subject'],'outage') && null!==$flag(), $subjects());
+ delete_option('kunaki_wc_circuit_breaker'); delete_option('kunaki_wc_alert_outage_open');
+
+ // An order alert nobody received is sent again an hour later, and given up on after three resends.
+ $reset(); $GLOBALS['mail_ok']=false; update_option('kunaki_wc_alert_slack_enabled','no');
+ $bad_order(); $run_alerts(); $next=as_next_scheduled_action('kunaki_wc_send_alert');
+ t('order alert that could not be delivered is queued again for an hour later', 1===count($GLOBALS['mails']) && 1===count($pending()) && $next>=time()+59*MINUTE_IN_SECONDS, [$subjects(),count($pending()),$next,time()]);
+ $GLOBALS['mail_ok']=true; $run_alerts();
+ t('the resend delivers the order alert', 2===count($GLOBALS['mails']) && !$pending(), [$subjects(),count($pending())]);
+ $reset(); $GLOBALS['mail_ok']=false; $bad_order(); for($i=0;$i<8;$i++) $run_alerts();
+ t('order alert is given up on after three resends', 4===count($GLOBALS['mails']) && !$pending(), [count($GLOBALS['mails']),count($pending())]);
+ $GLOBALS['mail_ok']=true; update_option('kunaki_wc_alert_slack_enabled','yes');
+
  update_option('kunaki_wc_alert_slack_webhook','https://evil.example/hook');
  t('non-Slack webhook URL is not saved', ''===get_option('kunaki_wc_alert_slack_webhook'), get_option('kunaki_wc_alert_slack_webhook'));
  delete_option('kunaki_wc_alert_slack_webhook'); add_option('kunaki_wc_alert_slack_webhook','http://hooks.slack.com/services/T0/B0/X0');

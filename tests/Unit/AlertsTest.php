@@ -2,6 +2,7 @@
 
 namespace Kunaki\Tests\Unit;
 
+use Brain\Monkey\Actions;
 use Brain\Monkey\Functions;
 use Mockery;
 use Kunaki_Alerts;
@@ -274,6 +275,63 @@ class AlertsTest extends KunakiTestCase {
 		$this->assertCount( 1, $this->mails, 'Only the failed outage attempt.' );
 	}
 
+	public function test_recovery_while_alerts_are_off_forgets_the_outage() {
+		$this->enable_alerts();
+		$alerts = new Kunaki_Alerts();
+		$alerts->handle_circuit_opened();
+		$this->run_jobs();
+
+		$this->options[ Kunaki_Alerts::OPT_ENABLED ] = 'no';
+		$this->set_circuit( 'closed' );
+		$alerts->handle_circuit_closed();
+
+		$this->assertSame( array(), $this->jobs, 'No recovery is reported while alerts are off.' );
+		$this->assertArrayNotHasKey( Kunaki_Alerts::OUTAGE_FLAG, $this->rows );
+
+		// Turned back on the same day: the next outage must alert, not only its recovery.
+		$this->options[ Kunaki_Alerts::OPT_ENABLED ] = 'yes';
+		$this->set_circuit( 'open' );
+		$alerts->handle_circuit_opened();
+		$this->run_jobs();
+
+		$this->assertCount( 2, $this->mails );
+		$this->assertStringContainsString( 'outage', $this->mails[1]['subject'] );
+	}
+
+	public function test_recovery_check_that_runs_with_alerts_off_forgets_the_outage() {
+		$this->enable_alerts();
+		$alerts = new Kunaki_Alerts();
+		$alerts->handle_circuit_opened();
+		$this->run_jobs();
+		$this->set_circuit( 'closed' );
+		$alerts->handle_circuit_closed();          // Recovery check queued.
+
+		$this->options[ Kunaki_Alerts::OPT_ENABLED ] = 'no';
+		$this->run_jobs();
+
+		$this->assertCount( 1, $this->mails, 'Only the outage alert.' );
+		$this->assertArrayNotHasKey( Kunaki_Alerts::OUTAGE_FLAG, $this->rows );
+	}
+
+	public function test_alerts_turned_off_and_on_during_an_outage_still_report_its_recovery() {
+		$this->enable_alerts();
+		$alerts = new Kunaki_Alerts();
+		$alerts->handle_circuit_opened();
+		$this->run_jobs();
+
+		// Nothing recovers while alerts are off, so the outage stays flagged.
+		$this->options[ Kunaki_Alerts::OPT_ENABLED ] = 'no';
+		$alerts->handle_circuit_opened();          // A failed recovery check.
+		$this->options[ Kunaki_Alerts::OPT_ENABLED ] = 'yes';
+
+		$this->set_circuit( 'closed' );
+		$alerts->handle_circuit_closed();
+		$this->run_jobs();
+
+		$this->assertCount( 2, $this->mails );
+		$this->assertStringContainsString( 'recovered', $this->mails[1]['subject'] );
+	}
+
 	public function test_undelivered_order_alert_leaves_the_outage_flag_alone() {
 		$this->enable_alerts();
 		$this->rows[ Kunaki_Alerts::OUTAGE_FLAG ] = (string) time();
@@ -370,6 +428,72 @@ class AlertsTest extends KunakiTestCase {
 		( new Kunaki_Alerts() )->execute_send( Kunaki_Alerts::EVENT_ORDER, 999, Kunaki_Alerts::REASON_DECLINED );
 
 		$this->assertSame( array(), $this->mails );
+	}
+
+	public function test_undelivered_order_alert_is_sent_again_later() {
+		$this->enable_alerts();
+		$this->add_order( 42 );
+		$this->mail_return = false;
+
+		( new Kunaki_Alerts() )->handle_order_needs_attention( 42, Kunaki_Alerts::REASON_RETRIES_EXHAUSTED );
+		$this->run_jobs();
+
+		$this->assertCount( 1, $this->jobs, 'Nothing else would bring this alert back.' );
+		$this->assertSame( Kunaki_Alerts::SEND_ACTION, $this->jobs[0]['hook'] );
+		$this->assertSame( array( 'order_needs_attention', 42, 'retries_exhausted', 1 ), $this->jobs[0]['args'] );
+		$this->assertGreaterThanOrEqual( time() + Kunaki_Alerts::RESEND_DELAY, $this->jobs[0]['when'] );
+
+		$this->mail_return = true;
+		$this->run_jobs();
+
+		$this->assertCount( 2, $this->mails, 'One failed attempt, then the alert.' );
+		$this->assertSame( array(), $this->jobs, 'Delivered, so nothing more is queued.' );
+	}
+
+	public function test_undelivered_order_alert_is_given_up_on_after_the_last_resend() {
+		$this->enable_alerts();
+		$this->add_order( 42 );
+		$this->mail_return = false;
+
+		( new Kunaki_Alerts() )->handle_order_needs_attention( 42, Kunaki_Alerts::REASON_DECLINED );
+		for ( $i = 0; $i < Kunaki_Alerts::MAX_RESENDS + 5; $i++ ) {
+			$this->run_jobs();
+		}
+
+		$this->assertCount( 1 + Kunaki_Alerts::MAX_RESENDS, $this->mails, 'The first attempt, then each resend.' );
+		$this->assertSame( array(), $this->jobs );
+	}
+
+	public function test_order_dealt_with_before_a_resend_is_not_alerted() {
+		$this->enable_alerts();
+		$this->add_order( 42 );
+		$this->mail_return = false;
+
+		( new Kunaki_Alerts() )->handle_order_needs_attention( 42, Kunaki_Alerts::REASON_RETRIES_EXHAUSTED );
+		$this->run_jobs();
+
+		// Mail works again, but the admin retried the order before the resend ran.
+		$this->mail_return = true;
+		$this->add_order( 42, array( '_kunaki_fulfillment_exhausted' => '' ) );
+		$this->run_jobs();
+
+		$this->assertCount( 1, $this->mails, 'Only the failed first attempt.' );
+		$this->assertSame( array(), $this->jobs );
+	}
+
+	public function test_resend_is_not_queued_once_alerts_are_turned_off() {
+		$this->enable_alerts();
+		$this->add_order( 42 );
+		$this->mail_return = false;
+
+		( new Kunaki_Alerts() )->handle_order_needs_attention( 42, Kunaki_Alerts::REASON_RETRIES_EXHAUSTED );
+		$this->run_jobs();
+
+		$this->options[ Kunaki_Alerts::OPT_ENABLED ] = 'no';
+		$this->run_jobs();
+
+		$this->assertCount( 1, $this->mails );
+		$this->assertSame( array(), $this->jobs );
 	}
 
 	public function test_missing_error_shows_placeholder() {
@@ -545,6 +669,14 @@ class AlertsTest extends KunakiTestCase {
 		$this->assertNotFalse( has_action( 'kunaki_wc_circuit_breaker_closed', array( $alerts, 'handle_circuit_closed' ) ) );
 		$this->assertNotFalse( has_action( 'kunaki_wc_order_needs_attention', array( $alerts, 'handle_order_needs_attention' ) ) );
 		$this->assertNotFalse( has_action( 'kunaki_wc_send_alert', array( $alerts, 'execute_send' ) ) );
+	}
+
+	public function test_send_job_is_passed_the_resend_count() {
+		// Registered for fewer arguments, the count would be dropped and an
+		// alert that can't be delivered would be queued again for ever.
+		Actions\expectAdded( Kunaki_Alerts::SEND_ACTION )->once()->with( Mockery::type( 'array' ), 10, 4 );
+
+		( new Kunaki_Alerts() )->init();
 	}
 
 	// ── Helpers ────────────────────────────────────────────────────────

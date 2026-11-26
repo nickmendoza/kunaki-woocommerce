@@ -30,15 +30,21 @@ class Kunaki_Alerts {
 
 	// One outage alert per outage, however often the circuit flaps. This row is
 	// written with INSERT IGNORE when the outage alert is queued, so only one
-	// concurrent request wins. It's deleted when the recovery alert is sent, or
-	// straight away if the outage alert couldn't be delivered, so the next
-	// failed check tries again. Its value is when it was set; after a day it
-	// counts as stale.
+	// concurrent request wins. It's deleted when the recovery alert is sent, when
+	// the API recovers while alerts are off, or straight away if the outage
+	// alert couldn't be delivered, so the next failed check tries again. Its
+	// value is when it was set; after a day it counts as stale.
 	const OUTAGE_FLAG       = 'kunaki_wc_alert_outage_open';
 	const OUTAGE_FLAG_STALE = DAY_IN_SECONDS;
 
 	// Recovery is only reported once the API has stayed up this long.
 	const RECOVERY_DELAY = 15 * MINUTE_IN_SECONDS;
+
+	// An order alert that reached nobody is sent again this much later, at most
+	// this many times. Nothing else would bring it back: an order raises its
+	// alert once.
+	const RESEND_DELAY = HOUR_IN_SECONDS;
+	const MAX_RESENDS  = 3;
 
 	// Only Slack incoming webhooks on this host are allowed, both when the URL
 	// is saved and when a message is sent.
@@ -54,7 +60,7 @@ class Kunaki_Alerts {
 		add_action( 'kunaki_wc_circuit_breaker_opened', array( $this, 'handle_circuit_opened' ), 10, 0 );
 		add_action( 'kunaki_wc_circuit_breaker_closed', array( $this, 'handle_circuit_closed' ), 10, 0 );
 		add_action( 'kunaki_wc_order_needs_attention', array( $this, 'handle_order_needs_attention' ), 10, 2 );
-		add_action( self::SEND_ACTION, array( $this, 'execute_send' ), 10, 3 );
+		add_action( self::SEND_ACTION, array( $this, 'execute_send' ), 10, 4 );
 	}
 
 	/**
@@ -94,8 +100,15 @@ class Kunaki_Alerts {
 	}
 
 	public function handle_circuit_closed() {
+		if ( ! $this->alerts_enabled() ) {
+			// Nobody will be told about this recovery, so forget the outage.
+			// Left set, the flag would silence the next outage for up to a day.
+			$this->release_outage_flag();
+			return;
+		}
+
 		// Nothing to report if no outage alert went out.
-		if ( ! $this->alerts_enabled() || ! $this->outage_flag_exists() ) {
+		if ( ! $this->outage_flag_exists() ) {
 			return;
 		}
 
@@ -153,13 +166,15 @@ class Kunaki_Alerts {
 	 * @param string $event    One of the EVENT_* constants.
 	 * @param int    $order_id Order ID, for order events.
 	 * @param string $reason   Reason, for order events.
+	 * @param int    $resends  How many times this alert has already been sent again.
 	 */
-	public function execute_send( $event, $order_id = 0, $reason = '' ) {
+	public function execute_send( $event, $order_id = 0, $reason = '', $resends = 0 ) {
 		// The admin may have turned alerts off since this was queued.
 		if ( ! $this->alerts_enabled() ) {
 			Kunaki_Logger::debug( 'Alert skipped: alerts were turned off after it was queued.', array( 'event' => $event ) );
-			if ( self::EVENT_CIRCUIT_OPENED === $event ) {
-				// Nobody was told about this outage, so don't report its recovery either.
+			if ( self::EVENT_CIRCUIT_OPENED === $event || self::EVENT_CIRCUIT_CLOSED === $event ) {
+				// Nobody is told about this outage or its recovery, so forget it.
+				// Left set, the flag would silence the next outage for up to a day.
 				$this->release_outage_flag();
 			}
 			return;
@@ -200,6 +215,31 @@ class Kunaki_Alerts {
 			$this->release_outage_flag();
 			Kunaki_Logger::error( 'Outage alert was not delivered. It will be sent again at the next failed check.' );
 		}
+
+		if ( ! $delivered && self::EVENT_ORDER === $event ) {
+			$this->resend_later( (int) $order_id, (string) $reason, (int) $resends );
+		}
+	}
+
+	/**
+	 * Queue an order alert that reached nobody to be sent again later.
+	 *
+	 * The job checks again that the order still needs attention, so an order
+	 * someone has dealt with in the meantime isn't alerted.
+	 *
+	 * @param int    $order_id Order ID.
+	 * @param string $reason   One of the REASON_* constants.
+	 * @param int    $resends  How many times this alert has already been sent again.
+	 */
+	private function resend_later( $order_id, $reason, $resends ) {
+		if ( $resends < self::MAX_RESENDS && function_exists( 'as_schedule_single_action' ) ) {
+			$queued = as_schedule_single_action( time() + self::RESEND_DELAY, self::SEND_ACTION, array( self::EVENT_ORDER, $order_id, $reason, $resends + 1 ), self::ACTION_GROUP );
+			if ( $queued ) {
+				Kunaki_Logger::error( 'Order alert was not delivered. It will be sent again later.', array( 'order_id' => $order_id, 'resend' => $resends + 1 ) );
+				return;
+			}
+		}
+		Kunaki_Logger::error( 'Order alert was not delivered, and will not be sent again.', array( 'order_id' => $order_id ) );
 	}
 
 	/**
