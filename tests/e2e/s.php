@@ -188,16 +188,35 @@ case 'alerts':
  t('the resend delivers the order alert', 2===count($GLOBALS['mails']) && !$pending(), [$subjects(),count($pending())]);
  $reset(); $GLOBALS['mail_ok']=false; $bad_order(); for($i=0;$i<8;$i++) $run_alerts();
  t('order alert is given up on after three resends', 4===count($GLOBALS['mails']) && !$pending(), [count($GLOBALS['mails']),count($pending())]);
- $GLOBALS['mail_ok']=true; update_option('kunaki_wc_alert_slack_enabled','yes');
+ // An order cancelled before its alert is resent has nothing left to retry, so the resend is dropped.
+ $reset(); $id=$bad_order(); $run_alerts(); $GLOBALS['mail_ok']=true; wc_get_order($id)->update_status('cancelled');
+ t('cancelled order still carries its failure', 'yes'===wc_get_order($id)->get_meta('_kunaki_fulfillment_exhausted') && 1===count($pending()), [wc_get_order($id)->get_meta('_kunaki_fulfillment_exhausted'),count($pending())]);
+ $run_alerts();
+ t('order cancelled before the resend is not alerted', 1===count($GLOBALS['mails']) && !$pending(), [$subjects(),count($pending())]);
+ update_option('kunaki_wc_alert_slack_enabled','yes');
+
+ // The saved password can't be decrypted, as after a change of salts: one alert, and orders wait for it to be entered again.
+ $reset(); global $wpdb; $wpdb->update($wpdb->options,['option_value'=>base64_encode(random_bytes(48))],['option_name'=>'kunaki_wc_password']); wp_cache_flush();
+ new Kunaki_API_Client(); // Any use of the API reads the password, a shopper's shipping rates included.
+ t('unreadable password is flagged and its alert queued, not sent during the request', 'yes'===get_option('kunaki_wc_decrypt_failed') && !$GLOBALS['mails'] && 1===count($pending()), [get_option('kunaki_wc_decrypt_failed'),$subjects(),count($pending())]);
+ $run_alerts();
+ t('unreadable password sends one alert that links to the settings', 1===count($GLOBALS['mails']) && false!==strpos($GLOBALS['mails'][0]['subject'],'password') && false!==strpos($GLOBALS['mails'][0]['message'],'tab=kunaki') && 1===count($GLOBALS['slack']), [$GLOBALS['mails'],$GLOBALS['slack']]);
+ $id=mk($ids['disc'],0,'processing'); run_queue(); new Kunaki_API_Client(); $run_alerts(); $o=wc_get_order($id);
+ t('orders wait without using up retries, and nothing alerts again', 1===count($GLOBALS['mails']) && !$pending() && ''!==(string)$o->get_meta('_kunaki_fulfillment_error') && ''===(string)$o->get_meta('_kunaki_fulfillment_attempts') && 'yes'!==$o->get_meta('_kunaki_fulfillment_exhausted'), [$subjects(),count($pending()),$o->get_meta('_kunaki_fulfillment_error'),$o->get_meta('_kunaki_fulfillment_attempts')]);
+ update_option('kunaki_wc_password','S3cret-Stage-Pw!'); do_action('kunaki_wc_retry_failed_orders');
+ t('the waiting order is sent once the password is saved again', 'yes'===wc_get_order($id)->get_meta('_kunaki_submitted') && 'yes'!==get_option('kunaki_wc_decrypt_failed'), [wc_get_order($id)->get_meta('_kunaki_fulfillment_error'),get_option('kunaki_wc_decrypt_failed')]);
 
  update_option('kunaki_wc_alert_slack_webhook','https://evil.example/hook');
  t('non-Slack webhook URL is not saved', ''===get_option('kunaki_wc_alert_slack_webhook'), get_option('kunaki_wc_alert_slack_webhook'));
  delete_option('kunaki_wc_alert_slack_webhook'); add_option('kunaki_wc_alert_slack_webhook','http://hooks.slack.com/services/T0/B0/X0');
  t('add_option is checked too, and plain http is refused', ''===get_option('kunaki_wc_alert_slack_webhook'), get_option('kunaki_wc_alert_slack_webhook'));
 
- // Leave one alert queued with alerts off, so deactivation can be checked to cancel it.
- $bad_order(); update_option('kunaki_wc_alerts_enabled','no'); update_option('kunaki_wc_alert_slack_enabled','no');
- t('an alert is left queued for the deactivation check', 1===count($pending()));
+ // Leave an outage flagged and its recovery check queued, with alerts off, so deactivation can be checked to clear both.
+ $reset(); for($i=0;$i<$threshold;$i++) $cb->post_request(new WP_Error('http_request_failed','mock outage'));
+ $run_alerts(); update_option('kunaki_wc_circuit_breaker',wp_json_encode(['state'=>'half_open','failure_count'=>$threshold,'last_failure_at'=>time(),'opened_at'=>time()-999]),false);
+ $cb->post_request(simplexml_load_string('<R><ErrorCode>0</ErrorCode></R>'));
+ update_option('kunaki_wc_alerts_enabled','no'); update_option('kunaki_wc_alert_slack_enabled','no');
+ t('a flagged outage and a queued alert are left for the deactivation check', 1===count($GLOBALS['mails']) && null!==$flag() && 1===count($pending()), [$subjects(),$flag(),count($pending())]);
  break;
 case 'listener':
  // Another plugin's listener throws on the plugin's public actions. That must not undo what the plugin just did.
@@ -219,5 +238,8 @@ case 'listener':
  break;
 case 'alerts2':
  t('deactivation cancels queued alerts', !as_get_scheduled_actions(['hook'=>'kunaki_wc_send_alert','status'=>'pending','per_page'=>-1],'ids'));
+ // Left flagged, the first outage after reactivation would send no alert.
+ global $wpdb; $left=$wpdb->get_var("SELECT option_value FROM {$wpdb->options} WHERE option_name='kunaki_wc_alert_outage_open'");
+ t('deactivation forgets the flagged outage', null===$left, $left);
  break;
 }

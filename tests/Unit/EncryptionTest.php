@@ -3,6 +3,7 @@
 namespace Kunaki\Tests\Unit;
 
 use Brain\Monkey;
+use Brain\Monkey\Actions;
 use Brain\Monkey\Functions;
 
 class EncryptionTest extends KunakiTestCase {
@@ -51,7 +52,30 @@ class EncryptionTest extends KunakiTestCase {
 		Functions\when( 'get_option' )->justReturn( false );
 		Functions\expect( 'update_option' )
 			->once()
-			->with( 'kunaki_wc_decrypt_failed', 'yes', 'no' );
+			->with( 'kunaki_wc_decrypt_failed', 'yes', 'no' )
+			->andReturn( true );
+		Actions\expectDone( 'kunaki_wc_password_decrypt_failed' )->once();
+
+		$this->assertSame( '', kunaki_wc_decrypt_password( $encrypted ) );
+	}
+
+	public function test_listeners_are_not_told_when_the_flag_could_not_be_saved() {
+		// Unsaved, the next read fails the same way, and would tell them again on every read.
+		$encrypted = $this->encrypted_under_other_salts();
+		Functions\when( 'get_option' )->justReturn( false );
+		Functions\when( 'update_option' )->justReturn( false );
+		Actions\expectDone( 'kunaki_wc_password_decrypt_failed' )->never();
+
+		$this->assertSame( '', kunaki_wc_decrypt_password( $encrypted ) );
+	}
+
+	public function test_listener_that_throws_does_not_break_reading_the_password() {
+		$encrypted = $this->encrypted_under_other_salts();
+		Functions\when( 'get_option' )->justReturn( false );
+		Functions\when( 'update_option' )->justReturn( true );
+		Actions\expectDone( 'kunaki_wc_password_decrypt_failed' )->once()->whenHappen( function () {
+			throw new \RuntimeException( 'listener blew up' );
+		} );
 
 		$this->assertSame( '', kunaki_wc_decrypt_password( $encrypted ) );
 	}
@@ -76,6 +100,7 @@ class EncryptionTest extends KunakiTestCase {
 		Functions\when( 'get_option' )->justReturn( 'yes' );
 		Functions\expect( 'update_option' )->never();
 		Functions\expect( 'wc_get_logger' )->never();
+		Actions\expectDone( 'kunaki_wc_password_decrypt_failed' )->never();
 
 		$this->assertSame( '', kunaki_wc_decrypt_password( $encrypted ) );
 	}
@@ -103,4 +128,19 @@ class EncryptionTest extends KunakiTestCase {
 		kunaki_wc_encrypt_password( 'NewPassword' );
 	}
 
+	/** A stored password this site can no longer decrypt, as after a change of salts. */
+	private function encrypted_under_other_salts() {
+		Functions\when( 'wp_salt' )->justReturn( 'original-salt' );
+		Functions\when( 'delete_option' )->justReturn( true );
+		$encrypted = kunaki_wc_encrypt_password( 'MyPassword' );
+
+		Monkey\tearDown();
+		Monkey\setUp();
+		Functions\when( 'wp_salt' )->justReturn( 'different-salt' );
+		Functions\when( 'wc_get_logger' )->justReturn(
+			\Mockery::mock( 'WC_Logger' )->shouldIgnoreMissing()
+		);
+
+		return $encrypted;
+	}
 }

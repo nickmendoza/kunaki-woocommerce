@@ -3,7 +3,8 @@ defined( 'ABSPATH' ) || exit;
 
 /**
  * Email and Slack alerts for problems that need a person: Kunaki API outages,
- * and orders that can't be fulfilled without someone acting on them.
+ * a saved password that can't be read, and orders that can't be fulfilled
+ * without someone acting on them.
  *
  * Other code fires public actions after the state change is saved. This class
  * listens to them, queues a small background job, and builds the message when
@@ -23,6 +24,7 @@ class Kunaki_Alerts {
 	const EVENT_CIRCUIT_OPENED = 'circuit_opened';
 	const EVENT_CIRCUIT_CLOSED = 'circuit_closed';
 	const EVENT_ORDER          = 'order_needs_attention';
+	const EVENT_PASSWORD       = 'password_unreadable';
 
 	const REASON_RETRIES_EXHAUSTED = 'retries_exhausted';
 	const REASON_PERMANENT_FAILURE = 'permanent_failure';
@@ -40,9 +42,9 @@ class Kunaki_Alerts {
 	// Recovery is only reported once the API has stayed up this long.
 	const RECOVERY_DELAY = 15 * MINUTE_IN_SECONDS;
 
-	// An order alert that reached nobody is sent again this much later, at most
-	// this many times. Nothing else would bring it back: an order raises its
-	// alert once.
+	// An order or password alert that reached nobody is sent again this much
+	// later, at most this many times. Nothing else would bring it back: each is
+	// raised once.
 	const RESEND_DELAY = HOUR_IN_SECONDS;
 	const MAX_RESENDS  = 3;
 
@@ -60,6 +62,7 @@ class Kunaki_Alerts {
 		add_action( 'kunaki_wc_circuit_breaker_opened', array( $this, 'handle_circuit_opened' ), 10, 0 );
 		add_action( 'kunaki_wc_circuit_breaker_closed', array( $this, 'handle_circuit_closed' ), 10, 0 );
 		add_action( 'kunaki_wc_order_needs_attention', array( $this, 'handle_order_needs_attention' ), 10, 2 );
+		add_action( 'kunaki_wc_password_decrypt_failed', array( $this, 'handle_password_decrypt_failed' ), 10, 0 );
 		add_action( self::SEND_ACTION, array( $this, 'execute_send' ), 10, 4 );
 	}
 
@@ -135,6 +138,15 @@ class Kunaki_Alerts {
 	}
 
 	/**
+	 * The saved password can't be decrypted, so no order can be sent to Kunaki.
+	 * Those orders wait without using up retries, so they never raise an order
+	 * alert, and the API itself is up, so there's no outage alert either.
+	 */
+	public function handle_password_decrypt_failed() {
+		$this->dispatch( self::EVENT_PASSWORD );
+	}
+
+	/**
 	 * Queue an alert, or send it now if Action Scheduler isn't available.
 	 *
 	 * @param string $event    One of the EVENT_* constants.
@@ -194,7 +206,7 @@ class Kunaki_Alerts {
 
 		$message = $this->build_message( (string) $event, (int) $order_id, (string) $reason );
 		if ( null === $message ) {
-			Kunaki_Logger::info( 'Alert not sent: the order no longer needs attention, or no longer exists.', array( 'event' => $event, 'order_id' => $order_id ) );
+			Kunaki_Logger::info( 'Alert not sent: the problem was dealt with before it could be sent, or the order no longer exists.', array( 'event' => $event, 'order_id' => $order_id ) );
 			return;
 		}
 
@@ -216,30 +228,33 @@ class Kunaki_Alerts {
 			Kunaki_Logger::error( 'Outage alert was not delivered. It will be sent again at the next failed check.' );
 		}
 
-		if ( ! $delivered && self::EVENT_ORDER === $event ) {
-			$this->resend_later( (int) $order_id, (string) $reason, (int) $resends );
+		if ( ! $delivered && ( self::EVENT_ORDER === $event || self::EVENT_PASSWORD === $event ) ) {
+			$this->resend_later( (string) $event, (int) $order_id, (string) $reason, (int) $resends );
 		}
 	}
 
 	/**
-	 * Queue an order alert that reached nobody to be sent again later.
+	 * Queue an order or password alert that reached nobody to be sent again later.
 	 *
-	 * The job checks again that the order still needs attention, so an order
-	 * someone has dealt with in the meantime isn't alerted.
+	 * The job checks again that the alert is still needed, so a problem someone
+	 * has dealt with in the meantime isn't alerted.
 	 *
-	 * @param int    $order_id Order ID.
-	 * @param string $reason   One of the REASON_* constants.
+	 * @param string $event    EVENT_ORDER or EVENT_PASSWORD.
+	 * @param int    $order_id Order ID, for order alerts.
+	 * @param string $reason   One of the REASON_* constants, for order alerts.
 	 * @param int    $resends  How many times this alert has already been sent again.
 	 */
-	private function resend_later( $order_id, $reason, $resends ) {
+	private function resend_later( $event, $order_id, $reason, $resends ) {
+		$context = array( 'event' => $event, 'order_id' => $order_id );
+
 		if ( $resends < self::MAX_RESENDS && function_exists( 'as_schedule_single_action' ) ) {
-			$queued = as_schedule_single_action( time() + self::RESEND_DELAY, self::SEND_ACTION, array( self::EVENT_ORDER, $order_id, $reason, $resends + 1 ), self::ACTION_GROUP );
+			$queued = as_schedule_single_action( time() + self::RESEND_DELAY, self::SEND_ACTION, array( $event, $order_id, $reason, $resends + 1 ), self::ACTION_GROUP );
 			if ( $queued ) {
-				Kunaki_Logger::error( 'Order alert was not delivered. It will be sent again later.', array( 'order_id' => $order_id, 'resend' => $resends + 1 ) );
+				Kunaki_Logger::error( 'Alert was not delivered. It will be sent again later.', $context + array( 'resend' => $resends + 1 ) );
 				return;
 			}
 		}
-		Kunaki_Logger::error( 'Order alert was not delivered, and will not be sent again.', array( 'order_id' => $order_id ) );
+		Kunaki_Logger::error( 'Alert was not delivered, and will not be sent again.', $context );
 	}
 
 	/**
@@ -274,6 +289,23 @@ class Kunaki_Alerts {
 
 			case self::EVENT_ORDER:
 				return $this->build_order_message( $order_id, $reason );
+
+			case self::EVENT_PASSWORD:
+				// Saved again, or readable again, before this job ran. Nothing to
+				// report then. kunaki_wc_decrypt_password() keeps this flag.
+				if ( 'yes' !== get_option( 'kunaki_wc_decrypt_failed' ) ) {
+					return null;
+				}
+				return array(
+					'title'    => __( 'Kunaki password can\'t be read', 'kunaki-woocommerce' ),
+					'body'     => sprintf(
+						/* translators: %s: settings URL */
+						__( "The saved Kunaki password couldn't be decrypted. This usually means the WordPress security salts have changed. Until the password is entered again, no orders are sent to Kunaki and order statuses aren't updated.\n\nOrders aren't lost: the ones waiting are sent once the password is saved.\n\nEnter the password again: %s", 'kunaki-woocommerce' ),
+						admin_url( 'admin.php?page=wc-settings&tab=kunaki' )
+					),
+					'fields'   => array(),
+					'severity' => self::SEVERITY_DANGER,
+				);
 		}
 		return null;
 	}
@@ -284,11 +316,13 @@ class Kunaki_Alerts {
 			return null;
 		}
 
-		// The admin may have dealt with it before this job ran, which also
-		// clears the details below. Nothing to report then.
+		// The admin may have dealt with it before this job ran: by retrying it,
+		// which also clears the details below, or by cancelling or refunding it,
+		// which leaves nothing to retry. Nothing to report then. The statuses
+		// are the ones the dashboard counts under "Action needed".
 		$still_needed = self::REASON_DECLINED === $reason
-			? 'DECLINED' === $order->get_meta( Kunaki_Order_Fulfillment::META_KUNAKI_STATUS )
-			: 'yes' === $order->get_meta( Kunaki_Order_Fulfillment::META_FULFILLMENT_EXHAUSTED );
+			? 'DECLINED' === $order->get_meta( Kunaki_Order_Fulfillment::META_KUNAKI_STATUS ) && $order->has_status( array( 'processing', 'on-hold' ) )
+			: 'yes' === $order->get_meta( Kunaki_Order_Fulfillment::META_FULFILLMENT_EXHAUSTED ) && $order->has_status( 'processing' );
 		if ( ! $still_needed ) {
 			return null;
 		}

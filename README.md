@@ -32,7 +32,7 @@ This plugin addresses these concerns through atomic locking, idempotent submissi
 - **Structured Logging** -- JSON-formatted log entries with contextual fields (order ID, error details) for machine-parseable log aggregation.
 - **WP-CLI Support** -- `wp kunaki sync` command for on-demand bulk status sync with `--dry-run` and `--limit` options.
 - **Predictive Delivery Estimates** -- Displays estimated delivery date ranges at checkout based on historical manufacturing times and parsed transit durations.
-- **Email and Slack Alerts** -- Optional alerts when an order needs you (it failed every retry, can't be sent until something is fixed, or Kunaki declined it), and when Kunaki's API goes down and comes back. Off by default.
+- **Email and Slack Alerts** -- Optional alerts when an order needs you (it failed every retry, can't be sent until something is fixed, or Kunaki declined it), when Kunaki's API goes down and comes back, and when the saved Kunaki password can't be read. Off by default.
 - **Dashboard Widget** -- At-a-glance Kunaki order summary on the WordPress dashboard: fulfilling, action needed, and retrying counts with circuit breaker status and average manufacturing time.
 - **Credential Encryption** -- Passwords encrypted at rest with AES-256-GCM.
 
@@ -175,7 +175,7 @@ When the Kunaki API returns an error or the HTTP request fails, the plugin recor
 - **Linear backoff** -- Each retry waits `attempts * 15 minutes` since the last failure before retrying.
 - **Configurable limit** -- After the configured max attempts (default: 3), the order is marked exhausted and an order note alerts the admin.
 - **Permanent failure detection** -- Errors that will never self-resolve (e.g., missing Kunaki shipping method on the order) are immediately marked as exhausted without consuming retry attempts.
-- **Credential validation** -- If the stored password cannot be decrypted (e.g., after salt rotation), submission, retry, and status sync all bail early without making API calls or burning retry budgets.
+- **Credential validation** -- If the stored password cannot be decrypted (e.g., after salt rotation), submission, retry, and status sync all bail early without making API calls or burning retry budgets. The waiting orders are sent once the password is saved again. With alerts on, you get one alert when this starts (see [Alerts](#alerts)).
 - **Durable failure markers** -- If failure metadata fails to persist (e.g., database instability), a `_kunaki_failed_{order_id}` marker is written to `wp_options`. The retry cron recovers these orphaned markers at the start of each run.
 - **Idempotent** -- Retries go through the same `handle_order_processing` path with its full locking and deduplication guarantees.
 
@@ -199,12 +199,13 @@ Failed orders and outages show up in WordPress admin, but nobody sees them there
 - **An order fails in a way retrying won't fix**, such as having no Kunaki shipping method. It needs a person straight away.
 - **Kunaki declines an order.** The order is moved to on-hold. Resubmitting it creates a new Kunaki order, which is billed separately.
 - **Kunaki's API goes down** (the circuit breaker trips), and again **when it recovers**.
+- **The saved Kunaki password can't be read**, usually because the WordPress security salts changed. No orders are sent until it's entered again. They wait without using up retries, so none of the alerts above would fire.
 
 Each order alert names the order, says what went wrong, and links to it. Alerts are sent in the background through Action Scheduler, so checkout never waits on email or Slack.
 
-An unstable API doesn't flood you. There is one outage alert per outage, however often the circuit trips and re-trips. The recovery alert waits 15 minutes and is only sent if the API is still up then. If an outage lasts more than a day, you get a reminder. If an outage alert can't be delivered, it's sent again at the next failed check. If an order alert can't be delivered, it's sent again an hour later, up to three times. An order alert that is still queued when someone deals with the order isn't sent.
+An unstable API doesn't flood you. There is one outage alert per outage, however often the circuit trips and re-trips. The recovery alert waits 15 minutes and is only sent if the API is still up then. If an outage lasts more than a day, you get a reminder. If an outage alert can't be delivered, it's sent again at the next failed check. If an order or password alert can't be delivered, it's sent again an hour later, up to three times. An alert that is still queued when someone deals with the problem isn't sent: the order was retried, cancelled or refunded, or the password was saved again.
 
-For other integrations, the plugin fires public actions after each change is saved: `kunaki_wc_order_needs_attention( $order_id, $reason, $message )`, where `$reason` is `retries_exhausted`, `permanent_failure` or `declined`, plus `kunaki_wc_circuit_breaker_opened` and `kunaki_wc_circuit_breaker_closed`. An exception thrown by a listener is caught and logged, so it can't interrupt fulfillment.
+For other integrations, the plugin fires public actions after each change is saved: `kunaki_wc_order_needs_attention( $order_id, $reason, $message )`, where `$reason` is `retries_exhausted`, `permanent_failure` or `declined`, plus `kunaki_wc_circuit_breaker_opened`, `kunaki_wc_circuit_breaker_closed` and `kunaki_wc_password_decrypt_failed`. An exception thrown by a listener is caught and logged, so it can't interrupt fulfillment.
 
 ### Email Duplication Prevention
 
@@ -218,7 +219,7 @@ All critical state transitions are deterministic and replay-safe.
 
 The Kunaki password is encrypted using AES-256-GCM before storage in `wp_options`. The encryption key is derived from WordPress's `AUTH_SALT` via SHA-256. Each encryption generates a fresh 12-byte random nonce. The stored value is `base64(nonce || tag || ciphertext)`.
 
-If decryption fails (typically after salt rotation during site migration), the plugin sets a persistent flag and displays an admin notice prompting the user to re-enter their password. The flag clears itself if the password can be decrypted again, for example after the previous salts are restored.
+If decryption fails (typically after salt rotation during site migration), the plugin sets a persistent flag, displays an admin notice prompting the user to re-enter their password, and fires `kunaki_wc_password_decrypt_failed` once, which sends an alert if alerts are on. The flag clears itself if the password can be decrypted again, for example after the previous salts are restored.
 
 Encryption and decryption are applied transparently via `pre_update_option` and `option_{name}` filters. No plaintext password is stored in the database at any point after initial save.
 
@@ -245,7 +246,7 @@ This isolation strategy means tests execute in seconds, run in CI without infras
 | Product Meta | 10-character alphanumeric validation, capability checks, admin column rendering, safe handling of absent POST fields |
 | Logger | Debug gating based on settings, log level routing, structured JSON context, invalid UTF-8 fallback |
 | Retry Queue | AJAX handler permission and input validation, `prepare_for_retry` guard clauses, admin page hook registration |
-| Alerts | Master and channel switches, background queueing, one alert per outage however the API flaps, delayed recovery alert, resending an order alert that wasn't delivered, the message for each order case, error text capping, admin email fallback, Slack URL allowlist, and that each event only fires after its change is saved |
+| Alerts | Master and channel switches, background queueing, one alert per outage however the API flaps, delayed recovery alert, resending an order or password alert that wasn't delivered, dropping an alert for an order that was cancelled or refunded, the unreadable-password alert, the message for each order case, error text capping, admin email fallback, Slack URL allowlist, and that each event only fires after its change is saved |
 | Circuit Breaker | State transitions (closed/open/half_open), threshold and cooldown configuration, error classification (infrastructure vs. business logic), probe recovery, admin state reporting |
 | CLI Command | Dry-run listing, limit enforcement, sync dispatch, empty-queue handling |
 | Delivery Estimator | Transit day parsing, business-to-calendar conversion, percentile statistics, transient caching, date range formatting, end-to-end estimate generation |
@@ -255,7 +256,7 @@ This isolation strategy means tests execute in seconds, run in CI without infras
 | Order Queries | Every order query works under legacy storage as well as HPOS (no `meta_query`, which WooCommerce ignores without HPOS) |
 | Bootstrap | Shipping method registration, hook registration, singleton orchestrator, admin asset loading per screen |
 | Uninstall | Order history and product links kept by default, locks and cached rates always removed, all data removed when the store opts in |
-| Encryption | AES-256-GCM round-trip, invalid/corrupt input handling, salt rotation detection |
+| Encryption | AES-256-GCM round-trip, invalid/corrupt input handling, salt rotation detection, and that listeners are told once and can't break reading the password |
 
 ```bash
 composer install

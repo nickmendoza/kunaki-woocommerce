@@ -27,26 +27,38 @@ class AlertsTest extends KunakiTestCase {
 	/** @var int Slack response status. */
 	private $slack_status = 200;
 
+	/** @var bool Whether the Slack request itself fails (timeout, DNS). */
+	private $slack_error = false;
+
 	/** @var array Queued Action Scheduler jobs: [ 'hook', 'args', 'group', 'when' ]. */
 	private $jobs = array();
 
 	/** @var int What as_enqueue_async_action returns. */
 	private $enqueue_return = 123;
 
+	/** @var int What as_schedule_single_action returns. */
+	private $schedule_return = 456;
+
+	/** @var string[] Captured log lines. */
+	private $logs = array();
+
 	/** @var array Orders returned by wc_get_order, by ID. */
 	private $orders = array();
 
 	protected function set_up() {
 		parent::set_up();
-		$this->options        = array();
-		$this->rows           = array();
-		$this->mails          = array();
-		$this->mail_return    = true;
-		$this->posts          = array();
-		$this->slack_status   = 200;
-		$this->jobs           = array();
-		$this->enqueue_return = 123;
-		$this->orders         = array();
+		$this->options         = array();
+		$this->rows            = array();
+		$this->mails           = array();
+		$this->mail_return     = true;
+		$this->posts           = array();
+		$this->slack_status    = 200;
+		$this->slack_error     = false;
+		$this->jobs            = array();
+		$this->enqueue_return  = 123;
+		$this->schedule_return = 456;
+		$this->logs            = array();
+		$this->orders          = array();
 		$this->wire_mocks();
 	}
 
@@ -64,6 +76,7 @@ class AlertsTest extends KunakiTestCase {
 
 		$alerts->handle_circuit_opened();
 		$alerts->handle_order_needs_attention( 42, Kunaki_Alerts::REASON_DECLINED );
+		$alerts->handle_password_decrypt_failed();
 
 		$this->assertSame( array(), $this->jobs );
 		$this->assertSame( array(), $this->rows, 'An outage alerts are off for must not set the flag.' );
@@ -178,6 +191,21 @@ class AlertsTest extends KunakiTestCase {
 		$this->run_jobs();
 
 		$this->assertCount( 2, $this->mails );
+		$this->assertSame( '[Test Store] Kunaki API recovered', $this->mails[1]['subject'] );
+		$this->assertArrayNotHasKey( Kunaki_Alerts::OUTAGE_FLAG, $this->rows );
+	}
+
+	public function test_recovery_is_reported_at_once_when_the_check_cannot_be_queued() {
+		$this->enable_alerts();
+		$alerts = new Kunaki_Alerts();
+		$alerts->handle_circuit_opened();
+		$this->run_jobs();
+
+		$this->schedule_return = 0;
+		$this->set_circuit( 'closed' );
+		$alerts->handle_circuit_closed();
+
+		$this->assertCount( 2, $this->mails, 'Reported now, because nothing would report it later.' );
 		$this->assertSame( '[Test Store] Kunaki API recovered', $this->mails[1]['subject'] );
 		$this->assertArrayNotHasKey( Kunaki_Alerts::OUTAGE_FLAG, $this->rows );
 	}
@@ -375,7 +403,8 @@ class AlertsTest extends KunakiTestCase {
 
 	public function test_declined_email_explains_resubmission_is_billed_separately() {
 		$this->enable_alerts();
-		$this->add_order( 42, array( '_kunaki_order_id' => 'KUN777' ) );
+		// Status sync puts a declined order on hold before raising the alert.
+		$this->add_order( 42, array( '_kunaki_order_id' => 'KUN777' ), 'on-hold' );
 
 		( new Kunaki_Alerts() )->handle_order_needs_attention( 42, Kunaki_Alerts::REASON_DECLINED );
 		$this->run_jobs();
@@ -422,6 +451,58 @@ class AlertsTest extends KunakiTestCase {
 		$this->assertSame( array(), $this->mails );
 	}
 
+	/**
+	 * @dataProvider orders_nobody_can_retry
+	 */
+	public function test_order_cancelled_or_refunded_before_sending_is_not_alerted( $reason, $status ) {
+		$this->enable_alerts();
+		// Still marked as failed or declined, but there is nothing left to retry.
+		$this->add_order( 42, array(), $status );
+
+		( new Kunaki_Alerts() )->execute_send( Kunaki_Alerts::EVENT_ORDER, 42, $reason );
+
+		$this->assertSame( array(), $this->mails );
+		$this->assertSame( array(), $this->jobs );
+	}
+
+	public function orders_nobody_can_retry() {
+		// The same statuses the dashboard leaves out of "Action needed".
+		return array(
+			'out of retries, cancelled'   => array( Kunaki_Alerts::REASON_RETRIES_EXHAUSTED, 'cancelled' ),
+			'permanent failure, refunded' => array( Kunaki_Alerts::REASON_PERMANENT_FAILURE, 'refunded' ),
+			'permanent failure, on hold'  => array( Kunaki_Alerts::REASON_PERMANENT_FAILURE, 'on-hold' ),
+			'declined, cancelled'         => array( Kunaki_Alerts::REASON_DECLINED, 'cancelled' ),
+			'declined, refunded'          => array( Kunaki_Alerts::REASON_DECLINED, 'refunded' ),
+		);
+	}
+
+	public function test_declined_order_moved_back_to_processing_is_still_alerted() {
+		$this->enable_alerts();
+		// Back in Processing but not retried yet, so it is still declined.
+		$this->add_order( 42, array(), 'processing' );
+
+		( new Kunaki_Alerts() )->execute_send( Kunaki_Alerts::EVENT_ORDER, 42, Kunaki_Alerts::REASON_DECLINED );
+
+		$this->assertCount( 1, $this->mails );
+	}
+
+	public function test_order_cancelled_before_a_resend_is_not_alerted() {
+		$this->enable_alerts();
+		$this->add_order( 42 );
+		$this->mail_return = false;
+
+		( new Kunaki_Alerts() )->handle_order_needs_attention( 42, Kunaki_Alerts::REASON_PERMANENT_FAILURE );
+		$this->run_jobs();
+
+		// Mail works again, but the admin cancelled the order before the resend ran.
+		$this->mail_return = true;
+		$this->add_order( 42, array(), 'cancelled' );
+		$this->run_jobs();
+
+		$this->assertCount( 1, $this->mails, 'Only the failed first attempt.' );
+		$this->assertSame( array(), $this->jobs );
+	}
+
 	public function test_order_deleted_before_sending_is_dropped() {
 		$this->enable_alerts();
 
@@ -462,6 +543,19 @@ class AlertsTest extends KunakiTestCase {
 
 		$this->assertCount( 1 + Kunaki_Alerts::MAX_RESENDS, $this->mails, 'The first attempt, then each resend.' );
 		$this->assertSame( array(), $this->jobs );
+	}
+
+	public function test_undelivered_order_alert_that_cannot_be_queued_again_is_logged_as_dropped() {
+		$this->enable_alerts();
+		$this->add_order( 42 );
+		$this->mail_return     = false;
+		$this->schedule_return = 0;
+
+		( new Kunaki_Alerts() )->execute_send( Kunaki_Alerts::EVENT_ORDER, 42, Kunaki_Alerts::REASON_DECLINED );
+
+		$this->assertSame( array(), $this->jobs );
+		$this->assertTrue( $this->logged( 'will not be sent again' ), 'The log is the only place a dropped alert shows.' );
+		$this->assertFalse( $this->logged( 'will be sent again later' ) );
 	}
 
 	public function test_order_dealt_with_before_a_resend_is_not_alerted() {
@@ -526,6 +620,98 @@ class AlertsTest extends KunakiTestCase {
 
 		$this->assertStringContainsString( "caf\xE9", $this->mails[0]['body'] );
 		$this->assertStringNotContainsString( "\x01", $this->mails[0]['body'] );
+	}
+
+	// ── Password alerts ────────────────────────────────────────────────
+
+	public function test_unreadable_password_sends_one_email_with_the_settings_link() {
+		$this->enable_alerts();
+		$this->options['kunaki_wc_decrypt_failed'] = 'yes';
+
+		( new Kunaki_Alerts() )->handle_password_decrypt_failed();
+
+		$this->assertSame( array(), $this->mails, 'Nothing is sent inside the request that read the password.' );
+		$this->assertCount( 1, $this->jobs );
+		$this->assertSame( array( 'password_unreadable', 0, '' ), $this->jobs[0]['args'] );
+		$this->run_jobs();
+
+		$this->assertCount( 1, $this->mails );
+		$this->assertSame( "[Test Store] Kunaki password can't be read", $this->mails[0]['subject'] );
+		$this->assertStringContainsString( 'https://example.test/wp-admin/admin.php?page=wc-settings&tab=kunaki', $this->mails[0]['body'] );
+		$this->assertSame( array(), $this->jobs, 'Delivered, so nothing more is queued.' );
+	}
+
+	public function test_unreadable_password_is_posted_to_slack() {
+		$this->enable_slack();
+		$this->options['kunaki_wc_decrypt_failed'] = 'yes';
+
+		( new Kunaki_Alerts() )->execute_send( Kunaki_Alerts::EVENT_PASSWORD );
+
+		$payload = json_decode( $this->posts[0]['args']['body'], true );
+		$this->assertSame( "Kunaki password can't be read", $payload['text'] );
+		$this->assertSame( 'danger', $payload['attachments'][0]['color'] );
+		$this->assertSame( array(), $payload['attachments'][0]['fields'] );
+	}
+
+	public function test_password_saved_again_before_sending_is_not_alerted() {
+		$this->enable_alerts();
+		$this->options['kunaki_wc_decrypt_failed'] = 'yes';
+		( new Kunaki_Alerts() )->handle_password_decrypt_failed();
+
+		// Saving the password again clears the flag.
+		unset( $this->options['kunaki_wc_decrypt_failed'] );
+		$this->run_jobs();
+
+		$this->assertSame( array(), $this->mails );
+		$this->assertSame( array(), $this->jobs );
+	}
+
+	public function test_undelivered_password_alert_is_sent_again_later() {
+		$this->enable_alerts();
+		$this->options['kunaki_wc_decrypt_failed'] = 'yes';
+		$this->mail_return                         = false;
+
+		( new Kunaki_Alerts() )->handle_password_decrypt_failed();
+		$this->run_jobs();
+
+		$this->assertCount( 1, $this->jobs, 'Nothing else would bring this alert back.' );
+		$this->assertSame( array( 'password_unreadable', 0, '', 1 ), $this->jobs[0]['args'] );
+		$this->assertGreaterThanOrEqual( time() + Kunaki_Alerts::RESEND_DELAY, $this->jobs[0]['when'] );
+
+		$this->mail_return = true;
+		$this->run_jobs();
+
+		$this->assertCount( 2, $this->mails, 'One failed attempt, then the alert.' );
+		$this->assertSame( array(), $this->jobs );
+	}
+
+	public function test_undelivered_password_alert_is_given_up_on_after_the_last_resend() {
+		$this->enable_alerts();
+		$this->options['kunaki_wc_decrypt_failed'] = 'yes';
+		$this->mail_return                         = false;
+
+		( new Kunaki_Alerts() )->handle_password_decrypt_failed();
+		for ( $i = 0; $i < Kunaki_Alerts::MAX_RESENDS + 5; $i++ ) {
+			$this->run_jobs();
+		}
+
+		$this->assertCount( 1 + Kunaki_Alerts::MAX_RESENDS, $this->mails, 'The first attempt, then each resend.' );
+		$this->assertSame( array(), $this->jobs );
+	}
+
+	public function test_password_saved_again_before_a_resend_is_not_alerted() {
+		$this->enable_alerts();
+		$this->options['kunaki_wc_decrypt_failed'] = 'yes';
+		$this->mail_return                         = false;
+		( new Kunaki_Alerts() )->handle_password_decrypt_failed();
+		$this->run_jobs();
+
+		$this->mail_return = true;
+		unset( $this->options['kunaki_wc_decrypt_failed'] );
+		$this->run_jobs();
+
+		$this->assertCount( 1, $this->mails, 'Only the failed first attempt.' );
+		$this->assertSame( array(), $this->jobs );
 	}
 
 	// ── Email ──────────────────────────────────────────────────────────
@@ -626,6 +812,22 @@ class AlertsTest extends KunakiTestCase {
 		$this->assertSame( array(), $this->posts );
 	}
 
+	public function test_slack_request_that_fails_does_not_count_as_delivered() {
+		$this->enable_slack();
+		$this->slack_error = true;
+		$this->add_order( 42 );
+		$alerts = new Kunaki_Alerts();
+
+		$alerts->handle_circuit_opened();
+		$alerts->handle_order_needs_attention( 42, Kunaki_Alerts::REASON_RETRIES_EXHAUSTED );
+		$this->run_jobs();
+
+		$this->assertCount( 2, $this->posts, 'Both alerts were tried.' );
+		$this->assertArrayNotHasKey( Kunaki_Alerts::OUTAGE_FLAG, $this->rows, 'The outage alert must go out again at the next failed check.' );
+		$this->assertCount( 1, $this->jobs, 'The order alert is queued to be sent again.' );
+		$this->assertSame( array( 'order_needs_attention', 42, 'retries_exhausted', 1 ), $this->jobs[0]['args'] );
+	}
+
 	public function test_email_failure_does_not_stop_slack() {
 		$this->enable_slack();
 		$this->options[ Kunaki_Alerts::OPT_EMAIL_ENABLED ] = 'yes';
@@ -668,6 +870,7 @@ class AlertsTest extends KunakiTestCase {
 		$this->assertNotFalse( has_action( 'kunaki_wc_circuit_breaker_opened', array( $alerts, 'handle_circuit_opened' ) ) );
 		$this->assertNotFalse( has_action( 'kunaki_wc_circuit_breaker_closed', array( $alerts, 'handle_circuit_closed' ) ) );
 		$this->assertNotFalse( has_action( 'kunaki_wc_order_needs_attention', array( $alerts, 'handle_order_needs_attention' ) ) );
+		$this->assertNotFalse( has_action( 'kunaki_wc_password_decrypt_failed', array( $alerts, 'handle_password_decrypt_failed' ) ) );
 		$this->assertNotFalse( has_action( 'kunaki_wc_send_alert', array( $alerts, 'execute_send' ) ) );
 	}
 
@@ -698,15 +901,27 @@ class AlertsTest extends KunakiTestCase {
 		$this->options['kunaki_wc_circuit_breaker'] = json_encode( array( 'state' => $state, 'failure_count' => 'open' === $state ? 5 : 0, 'last_failure_at' => time(), 'opened_at' => time() ) );
 	}
 
-	private function add_order( $id, $meta = array() ) {
+	private function add_order( $id, $meta = array(), $status = 'processing' ) {
 		$meta += array( '_kunaki_fulfillment_exhausted' => 'yes', '_kunaki_order_status' => 'DECLINED' );
 		$order = Mockery::mock( 'WC_Order' );
+		$order->shouldReceive( 'has_status' )->andReturnUsing( function ( $statuses ) use ( $status ) {
+			return in_array( $status, (array) $statuses, true );
+		} );
 		$order->shouldReceive( 'get_order_number' )->andReturn( (string) ( 1000 + $id ) );
 		$order->shouldReceive( 'get_edit_order_url' )->andReturn( 'https://example.test/edit/' . $id );
 		$order->shouldReceive( 'get_meta' )->andReturnUsing( function ( $key ) use ( $meta ) {
 			return isset( $meta[ $key ] ) ? $meta[ $key ] : '';
 		} );
 		$this->orders[ $id ] = $order;
+	}
+
+	private function logged( $text ) {
+		foreach ( $this->logs as $line ) {
+			if ( false !== strpos( $line, $text ) ) {
+				return true;
+			}
+		}
+		return false;
 	}
 
 	/** Run queued jobs the way Action Scheduler would: args positionally. */
@@ -750,6 +965,9 @@ class AlertsTest extends KunakiTestCase {
 		} );
 		Functions\when( 'wp_remote_post' )->alias( function ( $url, $args ) use ( $test ) {
 			$test->posts[] = array( 'url' => $url, 'args' => $args );
+			if ( $test->slack_error ) {
+				return new \WP_Error( 'http_request_failed', 'Could not resolve host: hooks.slack.com' );
+			}
 			return array( 'response' => array( 'code' => $test->slack_status ) );
 		} );
 		Functions\when( 'wp_remote_retrieve_response_code' )->alias( function () use ( $test ) {
@@ -762,10 +980,16 @@ class AlertsTest extends KunakiTestCase {
 			return $test->enqueue_return;
 		} );
 		Functions\when( 'as_schedule_single_action' )->alias( function ( $when, $hook, $args, $group ) use ( $test ) {
-			$test->jobs[] = array( 'hook' => $hook, 'args' => $args, 'group' => $group, 'when' => $when );
-			return 456;
+			if ( $test->schedule_return ) {
+				$test->jobs[] = array( 'hook' => $hook, 'args' => $args, 'group' => $group, 'when' => $when );
+			}
+			return $test->schedule_return;
 		} );
-		Functions\when( 'wc_get_logger' )->justReturn( Mockery::mock( 'WC_Logger' )->shouldIgnoreMissing() );
+		$logger = Mockery::mock( 'WC_Logger' )->shouldIgnoreMissing();
+		$logger->shouldReceive( 'log' )->andReturnUsing( function ( $level, $message ) use ( $test ) {
+			$test->logs[] = (string) $message;
+		} );
+		Functions\when( 'wc_get_logger' )->justReturn( $logger );
 
 		// The outage flag is written with raw SQL.
 		$wpdb          = Mockery::mock( 'wpdb' );
