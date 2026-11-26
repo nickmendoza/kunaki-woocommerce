@@ -215,6 +215,30 @@ class CircuitBreakerTest extends KunakiTestCase {
 		$this->addToAssertionCount( 1 );
 	}
 
+	public function test_closed_listener_that_throws_does_not_escape_the_request() {
+		$this->set_circuit_state( 'half_open', 5, time() - 400 );
+		Actions\expectDone( 'kunaki_wc_circuit_breaker_closed' )->once()->whenHappen( function () {
+			throw new \RuntimeException( 'listener blew up' );
+		} );
+
+		( new Kunaki_Circuit_Breaker() )->post_request( simplexml_load_string( '<R><ErrorCode>0</ErrorCode></R>' ) );
+
+		$saved = json_decode( $this->updated_options[ Kunaki_Circuit_Breaker::OPTION_KEY ], true );
+		$this->assertSame( 'closed', $saved['state'] );
+	}
+
+	public function test_opened_listener_that_throws_does_not_escape_the_request() {
+		$this->set_circuit_state( 'closed', 4 ); // Will become 5 = threshold
+		Actions\expectDone( 'kunaki_wc_circuit_breaker_opened' )->once()->whenHappen( function () {
+			throw new \RuntimeException( 'listener blew up' );
+		} );
+
+		( new Kunaki_Circuit_Breaker() )->post_request( new WP_Error( 'kunaki_http_error', 'HTTP 500' ) );
+
+		$saved = json_decode( $this->updated_options[ Kunaki_Circuit_Breaker::OPTION_KEY ], true );
+		$this->assertSame( 'open', $saved['state'] );
+	}
+
 	// ── post_request() failure ────────────────────────────────────────
 
 	public function test_failure_increments_count_below_threshold() {

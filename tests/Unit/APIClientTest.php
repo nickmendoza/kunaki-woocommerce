@@ -418,6 +418,53 @@ class APIClientTest extends KunakiTestCase {
 		) );
 	}
 
+	public function test_submit_order_keeps_the_order_id_when_a_breaker_listener_throws() {
+		// Kunaki accepts the order on the request that closes the circuit. If a
+		// listener on that change could throw out of submit_order(), the ID would
+		// be lost and the order submitted again.
+		$body  = '<Response><ErrorCode>0</ErrorCode><ErrorText>success</ErrorText><OrderId>KUN999</OrderId></Response>';
+		$state = json_encode( array( 'state' => 'half_open', 'failure_count' => 5, 'last_failure_at' => time(), 'opened_at' => time() - 999, 'probe_at' => time() - 999 ) );
+
+		Functions\when( 'get_option' )->alias( function ( $key, $default = '' ) use ( &$state ) {
+			if ( 'kunaki_wc_circuit_breaker' === $key ) {
+				return $state;
+			}
+			return 'kunaki_wc_debug_log' === $key ? 'no' : $default;
+		} );
+		Functions\when( 'update_option' )->alias( function ( $key, $value ) use ( &$state ) {
+			$state = $value;
+			return true;
+		} );
+		Functions\when( 'wp_cache_delete' )->justReturn( true );
+		Functions\when( 'wc_get_logger' )->justReturn( Mockery::mock( 'WC_Logger' )->shouldIgnoreMissing() );
+		Functions\expect( 'wp_remote_post' )->once()->andReturn( array( 'body' => $body ) );
+		Functions\expect( 'wp_remote_retrieve_response_code' )->once()->andReturn( 200 );
+		Functions\expect( 'wp_remote_retrieve_body' )->once()->andReturn( $body );
+
+		$wpdb          = Mockery::mock( 'wpdb' );
+		$wpdb->options = 'wp_options';
+		$wpdb->shouldReceive( 'update' )->once()->andReturn( 1 ); // This request wins the probe.
+		$GLOBALS['wpdb'] = $wpdb;
+
+		\Brain\Monkey\Actions\expectDone( 'kunaki_wc_circuit_breaker_closed' )->once()->whenHappen( function () {
+			throw new \RuntimeException( 'listener blew up' );
+		} );
+
+		try {
+			$client = new Kunaki_API_Client( 'u', 'p', 'TEST' );
+			$result = $client->submit_order(
+				array( 'name' => 'A B', 'address_1' => '1 St', 'city' => 'NYC', 'state' => 'NY', 'postcode' => '10001', 'country' => 'United States' ),
+				'USPS First Class Mail',
+				array( array( 'product_id' => 'PXZZ111111', 'quantity' => 1 ) )
+			);
+		} finally {
+			unset( $GLOBALS['wpdb'] );
+		}
+
+		$this->assertSame( 'KUN999', $result );
+		$this->assertSame( 'closed', json_decode( $state, true )['state'] );
+	}
+
 	private function mock_successful_http_response_with_cb( $body, $cb = null ) {
 		$this->mock_logger();
 

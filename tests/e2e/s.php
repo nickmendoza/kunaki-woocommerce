@@ -91,9 +91,10 @@ case 'misc':
  break;
 case 'alerts':
  // No mail server in the container: capture mail and Slack posts instead of sending them.
- $GLOBALS['mails']=[]; $GLOBALS['slack']=[];
+ $GLOBALS['mails']=[]; $GLOBALS['slack']=[]; $GLOBALS['mail_ok']=true;
  // WooCommerce's own order emails go through wp_mail too, so only count mail to the alert address.
- add_filter('pre_wp_mail',function($r,$a){ if('ops@example.com'===($a['to']??'')) $GLOBALS['mails'][]=$a; return true; },10,2);
+ // Setting mail_ok to false makes every send fail, as a broken mail server would.
+ add_filter('pre_wp_mail',function($r,$a){ if('ops@example.com'===($a['to']??'')) $GLOBALS['mails'][]=$a; return $GLOBALS['mail_ok']; },10,2);
  add_filter('pre_http_request',function($r,$args,$url){ if(false===strpos($url,'slack')) return $r; $GLOBALS['slack'][]=$url; return ['headers'=>[],'body'=>'ok','response'=>['code'=>200,'message'=>'OK'],'cookies'=>[]]; },5,3);
  $pending=function(){ return as_get_scheduled_actions(['hook'=>'kunaki_wc_send_alert','status'=>'pending','per_page'=>-1],'ids'); };
  $run_alerts=function() use($pending){ foreach($pending() as $a) ActionScheduler::runner()->process_action($a,'stage'); };
@@ -155,6 +156,18 @@ case 'alerts':
  $run_alerts();
  t('recovery alert sent once the API is still up', 2===count($GLOBALS['mails']) && false!==strpos($GLOBALS['mails'][1]['subject'],'recovered'), $subjects());
 
+ // An outage alert nobody received is sent again at the next failed check.
+ $flag=function(){ global $wpdb; return $wpdb->get_var("SELECT option_value FROM {$wpdb->options} WHERE option_name='kunaki_wc_alert_outage_open'"); };
+ $reset(); $GLOBALS['mail_ok']=false; update_option('kunaki_wc_alert_slack_enabled','no'); delete_option('kunaki_wc_circuit_breaker');
+ for($i=0;$i<$threshold;$i++) $cb->post_request(new WP_Error('http_request_failed','mock outage'));
+ t('outage is flagged while its alert is queued', null!==$flag() && 1===count($pending()), [$flag(),count($pending())]);
+ $run_alerts();
+ t('outage alert that could not be delivered does not count as sent', 1===count($GLOBALS['mails']) && null===$flag(), [$subjects(),$flag()]);
+ $GLOBALS['mail_ok']=true; update_option('kunaki_wc_circuit_breaker',wp_json_encode(['state'=>'half_open','failure_count'=>$threshold,'last_failure_at'=>time(),'opened_at'=>time()-999]),false);
+ $cb->post_request(new WP_Error('http_request_failed','still down')); $run_alerts();
+ t('next failed check sends the outage alert', 2===count($GLOBALS['mails']) && false!==strpos($GLOBALS['mails'][1]['subject'],'outage') && null!==$flag(), $subjects());
+ delete_option('kunaki_wc_circuit_breaker'); delete_option('kunaki_wc_alert_outage_open'); update_option('kunaki_wc_alert_slack_enabled','yes');
+
  update_option('kunaki_wc_alert_slack_webhook','https://evil.example/hook');
  t('non-Slack webhook URL is not saved', ''===get_option('kunaki_wc_alert_slack_webhook'), get_option('kunaki_wc_alert_slack_webhook'));
  delete_option('kunaki_wc_alert_slack_webhook'); add_option('kunaki_wc_alert_slack_webhook','http://hooks.slack.com/services/T0/B0/X0');
@@ -163,6 +176,24 @@ case 'alerts':
  // Leave one alert queued with alerts off, so deactivation can be checked to cancel it.
  $bad_order(); update_option('kunaki_wc_alerts_enabled','no'); update_option('kunaki_wc_alert_slack_enabled','no');
  t('an alert is left queued for the deactivation check', 1===count($pending()));
+ break;
+case 'listener':
+ // Another plugin's listener throws on the plugin's public actions. That must not undo what the plugin just did.
+ foreach(wc_get_orders(['status'=>['processing'],'limit'=>-1,'return'=>'ids']) as $x) wc_get_order($x)->update_status('cancelled');
+ $cancel_queued=function(){ foreach(as_get_scheduled_actions(['hook'=>'kunaki_wc_submit_order','status'=>'pending','per_page'=>-1],'ids') as $a) ActionScheduler::store()->cancel_action($a); };
+ $cancel_queued(); update_option('mock_kunaki_mode','ok'); delete_option('mock_kunaki_log');
+ add_action('kunaki_wc_circuit_breaker_closed',function(){ throw new RuntimeException('listener blew up'); },1);
+ add_action('kunaki_wc_order_needs_attention',function(){ throw new RuntimeException('listener blew up'); },1);
+ // The submission is the request that closes the circuit, so the listener throws just after Kunaki accepts the order.
+ update_option('kunaki_wc_circuit_breaker',wp_json_encode(['state'=>'open','failure_count'=>5,'last_failure_at'=>time()-999,'opened_at'=>time()-999]),false);
+ $id=mk($ids['disc'],0,'processing'); run_queue(); $o=wc_get_order($id);
+ t('order accepted while a breaker listener throws is recorded as submitted', 'yes'===$o->get_meta('_kunaki_submitted') && 0===strpos((string)$o->get_meta('_kunaki_order_id'),'KUN') && ''===(string)$o->get_meta('_kunaki_fulfillment_error'), $o->get_meta_data());
+ t('circuit closed by that submission', 'closed'===(new Kunaki_Circuit_Breaker())->get_state()['state'] && log_has('<Order>'));
+ // Retry run with two orders out of retries: the listener throws on the first.
+ $spent=function() use($ids,$cancel_queued){ $id=mk($ids['disc'],0,'processing'); $cancel_queued(); $o=wc_get_order($id); $o->update_meta_data('_kunaki_fulfillment_error','Connection timed out'); $o->update_meta_data('_kunaki_fulfillment_attempts',(int)get_option('kunaki_wc_max_retries',3)); $o->update_meta_data('_kunaki_fulfillment_failed_at',gmdate('c',time()-DAY_IN_SECONDS)); $o->save(); return $id; };
+ $a=$spent(); $b=$spent(); $threw='';
+ try { do_action('kunaki_wc_retry_failed_orders'); } catch(Throwable $e){ $threw=$e->getMessage(); }
+ t('retry run finishes when an order listener throws', ''===$threw && 'yes'===wc_get_order($a)->get_meta('_kunaki_fulfillment_exhausted') && 'yes'===wc_get_order($b)->get_meta('_kunaki_fulfillment_exhausted'), [$threw,wc_get_order($a)->get_meta('_kunaki_fulfillment_exhausted'),wc_get_order($b)->get_meta('_kunaki_fulfillment_exhausted')]);
  break;
 case 'alerts2':
  t('deactivation cancels queued alerts', !as_get_scheduled_actions(['hook'=>'kunaki_wc_send_alert','status'=>'pending','per_page'=>-1],'ids'));

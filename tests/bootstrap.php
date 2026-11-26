@@ -245,6 +245,19 @@ if ( ! class_exists( 'WC_Settings_Page' ) ) {
 		public $label = '';
 
 		public function __construct() {}
+
+		public function save() {}
+	}
+}
+
+if ( ! class_exists( 'WC_Admin_Settings' ) ) {
+	class WC_Admin_Settings {
+		/** @var string[] Errors added so far. Tests reset this. */
+		public static $errors = array();
+
+		public static function add_error( $text ) {
+			self::$errors[] = $text;
+		}
 	}
 }
 

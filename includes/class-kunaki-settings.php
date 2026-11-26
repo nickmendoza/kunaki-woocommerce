@@ -3,6 +3,9 @@ defined( 'ABSPATH' ) || exit;
 
 class Kunaki_Settings extends WC_Settings_Page {
 
+	/** @var bool Whether the Slack webhook URL submitted in this save was refused. */
+	private $slack_url_refused = false;
+
 	public function __construct() {
 		$this->id    = 'kunaki';
 		$this->label = __( 'Kunaki', 'kunaki-woocommerce' );
@@ -10,6 +13,43 @@ class Kunaki_Settings extends WC_Settings_Page {
 		parent::__construct();
 
 		add_filter( 'woocommerce_admin_settings_sanitize_option_kunaki_wc_password', array( $this, 'keep_password_when_blank' ) );
+		add_filter( 'woocommerce_admin_settings_sanitize_option_kunaki_wc_alert_slack_webhook', array( $this, 'note_refused_slack_url' ) );
+	}
+
+	/**
+	 * Save the settings, then warn if Slack alerts can't be posted.
+	 *
+	 * A refused webhook URL is stored as blank, and WooCommerce still reports
+	 * the settings as saved. Without a warning, a store that only uses Slack
+	 * would lose every alert and not know.
+	 */
+	public function save() {
+		parent::save();
+
+		if ( $this->slack_url_refused ) {
+			WC_Admin_Settings::add_error( __( 'The Slack webhook URL was not saved. It must be a Slack incoming webhook URL, starting with https://hooks.slack.com/. Slack alerts will not be posted until one is saved.', 'kunaki-woocommerce' ) );
+			return;
+		}
+
+		if ( 'yes' === get_option( 'kunaki_wc_alerts_enabled', 'no' )
+			&& 'yes' === get_option( 'kunaki_wc_alert_slack_enabled', 'no' )
+			&& '' === (string) get_option( 'kunaki_wc_alert_slack_webhook', '' ) ) {
+			WC_Admin_Settings::add_error( __( 'Slack alerts are on, but there is no webhook URL, so nothing will be posted to Slack.', 'kunaki-woocommerce' ) );
+		}
+	}
+
+	/**
+	 * Note when the submitted Slack webhook URL will be refused.
+	 *
+	 * The value is left as it is: the sanitize_option filter in the main plugin
+	 * file is what blanks it, here and for every other way of saving the option.
+	 *
+	 * @param mixed $value Sanitized value.
+	 * @return mixed
+	 */
+	public function note_refused_slack_url( $value ) {
+		$this->slack_url_refused = is_string( $value ) && '' !== trim( $value ) && '' === Kunaki_Alerts::validate_webhook_option( $value );
+		return $value;
 	}
 
 	/**

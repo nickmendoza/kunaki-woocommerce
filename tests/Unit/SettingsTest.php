@@ -2,7 +2,9 @@
 
 namespace Kunaki\Tests\Unit;
 
+use Brain\Monkey\Functions;
 use Kunaki_Settings;
+use WC_Admin_Settings;
 
 class SettingsTest extends KunakiTestCase {
 
@@ -11,7 +13,8 @@ class SettingsTest extends KunakiTestCase {
 
 	protected function set_up() {
 		parent::set_up();
-		$this->settings = new Kunaki_Settings();
+		$this->settings            = new Kunaki_Settings();
+		WC_Admin_Settings::$errors = array();
 	}
 
 	public function test_settings_id_and_label() {
@@ -59,6 +62,76 @@ class SettingsTest extends KunakiTestCase {
 		// WooCommerce skips saving an option when the sanitized value is null.
 		$this->assertNull( $this->settings->keep_password_when_blank( '' ) );
 		$this->assertSame( 'new-password', $this->settings->keep_password_when_blank( 'new-password' ) );
+	}
+
+	public function test_slack_url_check_is_registered() {
+		$this->assertNotFalse( has_filter( 'woocommerce_admin_settings_sanitize_option_kunaki_wc_alert_slack_webhook', array( $this->settings, 'note_refused_slack_url' ) ) );
+	}
+
+	public function test_refused_slack_url_is_reported_after_saving() {
+		$this->stub_saved_options( array() );
+
+		// WooCommerce runs this while it saves the submitted fields.
+		$kept = $this->settings->note_refused_slack_url( 'https://evil.example/hook' );
+		$this->settings->save();
+
+		$this->assertSame( 'https://evil.example/hook', $kept, 'The sanitize_option filter blanks it, not this one.' );
+		$this->assertCount( 1, WC_Admin_Settings::$errors );
+		$this->assertStringContainsString( 'The Slack webhook URL was not saved', WC_Admin_Settings::$errors[0] );
+	}
+
+	/**
+	 * @dataProvider slack_urls_with_nothing_to_report
+	 */
+	public function test_accepted_or_blank_slack_url_is_not_reported( $submitted ) {
+		$this->stub_saved_options( array() );
+
+		$this->settings->note_refused_slack_url( $submitted );
+		$this->settings->save();
+
+		$this->assertSame( array(), WC_Admin_Settings::$errors );
+	}
+
+	public static function slack_urls_with_nothing_to_report() {
+		return array(
+			'slack url'     => array( 'https://hooks.slack.com/services/T/B/X' ),
+			'blank'         => array( '' ),
+			'only spaces'   => array( '   ' ),
+			'not submitted' => array( null ),
+		);
+	}
+
+	public function test_slack_alerts_on_without_a_url_are_reported() {
+		$this->stub_saved_options( array(
+			'kunaki_wc_alerts_enabled'      => 'yes',
+			'kunaki_wc_alert_slack_enabled' => 'yes',
+			'kunaki_wc_alert_slack_webhook' => '',
+		) );
+
+		$this->settings->save();
+
+		$this->assertCount( 1, WC_Admin_Settings::$errors );
+		$this->assertStringContainsString( 'there is no webhook URL', WC_Admin_Settings::$errors[0] );
+	}
+
+	/**
+	 * @dataProvider slack_settings_that_need_no_warning
+	 */
+	public function test_no_warning_when_slack_is_off_or_has_a_url( $saved ) {
+		$this->stub_saved_options( $saved );
+
+		$this->settings->save();
+
+		$this->assertSame( array(), WC_Admin_Settings::$errors );
+	}
+
+	public static function slack_settings_that_need_no_warning() {
+		return array(
+			'alerts off'        => array( array( 'kunaki_wc_alerts_enabled' => 'no', 'kunaki_wc_alert_slack_enabled' => 'yes' ) ),
+			'Slack off'         => array( array( 'kunaki_wc_alerts_enabled' => 'yes', 'kunaki_wc_alert_slack_enabled' => 'no' ) ),
+			'Slack with a URL'  => array( array( 'kunaki_wc_alerts_enabled' => 'yes', 'kunaki_wc_alert_slack_enabled' => 'yes', 'kunaki_wc_alert_slack_webhook' => 'https://hooks.slack.com/services/T/B/X' ) ),
+			'nothing saved yet' => array( array() ),
+		);
 	}
 
 	public function test_data_removal_is_opt_in() {
@@ -141,6 +214,17 @@ class SettingsTest extends KunakiTestCase {
 			'negative value'  => array( -1, 1, 10, 3, 1 ),
 			'string value'    => array( 'abc', 1, 10, 3, 3 ),
 		);
+	}
+
+	/** What get_option() returns once WooCommerce has saved the page. */
+	private function stub_saved_options( array $saved ) {
+		Functions\when( 'get_option' )->alias( function ( $key, $default = false ) use ( $saved ) {
+			return array_key_exists( $key, $saved ) ? $saved[ $key ] : $default;
+		} );
+		Functions\when( 'wp_parse_url' )->alias( function ( $url, $component = -1 ) {
+			return parse_url( $url, $component );
+		} );
+		Functions\when( 'esc_url_raw' )->returnArg();
 	}
 
 	private function find_field( $fields, $id ) {

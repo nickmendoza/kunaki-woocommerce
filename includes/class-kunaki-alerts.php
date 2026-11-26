@@ -29,9 +29,11 @@ class Kunaki_Alerts {
 	const REASON_DECLINED          = 'declined';
 
 	// One outage alert per outage, however often the circuit flaps. This row is
-	// written with INSERT IGNORE when the outage alert is sent, so only one
-	// concurrent request wins, and deleted when the recovery alert is sent.
-	// Its value is when it was set; after a day it counts as stale.
+	// written with INSERT IGNORE when the outage alert is queued, so only one
+	// concurrent request wins. It's deleted when the recovery alert is sent, or
+	// straight away if the outage alert couldn't be delivered, so the next
+	// failed check tries again. Its value is when it was set; after a day it
+	// counts as stale.
 	const OUTAGE_FLAG       = 'kunaki_wc_alert_outage_open';
 	const OUTAGE_FLAG_STALE = DAY_IN_SECONDS;
 
@@ -156,6 +158,10 @@ class Kunaki_Alerts {
 		// The admin may have turned alerts off since this was queued.
 		if ( ! $this->alerts_enabled() ) {
 			Kunaki_Logger::debug( 'Alert skipped: alerts were turned off after it was queued.', array( 'event' => $event ) );
+			if ( self::EVENT_CIRCUIT_OPENED === $event ) {
+				// Nobody was told about this outage, so don't report its recovery either.
+				$this->release_outage_flag();
+			}
 			return;
 		}
 
@@ -177,12 +183,22 @@ class Kunaki_Alerts {
 			return;
 		}
 
+		$delivered = false;
+
 		if ( 'yes' === get_option( self::OPT_EMAIL_ENABLED, 'yes' ) ) {
-			$this->send_email( $this->site_tag() . ' ' . $message['title'], $message['body'] );
+			$delivered = $this->send_email( $this->site_tag() . ' ' . $message['title'], $message['body'] );
 		}
 
 		if ( 'yes' === get_option( self::OPT_SLACK_ENABLED, 'no' ) ) {
-			$this->send_slack( $message['title'], $message['body'], $message['fields'], $message['severity'] );
+			$delivered = $this->send_slack( $message['title'], $message['body'], $message['fields'], $message['severity'] ) || $delivered;
+		}
+
+		// An outage alert that reached nobody mustn't count as sent. Without
+		// this, the flag would silence the rest of the outage. Released, the
+		// next failed check (one cooldown later) alerts again.
+		if ( ! $delivered && self::EVENT_CIRCUIT_OPENED === $event ) {
+			$this->release_outage_flag();
+			Kunaki_Logger::error( 'Outage alert was not delivered. It will be sent again at the next failed check.' );
 		}
 	}
 

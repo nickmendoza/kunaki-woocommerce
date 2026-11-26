@@ -293,8 +293,7 @@ class Kunaki_Order_Status_Sync {
 		// Before the notes: if sending them dies, the next run only resends the
 		// notes and never sees the status change again, so this would be lost.
 		if ( 'DECLINED' === $kunaki_status ) {
-			/** This action is documented in Kunaki_Order_Fulfillment::record_failure(). */
-			do_action( 'kunaki_wc_order_needs_attention', $order_id, 'declined', (string) $kunaki_order_id );
+			Kunaki_Order_Fulfillment::notify_needs_attention( $order_id, 'declined', (string) $kunaki_order_id );
 		}
 
 		// Now safe — meta is persisted, so the next cron run won't retry.

@@ -78,6 +78,7 @@ class AlertsTest extends KunakiTestCase {
 		$this->run_jobs();
 
 		$this->assertSame( array(), $this->mails );
+		$this->assertSame( array(), $this->rows, 'Nobody was told, so the outage must not count as reported.' );
 	}
 
 	public function test_no_channel_enabled_sends_nothing() {
@@ -89,6 +90,7 @@ class AlertsTest extends KunakiTestCase {
 
 		$this->assertSame( array(), $this->mails );
 		$this->assertSame( array(), $this->posts );
+		$this->assertSame( array(), $this->rows, 'Nobody was told, so the outage must not count as reported.' );
 	}
 
 	// ── Background delivery ────────────────────────────────────────────
@@ -204,6 +206,83 @@ class AlertsTest extends KunakiTestCase {
 		$alerts->handle_circuit_opened();          // A new outage alerts again.
 		$this->run_jobs();
 		$this->assertCount( 3, $this->mails );
+	}
+
+	public function test_undelivered_outage_alert_is_sent_again_at_the_next_failed_check() {
+		$this->enable_alerts();
+		$this->mail_return = false;
+		$alerts            = new Kunaki_Alerts();
+
+		$alerts->handle_circuit_opened();
+		$this->run_jobs();
+
+		$this->assertArrayNotHasKey( Kunaki_Alerts::OUTAGE_FLAG, $this->rows, 'An alert nobody received must not count as sent.' );
+
+		$this->mail_return = true;
+		$alerts->handle_circuit_opened();          // The next failed recovery check.
+		$this->run_jobs();
+
+		$this->assertCount( 2, $this->mails, 'One failed attempt, then the alert.' );
+		$this->assertArrayHasKey( Kunaki_Alerts::OUTAGE_FLAG, $this->rows );
+
+		$alerts->handle_circuit_opened();          // Delivered now, so later checks stay quiet.
+		$this->run_jobs();
+
+		$this->assertCount( 2, $this->mails );
+	}
+
+	/**
+	 * @dataProvider one_channel_failing
+	 */
+	public function test_outage_alert_that_reached_one_channel_counts_as_sent( $mail_ok, $slack_status ) {
+		$this->enable_slack();
+		$this->options[ Kunaki_Alerts::OPT_EMAIL_ENABLED ] = 'yes';
+		$this->options[ Kunaki_Alerts::OPT_EMAIL_ADDRESS ] = 'alerts@example.com';
+		$this->mail_return  = $mail_ok;
+		$this->slack_status = $slack_status;
+		$alerts             = new Kunaki_Alerts();
+
+		$alerts->handle_circuit_opened();
+		$this->run_jobs();
+		$alerts->handle_circuit_opened();
+		$this->run_jobs();
+
+		$this->assertCount( 1, $this->mails, 'Both channels were tried once.' );
+		$this->assertCount( 1, $this->posts, 'The second trip of the same outage stays quiet.' );
+		$this->assertArrayHasKey( Kunaki_Alerts::OUTAGE_FLAG, $this->rows );
+	}
+
+	public function one_channel_failing() {
+		return array(
+			'email fails, Slack delivers' => array( false, 200 ),
+			'email delivers, Slack fails' => array( true, 500 ),
+		);
+	}
+
+	public function test_recovery_is_not_reported_for_an_outage_nobody_was_told_about() {
+		$this->enable_alerts();
+		$this->mail_return = false;
+		$alerts            = new Kunaki_Alerts();
+		$alerts->handle_circuit_opened();
+		$this->run_jobs();
+
+		$this->mail_return = true;
+		$this->set_circuit( 'closed' );
+		$alerts->handle_circuit_closed();
+		$this->run_jobs();
+
+		$this->assertCount( 1, $this->mails, 'Only the failed outage attempt.' );
+	}
+
+	public function test_undelivered_order_alert_leaves_the_outage_flag_alone() {
+		$this->enable_alerts();
+		$this->rows[ Kunaki_Alerts::OUTAGE_FLAG ] = (string) time();
+		$this->add_order( 42 );
+		$this->mail_return = false;
+
+		( new Kunaki_Alerts() )->execute_send( Kunaki_Alerts::EVENT_ORDER, 42, Kunaki_Alerts::REASON_DECLINED );
+
+		$this->assertArrayHasKey( Kunaki_Alerts::OUTAGE_FLAG, $this->rows );
 	}
 
 	// ── Order alerts ───────────────────────────────────────────────────

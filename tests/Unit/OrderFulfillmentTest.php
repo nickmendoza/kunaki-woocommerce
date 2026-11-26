@@ -1655,6 +1655,17 @@ class OrderFulfillmentTest extends KunakiTestCase {
 		$this->fulfillment->handle_order_processing( 100, $order );
 	}
 
+	public function test_needs_attention_listener_that_throws_does_not_escape() {
+		// It would otherwise stop the retry run that found the order.
+		Actions\expectDone( 'kunaki_wc_order_needs_attention' )
+			->once()->with( 100, 'retries_exhausted', 'Connection timed out' )
+			->whenHappen( function () {
+				throw new \RuntimeException( 'listener blew up' );
+			} );
+
+		Kunaki_Order_Fulfillment::notify_needs_attention( 100, 'retries_exhausted', 'Connection timed out' );
+	}
+
 	public function test_permanent_failure_that_was_not_saved_does_not_alert() {
 		$order = $this->create_submittable_order();
 

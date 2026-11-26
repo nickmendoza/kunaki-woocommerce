@@ -206,10 +206,16 @@ class WC_Shipping_Method {
 	public function get_rates_added(): array { return $this->rates; }
 }
 
+class WC_Admin_Settings {
+	public static function add_error( string $text ): void {}
+}
+
 class WC_Settings_Page {
 	public string $id = '';
 	public string $label = '';
 	public function __construct() {}
+	/** @return void */
+	public function save() {}
 }
 
 class WC_DateTime extends \DateTime {

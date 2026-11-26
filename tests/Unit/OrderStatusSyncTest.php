@@ -123,6 +123,27 @@ class OrderStatusSyncTest extends KunakiTestCase {
 		$this->sync->sync_all_pending_orders();
 	}
 
+	public function test_declined_listener_that_throws_does_not_stop_the_notes() {
+		$order = $this->create_order_mock( 'KUN123', '' );
+
+		$this->mock_api_status( 'KUN123', 'DECLINED', '', '' );
+		$this->mock_wc_get_orders( array( $order ) );
+
+		$order->shouldReceive( 'update_meta_data' )->withAnyArgs()->zeroOrMoreTimes();
+		$order->shouldReceive( 'set_status' )->with( 'on-hold', Mockery::any() )->once();
+		$order->shouldReceive( 'save' )->once();
+		// The note is still added and the pending flag cleared in this run.
+		$order->shouldReceive( 'add_order_note' )->with( Mockery::pattern( '/DECLINED/' ), false )->once();
+		$order->shouldReceive( 'delete_meta_data' )->with( '_kunaki_sync_note_pending' )->once();
+		$order->shouldReceive( 'save_meta_data' )->once();
+
+		Actions\expectDone( 'kunaki_wc_order_needs_attention' )->once()->whenHappen( function () {
+			throw new \RuntimeException( 'listener blew up' );
+		} );
+
+		$this->sync->sync_all_pending_orders();
+	}
+
 	public function test_declined_that_was_not_saved_does_not_alert() {
 		$order = $this->create_order_mock( 'KUN123', '' );
 
