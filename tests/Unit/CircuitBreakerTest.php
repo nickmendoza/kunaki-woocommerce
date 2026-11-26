@@ -2,6 +2,7 @@
 
 namespace Kunaki\Tests\Unit;
 
+use Brain\Monkey\Actions;
 use Brain\Monkey\Functions;
 use Mockery;
 use Kunaki_Circuit_Breaker;
@@ -184,6 +185,7 @@ class CircuitBreakerTest extends KunakiTestCase {
 
 	public function test_success_closes_circuit_from_half_open() {
 		$this->set_circuit_state( 'half_open', 5, time() - 400 );
+		Actions\expectDone( 'kunaki_wc_circuit_breaker_closed' )->once();
 
 		$cb = new Kunaki_Circuit_Breaker();
 		$cb->post_request( simplexml_load_string( '<R><ErrorCode>0</ErrorCode></R>' ) );
@@ -193,10 +195,55 @@ class CircuitBreakerTest extends KunakiTestCase {
 		$this->assertSame( 0, $saved['failure_count'] );
 	}
 
+	public function test_late_success_while_open_closes_circuit_and_reports_it() {
+		// A request that started before the trip succeeds afterwards.
+		$this->set_circuit_state( 'open', 5, time() - 10 );
+		Actions\expectDone( 'kunaki_wc_circuit_breaker_closed' )->once();
+
+		$cb = new Kunaki_Circuit_Breaker();
+		$cb->post_request( simplexml_load_string( '<R><ErrorCode>0</ErrorCode></R>' ) );
+
+		$saved = json_decode( $this->updated_options[ Kunaki_Circuit_Breaker::OPTION_KEY ], true );
+		$this->assertSame( 'closed', $saved['state'] );
+	}
+
+	public function test_success_while_closed_reports_nothing() {
+		$this->set_circuit_state( 'closed', 2 );
+		Actions\expectDone( 'kunaki_wc_circuit_breaker_closed' )->never();
+
+		( new Kunaki_Circuit_Breaker() )->post_request( simplexml_load_string( '<R><ErrorCode>0</ErrorCode></R>' ) );
+		$this->addToAssertionCount( 1 );
+	}
+
+	public function test_closed_listener_that_throws_does_not_escape_the_request() {
+		$this->set_circuit_state( 'half_open', 5, time() - 400 );
+		Actions\expectDone( 'kunaki_wc_circuit_breaker_closed' )->once()->whenHappen( function () {
+			throw new \RuntimeException( 'listener blew up' );
+		} );
+
+		( new Kunaki_Circuit_Breaker() )->post_request( simplexml_load_string( '<R><ErrorCode>0</ErrorCode></R>' ) );
+
+		$saved = json_decode( $this->updated_options[ Kunaki_Circuit_Breaker::OPTION_KEY ], true );
+		$this->assertSame( 'closed', $saved['state'] );
+	}
+
+	public function test_opened_listener_that_throws_does_not_escape_the_request() {
+		$this->set_circuit_state( 'closed', 4 ); // Will become 5 = threshold
+		Actions\expectDone( 'kunaki_wc_circuit_breaker_opened' )->once()->whenHappen( function () {
+			throw new \RuntimeException( 'listener blew up' );
+		} );
+
+		( new Kunaki_Circuit_Breaker() )->post_request( new WP_Error( 'kunaki_http_error', 'HTTP 500' ) );
+
+		$saved = json_decode( $this->updated_options[ Kunaki_Circuit_Breaker::OPTION_KEY ], true );
+		$this->assertSame( 'open', $saved['state'] );
+	}
+
 	// ── post_request() failure ────────────────────────────────────────
 
 	public function test_failure_increments_count_below_threshold() {
 		$this->set_circuit_state( 'closed', 2 );
+		Actions\expectDone( 'kunaki_wc_circuit_breaker_opened' )->never();
 
 		$cb = new Kunaki_Circuit_Breaker();
 		$cb->post_request( new WP_Error( 'http_request_failed', 'Timeout' ) );
@@ -208,6 +255,7 @@ class CircuitBreakerTest extends KunakiTestCase {
 
 	public function test_failure_trips_circuit_at_threshold() {
 		$this->set_circuit_state( 'closed', 4 ); // Will become 5 = threshold
+		Actions\expectDone( 'kunaki_wc_circuit_breaker_opened' )->once();
 
 		$cb = new Kunaki_Circuit_Breaker();
 		$cb->post_request( new WP_Error( 'kunaki_http_error', 'HTTP 500' ) );
@@ -220,6 +268,7 @@ class CircuitBreakerTest extends KunakiTestCase {
 
 	public function test_failure_in_half_open_reopens_circuit() {
 		$this->set_circuit_state( 'half_open', 5, time() - 400 );
+		Actions\expectDone( 'kunaki_wc_circuit_breaker_opened' )->once();
 
 		$cb = new Kunaki_Circuit_Breaker();
 		$cb->post_request( new WP_Error( 'kunaki_xml_error', 'Parse failed' ) );

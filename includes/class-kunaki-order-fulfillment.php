@@ -414,9 +414,11 @@ class Kunaki_Order_Fulfillment {
 		} else {
 			$order->update_meta_data( self::META_FULFILLMENT_ERROR, $error_message );
 		}
+		$saved = true;
 		try {
 			$order->save_meta_data();
 		} catch ( \Throwable $e ) {
+			$saved = false;
 			// Durable marker so retry_failed_orders() can still find this order.
 			global $wpdb;
 			$wpdb->query( $wpdb->prepare(
@@ -441,6 +443,37 @@ class Kunaki_Order_Fulfillment {
 			);
 		} catch ( \Throwable $_ ) {
 			// Note didn't persist — not worth leaking the caller's lock.
+		}
+
+		// Only once the exhausted state is saved. If it wasn't, the durable
+		// marker brings the order back, and its eventual exhaustion alerts then.
+		if ( $permanent && $saved ) {
+			self::notify_needs_attention( $order->get_id(), 'permanent_failure', $error_message );
+		}
+	}
+
+	/**
+	 * Tell listeners an order needs a person before it can be fulfilled.
+	 *
+	 * A listener that throws must not get out: it would stop the retry run or
+	 * status sync that found the order, and the orders after it.
+	 *
+	 * @param int    $order_id Order ID.
+	 * @param string $reason   'retries_exhausted', 'permanent_failure' or 'declined'.
+	 * @param string $message  The error, or for 'declined' the Kunaki order ID.
+	 */
+	public static function notify_needs_attention( $order_id, $reason, $message ) {
+		try {
+			/**
+			 * Fires when an order needs a person before it can be fulfilled.
+			 *
+			 * @param int    $order_id Order ID.
+			 * @param string $reason   'retries_exhausted', 'permanent_failure' or 'declined'.
+			 * @param string $message  The error, or for 'declined' the Kunaki order ID.
+			 */
+			do_action( 'kunaki_wc_order_needs_attention', $order_id, $reason, $message );
+		} catch ( \Throwable $e ) {
+			Kunaki_Logger::error( 'A listener on kunaki_wc_order_needs_attention threw.', array( 'order_id' => $order_id, 'error' => $e->getMessage() ) );
 		}
 	}
 
@@ -611,13 +644,16 @@ class Kunaki_Order_Fulfillment {
 			if ( $attempts >= $max_retries ) {
 				// Move the message to LAST_ERROR so the admin can still see it,
 				// while the order drops out of the ERROR EXISTS retry query.
+				$last_error = (string) $order->get_meta( self::META_FULFILLMENT_ERROR );
 				$order->update_meta_data( self::META_FULFILLMENT_EXHAUSTED, 'yes' );
-				$order->update_meta_data( self::META_FULFILLMENT_LAST_ERROR, $order->get_meta( self::META_FULFILLMENT_ERROR ) );
+				$order->update_meta_data( self::META_FULFILLMENT_LAST_ERROR, $last_error );
 				$order->delete_meta_data( self::META_FULFILLMENT_ERROR );
+				$saved = true;
 				try {
 					$order->save();
 				} catch ( \Throwable $_ ) {
-					// Will be caught again next cron run.
+					// Will be caught again next cron run, which alerts then.
+					$saved = false;
 				}
 				try {
 					$order->add_order_note(
@@ -632,6 +668,9 @@ class Kunaki_Order_Fulfillment {
 					// Best effort — log entry below is the fallback.
 				}
 				Kunaki_Logger::info( 'Max retries exhausted. Requires manual intervention.', array( 'order_id' => $order->get_id(), 'max_retries' => $max_retries ) );
+				if ( $saved ) {
+					self::notify_needs_attention( $order->get_id(), 'retries_exhausted', $last_error );
+				}
 				continue;
 			}
 

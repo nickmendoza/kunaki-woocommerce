@@ -28,7 +28,7 @@ All passwords and emails in these files are throwaway values for the disposable 
 | `run.sh` | Starts the containers, runs setup and the checks, and cleans up |
 | `docker-compose.yml` | WordPress, WP-CLI and MariaDB. Mounts the repo read-only at `/src` |
 | `setup.sh` | Installs WordPress and WooCommerce, copies the plugin in, and creates the test products |
-| `kunaki-mock.php` | Fakes Kunaki's API. The `mock_kunaki_mode` option set to `down` simulates an outage |
+| `kunaki-mock.php` | Fakes Kunaki's API. The `mock_kunaki_mode` option set to `down` simulates an outage, and `mock_kunaki_status` sets the order status it reports |
 | `s.php` | Server-side scenarios, run with `wp eval-file` |
 | `run.py` | Runs the scenarios under both storage modes, and drives the Store API, block pages and admin over HTTP |
 
@@ -36,4 +36,5 @@ All passwords and emails in these files are throwaway values for the disposable 
 
 - Run the whole thing on a fresh environment, which `run.sh` always does. The last step uninstalls the plugin and deletes product IDs, so rerunning scenarios afterwards gives false failures.
 - WordPress is served on `127.0.0.1:18088` while the checks run.
+- The container has no mail server. The alert checks capture mail with the `pre_wp_mail` filter and Slack posts with `pre_http_request`, so nothing is sent. The `sendmail: can't connect` line in the output comes from WooCommerce's own order emails and is harmless.
 - To switch order storage, use `wp wc hpos enable` and `wp wc hpos disable`. `wp option update` doesn't switch it.

@@ -3,6 +3,9 @@ defined( 'ABSPATH' ) || exit;
 
 class Kunaki_Settings extends WC_Settings_Page {
 
+	/** @var bool Whether the Slack webhook URL submitted in this save was refused. */
+	private $slack_url_refused = false;
+
 	public function __construct() {
 		$this->id    = 'kunaki';
 		$this->label = __( 'Kunaki', 'kunaki-woocommerce' );
@@ -10,6 +13,43 @@ class Kunaki_Settings extends WC_Settings_Page {
 		parent::__construct();
 
 		add_filter( 'woocommerce_admin_settings_sanitize_option_kunaki_wc_password', array( $this, 'keep_password_when_blank' ) );
+		add_filter( 'woocommerce_admin_settings_sanitize_option_kunaki_wc_alert_slack_webhook', array( $this, 'note_refused_slack_url' ) );
+	}
+
+	/**
+	 * Save the settings, then warn if Slack alerts can't be posted.
+	 *
+	 * A refused webhook URL is stored as blank, and WooCommerce still reports
+	 * the settings as saved. Without a warning, a store that only uses Slack
+	 * would lose every alert and not know.
+	 */
+	public function save() {
+		parent::save();
+
+		if ( $this->slack_url_refused ) {
+			WC_Admin_Settings::add_error( __( 'The Slack webhook URL was not saved. It must be a Slack incoming webhook URL, starting with https://hooks.slack.com/. Slack alerts will not be posted until one is saved.', 'kunaki-woocommerce' ) );
+			return;
+		}
+
+		if ( 'yes' === get_option( 'kunaki_wc_alerts_enabled', 'no' )
+			&& 'yes' === get_option( 'kunaki_wc_alert_slack_enabled', 'no' )
+			&& '' === (string) get_option( 'kunaki_wc_alert_slack_webhook', '' ) ) {
+			WC_Admin_Settings::add_error( __( 'Slack alerts are on, but there is no webhook URL, so nothing will be posted to Slack.', 'kunaki-woocommerce' ) );
+		}
+	}
+
+	/**
+	 * Note when the submitted Slack webhook URL will be refused.
+	 *
+	 * The value is left as it is: the sanitize_option filter in the main plugin
+	 * file is what blanks it, here and for every other way of saving the option.
+	 *
+	 * @param mixed $value Sanitized value.
+	 * @return mixed
+	 */
+	public function note_refused_slack_url( $value ) {
+		$this->slack_url_refused = is_string( $value ) && '' !== trim( $value ) && '' === Kunaki_Alerts::validate_webhook_option( $value );
+		return $value;
 	}
 
 	/**
@@ -151,6 +191,55 @@ class Kunaki_Settings extends WC_Settings_Page {
 			array(
 				'type' => 'sectionend',
 				'id'   => 'kunaki_wc_circuit_breaker_settings',
+			),
+			array(
+				'title' => __( 'Alerts', 'kunaki-woocommerce' ),
+				'type'  => 'title',
+				'desc'  => __( 'Get an email or Slack message when an order needs you (it failed every retry, can\'t be sent until something is fixed, or Kunaki declined it), when Kunaki\'s API goes down and comes back, and when the saved Kunaki password can\'t be read.', 'kunaki-woocommerce' ),
+				'id'    => 'kunaki_wc_alerts_settings',
+			),
+			array(
+				'title'   => __( 'Enable Alerts', 'kunaki-woocommerce' ),
+				'desc'    => __( 'Send alerts. When off, nothing is sent.', 'kunaki-woocommerce' ),
+				'id'      => 'kunaki_wc_alerts_enabled',
+				'type'    => 'checkbox',
+				'default' => 'no',
+			),
+			array(
+				'title'   => __( 'Email Alerts', 'kunaki-woocommerce' ),
+				'desc'    => __( 'Send alerts by email.', 'kunaki-woocommerce' ),
+				'id'      => 'kunaki_wc_alert_email_enabled',
+				'type'    => 'checkbox',
+				'default' => 'yes',
+			),
+			array(
+				'title'    => __( 'Alert Email Address', 'kunaki-woocommerce' ),
+				'desc'     => __( 'Leave blank to use the site admin email.', 'kunaki-woocommerce' ),
+				'id'       => 'kunaki_wc_alert_email_address',
+				'type'     => 'email',
+				'default'  => '',
+				'desc_tip' => true,
+				'css'      => 'min-width: 350px;',
+			),
+			array(
+				'title'   => __( 'Slack Alerts', 'kunaki-woocommerce' ),
+				'desc'    => __( 'Post alerts to a Slack channel.', 'kunaki-woocommerce' ),
+				'id'      => 'kunaki_wc_alert_slack_enabled',
+				'type'    => 'checkbox',
+				'default' => 'no',
+			),
+			array(
+				'title'    => __( 'Slack Webhook URL', 'kunaki-woocommerce' ),
+				'desc'     => __( 'A Slack incoming webhook URL, starting with https://hooks.slack.com/. Other addresses are not saved.', 'kunaki-woocommerce' ),
+				'id'       => 'kunaki_wc_alert_slack_webhook',
+				'type'     => 'text',
+				'default'  => '',
+				'desc_tip' => true,
+				'css'      => 'min-width: 350px;',
+			),
+			array(
+				'type' => 'sectionend',
+				'id'   => 'kunaki_wc_alerts_settings',
 			),
 		);
 	}

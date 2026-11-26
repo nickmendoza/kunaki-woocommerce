@@ -72,10 +72,28 @@ if ( ! function_exists( 'kunaki_wc_encrypt_password' ) ) {
 
 		// This runs on every read of the option, so only report it once.
 		if ( ! $flagged ) {
-			update_option( 'kunaki_wc_decrypt_failed', 'yes', 'no' );
+			$saved = update_option( 'kunaki_wc_decrypt_failed', 'yes', 'no' );
 
 			if ( function_exists( 'wc_get_logger' ) ) {
 				wc_get_logger()->error( 'Failed to decrypt Kunaki password. Auth salts may have changed.', array( 'source' => 'kunaki-woocommerce' ) );
+			}
+
+			// Only once the flag is saved. If it wasn't, the next read lands
+			// here again, and would tell listeners again on every read.
+			if ( $saved ) {
+				// A listener that throws must not get out: this runs inside
+				// every read of the password, including a shopper's shipping rates.
+				try {
+					/**
+					 * Fires once when the saved Kunaki password can't be decrypted.
+					 * Fulfillment is paused until the password is saved again.
+					 */
+					do_action( 'kunaki_wc_password_decrypt_failed' );
+				} catch ( \Throwable $e ) {
+					if ( function_exists( 'wc_get_logger' ) ) {
+						wc_get_logger()->error( 'A listener on kunaki_wc_password_decrypt_failed threw: ' . $e->getMessage(), array( 'source' => 'kunaki-woocommerce' ) );
+					}
+				}
 			}
 		}
 		return '';

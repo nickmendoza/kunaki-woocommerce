@@ -2,6 +2,7 @@
 
 namespace Kunaki\Tests\Unit;
 
+use Brain\Monkey\Actions;
 use Brain\Monkey\Functions;
 use Mockery;
 use Kunaki_Order_Fulfillment;
@@ -1490,6 +1491,9 @@ class OrderFulfillmentTest extends KunakiTestCase {
 		$order->shouldReceive( 'save_meta_data' )->once();
 		$order->shouldReceive( 'add_order_note' )->once();
 
+		// A failure that will be retried doesn't need a person yet.
+		Actions\expectDone( 'kunaki_wc_order_needs_attention' )->never();
+
 		$this->fulfillment->handle_order_processing( 100, $order );
 	}
 
@@ -1545,6 +1549,13 @@ class OrderFulfillmentTest extends KunakiTestCase {
 		Functions\expect( 'get_option' )->zeroOrMoreTimes()->andReturn( 'no' );
 
 		$this->mock_wpdb_recovery();
+
+		// Only order2 alerts: order1's exhausted state wasn't saved, so the next
+		// cron run exhausts it again and alerts then.
+		Actions\expectDone( 'kunaki_wc_order_needs_attention' )
+			->once()->with( 200, 'retries_exhausted', 'Connection timed out' );
+		Actions\expectDone( 'kunaki_wc_order_needs_attention' )
+			->never()->with( 100, Mockery::any(), Mockery::any() );
 
 		// order2 should still be processed even though order1's save() threw.
 		$this->fulfillment->retry_failed_orders();
@@ -1637,6 +1648,38 @@ class OrderFulfillmentTest extends KunakiTestCase {
 		$order->shouldReceive( 'delete_meta_data' )->with( '_kunaki_fulfillment_error' )->once();
 		$order->shouldReceive( 'save_meta_data' )->once();
 		$order->shouldReceive( 'add_order_note' )->once();
+
+		Actions\expectDone( 'kunaki_wc_order_needs_attention' )
+			->once()->with( 100, 'permanent_failure', Mockery::type( 'string' ) );
+
+		$this->fulfillment->handle_order_processing( 100, $order );
+	}
+
+	public function test_needs_attention_listener_that_throws_does_not_escape() {
+		// It would otherwise stop the retry run that found the order.
+		Actions\expectDone( 'kunaki_wc_order_needs_attention' )
+			->once()->with( 100, 'retries_exhausted', 'Connection timed out' )
+			->whenHappen( function () {
+				throw new \RuntimeException( 'listener blew up' );
+			} );
+
+		Kunaki_Order_Fulfillment::notify_needs_attention( 100, 'retries_exhausted', 'Connection timed out' );
+	}
+
+	public function test_permanent_failure_that_was_not_saved_does_not_alert() {
+		$order = $this->create_submittable_order();
+
+		Functions\expect( 'get_post_meta' )->with( 42, '_kunaki_product_id', true )->andReturn( 'PXZZ111111' );
+		Functions\expect( 'get_option' )->zeroOrMoreTimes()->andReturn( 'no' );
+
+		$order->shouldReceive( 'get_shipping_methods' )->andReturn( array() );
+		$order->shouldReceive( 'get_meta' )->with( '_kunaki_fulfillment_attempts' )->andReturn( '' );
+		$order->shouldReceive( 'update_meta_data' )->withAnyArgs()->zeroOrMoreTimes();
+		$order->shouldReceive( 'delete_meta_data' )->withAnyArgs()->zeroOrMoreTimes();
+		$order->shouldReceive( 'save_meta_data' )->once()->andThrow( new \RuntimeException( 'DB down' ) );
+		$order->shouldReceive( 'add_order_note' )->once();
+
+		Actions\expectDone( 'kunaki_wc_order_needs_attention' )->never();
 
 		$this->fulfillment->handle_order_processing( 100, $order );
 	}

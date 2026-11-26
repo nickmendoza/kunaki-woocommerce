@@ -202,6 +202,7 @@ class Kunaki_Circuit_Breaker {
 			$state['opened_at'] = time();
 			$this->save_state( $state );
 			Kunaki_Logger::info( 'Circuit breaker: half_open -> open (probe request failed).' );
+			$this->notify( 'kunaki_wc_circuit_breaker_opened', $state );
 			return;
 		}
 
@@ -212,6 +213,7 @@ class Kunaki_Circuit_Breaker {
 			Kunaki_Logger::info(
 				sprintf( 'Circuit breaker: closed -> open after %d consecutive failures.', $state['failure_count'] )
 			);
+			$this->notify( 'kunaki_wc_circuit_breaker_opened', $state );
 			return;
 		}
 
@@ -234,10 +236,34 @@ class Kunaki_Circuit_Breaker {
 
 		if ( 'half_open' === $previous ) {
 			Kunaki_Logger::info( 'Circuit breaker: half_open -> closed (probe request succeeded).' );
+		} elseif ( 'open' === $previous ) {
+			// A request that started before the circuit tripped succeeded afterwards.
+			Kunaki_Logger::info( 'Circuit breaker: open -> closed (an earlier request succeeded).' );
+		}
+		if ( 'closed' !== $previous ) {
+			$this->notify( 'kunaki_wc_circuit_breaker_closed', $state );
 		}
 	}
 
 	private function save_state( $state ) {
 		update_option( self::OPTION_KEY, wp_json_encode( $state ), false );
+	}
+
+	/**
+	 * Tell listeners the circuit changed state.
+	 *
+	 * This runs inside the API call that caused the change. By then Kunaki may
+	 * already have accepted an order, so a listener that throws must not get
+	 * out: the order ID would be lost and the order submitted a second time.
+	 *
+	 * @param string $action Action to fire.
+	 * @param array  $state  Circuit state after the change.
+	 */
+	private function notify( $action, $state ) {
+		try {
+			do_action( $action, $state );
+		} catch ( \Throwable $e ) {
+			Kunaki_Logger::error( 'A listener on a circuit breaker action threw.', array( 'action' => $action, 'error' => $e->getMessage() ) );
+		}
 	}
 }

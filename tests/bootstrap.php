@@ -245,6 +245,19 @@ if ( ! class_exists( 'WC_Settings_Page' ) ) {
 		public $label = '';
 
 		public function __construct() {}
+
+		public function save() {}
+	}
+}
+
+if ( ! class_exists( 'WC_Admin_Settings' ) ) {
+	class WC_Admin_Settings {
+		/** @var string[] Errors added so far. Tests reset this. */
+		public static $errors = array();
+
+		public static function add_error( $text ) {
+			self::$errors[] = $text;
+		}
 	}
 }
 
@@ -260,6 +273,7 @@ require_once KUNAKI_WC_PLUGIN_DIR . 'includes/class-kunaki-order-fulfillment.php
 require_once KUNAKI_WC_PLUGIN_DIR . 'includes/class-kunaki-order-status-sync.php';
 require_once KUNAKI_WC_PLUGIN_DIR . 'includes/class-kunaki-retry-queue.php';
 require_once KUNAKI_WC_PLUGIN_DIR . 'includes/class-kunaki-dashboard-widget.php';
+require_once KUNAKI_WC_PLUGIN_DIR . 'includes/class-kunaki-alerts.php';
 require_once KUNAKI_WC_PLUGIN_DIR . 'includes/class-kunaki-settings.php';
 require_once KUNAKI_WC_PLUGIN_DIR . 'includes/class-kunaki-woocommerce.php';
 require_once KUNAKI_WC_PLUGIN_DIR . 'includes/class-kunaki-cli-command.php';

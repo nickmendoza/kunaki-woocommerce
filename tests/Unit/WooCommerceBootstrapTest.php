@@ -63,6 +63,28 @@ class WooCommerceBootstrapTest extends KunakiTestCase {
 		Kunaki_WooCommerce::instance();
 	}
 
+	public function test_wires_up_alerts() {
+		$actions = array();
+		Functions\when( 'add_filter' )->justReturn( true );
+		Functions\when( 'add_action' )->alias( function ( $hook, $callback ) use ( &$actions ) {
+			$actions[ $hook ][] = $callback;
+			return true;
+		} );
+
+		$ref = new \ReflectionClass( Kunaki_WooCommerce::class );
+		$prop = $ref->getProperty( 'instance' );
+		if ( PHP_VERSION_ID < 80100 ) {
+			$prop->setAccessible( true );
+		}
+		$prop->setValue( null, null );
+
+		Kunaki_WooCommerce::instance();
+
+		$this->assertArrayHasKey( 'kunaki_wc_order_needs_attention', $actions );
+		$this->assertInstanceOf( \Kunaki_Alerts::class, $actions['kunaki_wc_order_needs_attention'][0][0] );
+		$this->assertArrayHasKey( 'kunaki_wc_send_alert', $actions );
+	}
+
 	public function test_instance_returns_singleton() {
 		$a = $this->create_instance();
 		$b = Kunaki_WooCommerce::instance();
