@@ -55,12 +55,17 @@ class UninstallTest extends KunakiTestCase {
 	}
 
 	public function test_order_history_and_product_links_kept_by_default() {
-		$this->uninstall( 'no' );
+		$deleted = $this->uninstall( 'no' );
 
 		$this->assertNotContains( '_kunaki_order_id', $this->deleted_keys );
 		$this->assertNotContains( '_kunaki_tracking_id', $this->deleted_keys );
 		$this->assertNotContains( '_kunaki_product_id', $this->deleted_keys );
 		$this->assertNotContains( '_kunaki_submitted_%', $this->deleted_keys );
+		// The shipping an admin accepted at Retry is part of the order's history.
+		$this->assertNotContains( '_kunaki_chosen_shipping', $this->deleted_keys );
+		$this->assertNotContains( '_kunaki_needs_shipping', $this->deleted_keys );
+		// Kept so a delete and reinstall still picks up orders paid in between.
+		$this->assertNotContains( 'kunaki_wc_catch_up', $deleted );
 	}
 
 	public function test_temporary_data_is_always_removed() {
@@ -71,12 +76,20 @@ class UninstallTest extends KunakiTestCase {
 	}
 
 	public function test_all_data_removed_when_store_opted_in() {
-		$this->uninstall( 'yes' );
+		$deleted = $this->uninstall( 'yes' );
 
 		$this->assertContains( '_kunaki_order_id', $this->deleted_keys );
 		$this->assertContains( '_kunaki_tracking_id', $this->deleted_keys );
 		$this->assertContains( '_kunaki_product_id', $this->deleted_keys );
 		$this->assertContains( '_kunaki_submitted_%', $this->deleted_keys );
+		$this->assertContains( '_kunaki_chosen_shipping', $this->deleted_keys );
+		$this->assertContains( '_kunaki_needs_shipping', $this->deleted_keys );
+		$this->assertContains( 'kunaki_wc_catch_up', $deleted );
+	}
+
+	public function test_catch_up_notice_is_always_removed() {
+		// A display flag, not order data.
+		$this->assertContains( 'kunaki_wc_catch_up_notice', $this->uninstall( 'no' ) );
 	}
 
 	public function test_alert_settings_and_queued_alerts_are_always_removed() {

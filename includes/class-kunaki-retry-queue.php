@@ -68,6 +68,11 @@ class Kunaki_Retry_Queue {
 	}
 
 	public function render_page() {
+		// The catch-up notice points here, so opening this page answers it.
+		// Admin notices are printed before the page body, which means it shows
+		// one last time above the list and is gone on the next page.
+		Kunaki_Catch_Up::clear_notice();
+
 		$failed_orders = $this->get_failed_orders();
 		$count         = count( $failed_orders );
 

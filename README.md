@@ -28,6 +28,7 @@ This plugin addresses these concerns through atomic locking, idempotent submissi
 - **Retry Queue** -- Admin page listing failed submissions with error details, attempt counts, and one-click retry buttons. Per-order retry on the order edit page.
 - **HPOS and Legacy Storage** -- Works with WooCommerce High-Performance Order Storage and with legacy post-based order storage.
 - **Automatic Retry** -- Failed submissions are retried automatically via cron with linear backoff and a configurable attempt limit.
+- **Catch-Up After Deactivation** -- Orders paid while the plugin was inactive are found when it is activated again. Recent ones are sent. Older ones, and ones with no Kunaki shipping choice, wait under "Action needed" for one Retry click.
 - **API Circuit Breaker** -- Detects sustained Kunaki API failures and temporarily halts outbound requests, preserving retry budgets and surfacing an admin notice. Automatically probes for recovery.
 - **Structured Logging** -- JSON-formatted log entries with contextual fields (order ID, error details) for machine-parseable log aggregation.
 - **WP-CLI Support** -- `wp kunaki sync` command for on-demand bulk status sync with `--dry-run` and `--limit` options.
@@ -102,7 +103,7 @@ If your store only sells discs, you can also limit **WooCommerce > Settings > Ge
 
 ## Architecture Overview
 
-The plugin is organized into thirteen single-responsibility components, coordinated by a singleton orchestrator. No component performs direct SQL outside controlled locking primitives.
+The plugin is organized into fourteen single-responsibility components, coordinated by a singleton orchestrator. No component performs direct SQL outside controlled locking primitives.
 
 ```
 kunaki-woocommerce.php                   Bootstrap, constants, encryption filters, cron setup
@@ -113,6 +114,7 @@ includes/
   class-kunaki-order-fulfillment.php     Event-driven order submission with atomic locking
   class-kunaki-order-status-sync.php     Cron-based status polling with per-order locks
   class-kunaki-retry-queue.php           Failed order admin page with manual retry
+  class-kunaki-catch-up.php              Finds orders paid while the plugin was inactive
   class-kunaki-product-meta.php          Product editor field, validation, admin column
   class-kunaki-settings.php              WooCommerce settings tab
   class-kunaki-circuit-breaker.php       API circuit breaker with state machine
@@ -175,9 +177,34 @@ When the Kunaki API returns an error or the HTTP request fails, the plugin recor
 - **Linear backoff** -- Each retry waits `attempts * 15 minutes` since the last failure before retrying.
 - **Configurable limit** -- After the configured max attempts (default: 3), the order is marked exhausted and an order note alerts the admin.
 - **Permanent failure detection** -- Errors that will never self-resolve (e.g., missing Kunaki shipping method on the order) are immediately marked as exhausted without consuming retry attempts.
+- **Shipping chosen at Retry** -- An order with no Kunaki shipping choice (placed while the plugin was inactive, or created by hand) is never sent automatically, and its message says that Retry will use the cheapest option Kunaki offers for its address. Clicking Retry looks the options up, sends the order with the cheapest, and records the option, its delivery time and its price in an order note. If the lookup fails, nothing is sent, the reason is shown next to the button, and the order stays listed. An order that failed this way under an earlier version shows the new message on the first click and is sent on the second. Nothing automatic ever chooses shipping.
 - **Credential validation** -- If the stored password cannot be decrypted (e.g., after salt rotation), submission, retry, and status sync all bail early without making API calls or burning retry budgets. The waiting orders are sent once the password is saved again. With alerts on, you get one alert when this starts (see [Alerts](#alerts)).
-- **Durable failure markers** -- If failure metadata fails to persist (e.g., database instability), a `_kunaki_failed_{order_id}` marker is written to `wp_options`. The retry cron recovers these orphaned markers at the start of each run.
+- **Durable failure markers** -- If failure metadata fails to persist (e.g., database instability), a `_kunaki_failed_{order_id}` marker is written to `wp_options`. The retry cron recovers these orphaned markers at the start of each run. A marker for a permanent failure is restored as permanent, with what its message promises about Retry intact, so an order that is waiting for a person is not retried.
 - **Idempotent** -- Retries go through the same `handle_order_processing` path with its full locking and deduplication guarantees.
+
+### Catching Up After Deactivation
+
+While the plugin is inactive nothing listens for an order reaching Processing, so an order paid in that time is never queued and leaves no trace. The plugin records when it is deactivated and when it is activated again. The next retry cron run, about a minute after activation, scans the Processing orders paid in between, looking back at most 30 days. An order is picked up only if it contains a Kunaki product and has no Kunaki record at all: no order meta, no durable marker, no lock and no queued submission.
+
+| The order found | What happens |
+|---|---|
+| Has a Kunaki shipping choice and was paid under 24 hours ago | Sent automatically by the retry cron, without using up a retry attempt |
+| Has a Kunaki shipping choice and was paid 24 hours ago or more | Held under "Action needed" until you click Retry, in case you already fulfilled it by hand |
+| Has no Kunaki shipping choice (placed while the plugin was inactive) | Always held. Retry sends it with the cheapest Kunaki option for its address (see [Automatic Retry](#automatic-retry)) |
+
+When orders are held, a notice in wp-admin says how many and links to the Failures page. With alerts on, each held order also sends one alert.
+
+The scan never calls Kunaki. It writes the same failure record as any other unsent order, so submission still goes through `handle_order_processing` with its lock and duplicate checks, and running the scan twice changes nothing.
+
+Limits:
+
+- With no record of a deactivation, nothing is scanned. That covers a first install, the first update from 1.4.0 done by deactivating first, and a plugin that went inactive without WordPress running its deactivation hook (its files removed by hand).
+- An order that returned to Processing during the gap but was first paid before it is not found, because the scan goes by paid date.
+- A customer who paid another shipping method for faster delivery gets Kunaki's cheapest option when you click Retry. To send it another way, place that order with Kunaki yourself. Kunaki bills its own shipping price whatever the customer paid.
+- Moving a held order out of Processing and back sends it if it has a Kunaki shipping choice, as it would any other unsent order.
+- An order handed over for automatic sending waits like any other if Kunaki is unreachable or the password can't be read, and is sent when that clears.
+- An order the scan can't read is tried again on the next two cron runs. If it still can't be read it is skipped, with an error in the log that names it.
+- The Failures page lists the newest 50 orders. After a long break with more held orders than that, older ones appear as those are cleared. The dashboard widget's count is complete.
 
 ### API Circuit Breaker
 
@@ -235,17 +262,18 @@ The test suite runs entirely outside WordPress. No WordPress installation, no da
 
 This isolation strategy means tests execute in seconds, run in CI without infrastructure, and validate plugin logic without conflating it with WordPress behavior.
 
-436 unit tests cover:
+516 unit tests cover:
 
 | Area | What's Validated |
 |------|-----------------|
 | API Client | XML request construction, response parsing, HTTP error handling, HTML-wrapped response extraction, credential injection |
-| Order Fulfillment | Duplicate submission prevention across all four layers, atomic lock acquisition and release, meta storage, mixed cart detection, fallback marker recovery, failure meta recording and cleanup, auto-retry with backoff, exhaustion handling, orphaned failure recovery, retry logic |
+| Order Fulfillment | Duplicate submission prevention across all four layers, atomic lock acquisition and release, meta storage, mixed cart detection, fallback marker recovery, failure meta recording and cleanup, auto-retry with backoff, exhaustion handling, orphaned failure recovery (a permanent failure stays permanent), retry logic, the three outcomes for an order paid while the plugin was inactive |
 | Order Status Sync | SHIPPED/DECLINED/PENDING transitions, tracking info extraction, auto-completion logic for pure-Kunaki vs. mixed orders, save-before-notify ordering |
 | Shipping Method | Rate calculation, Kunaki product filtering, transient cache hit/miss, state/province handling for US/CA vs. international, country name resolution |
 | Product Meta | 10-character alphanumeric validation, capability checks, admin column rendering, safe handling of absent POST fields |
 | Logger | Debug gating based on settings, log level routing, structured JSON context, invalid UTF-8 fallback |
-| Retry Queue | AJAX handler permission and input validation, `prepare_for_retry` guard clauses, admin page hook registration |
+| Retry Queue | AJAX handler permission and input validation, `prepare_for_retry` guard clauses, admin page hook registration, choosing the cheapest Kunaki shipping at Retry for an order that has none, and leaving the order untouched when that lookup fails |
+| Catch-Up Scan | Recording the inactive window, the paid-date query and its 30-day cap, the 24-hour rule measured when the scan runs, holding orders with no Kunaki shipping choice, every reason an order is left alone, batching, the lock, a window that changes mid-scan, and the admin notice |
 | Alerts | Master and channel switches, background queueing, one alert per outage however the API flaps, delayed recovery alert, resending an order or password alert that wasn't delivered, dropping an alert for an order that was cancelled or refunded, the unreadable-password alert, the message for each order case, error text capping, admin email fallback, Slack URL allowlist, and that each event only fires after its change is saved |
 | Circuit Breaker | State transitions (closed/open/half_open), threshold and cooldown configuration, error classification (infrastructure vs. business logic), probe recovery, admin state reporting |
 | CLI Command | Dry-run listing, limit enforcement, sync dispatch, empty-queue handling |

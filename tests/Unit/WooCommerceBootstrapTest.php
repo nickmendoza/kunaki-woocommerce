@@ -63,6 +63,41 @@ class WooCommerceBootstrapTest extends KunakiTestCase {
 		Kunaki_WooCommerce::instance();
 	}
 
+	public function test_wires_up_catch_up() {
+		$actions = array();
+		Functions\when( 'add_filter' )->justReturn( true );
+		Functions\when( 'add_action' )->alias( function ( $hook, $callback, $priority = 10 ) use ( &$actions ) {
+			$actions[ $hook ][] = array( $callback, $priority );
+			return true;
+		} );
+
+		$ref = new \ReflectionClass( Kunaki_WooCommerce::class );
+		$prop = $ref->getProperty( 'instance' );
+		if ( PHP_VERSION_ID < 80100 ) {
+			$prop->setAccessible( true );
+		}
+		$prop->setValue( null, null );
+
+		Kunaki_WooCommerce::instance();
+
+		// The scan and the retry run share a cron hook. The scan has to come
+		// first, so an order it hands over is sent in the same run.
+		$scan  = null;
+		$retry = null;
+		foreach ( $actions['kunaki_wc_retry_failed_orders'] as list( $callback, $priority ) ) {
+			if ( $callback[0] instanceof \Kunaki_Catch_Up ) {
+				$scan = $priority;
+				$this->assertSame( 'run', $callback[1] );
+			}
+			if ( $callback[0] instanceof \Kunaki_Order_Fulfillment ) {
+				$retry = $priority;
+			}
+		}
+		$this->assertSame( 5, $scan );
+		$this->assertSame( 10, $retry );
+		$this->assertLessThan( $retry, $scan );
+	}
+
 	public function test_wires_up_alerts() {
 		$actions = array();
 		Functions\when( 'add_filter' )->justReturn( true );

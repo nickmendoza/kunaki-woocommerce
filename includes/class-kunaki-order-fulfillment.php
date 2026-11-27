@@ -14,6 +14,18 @@ class Kunaki_Order_Fulfillment {
 
 	const META_ADDRESS_HASH          = '_kunaki_address_hash';
 
+	/** The Kunaki shipping option chosen at Retry for an order that has none from checkout. */
+	const META_CHOSEN_SHIPPING       = '_kunaki_chosen_shipping';
+
+	/** 'yes' once the order's stored message says Retry will use the cheapest option. Never cleared. */
+	const META_NEEDS_SHIPPING        = '_kunaki_needs_shipping';
+
+	/** Starts the value of a durable failure marker when the failure was permanent. */
+	const PERMANENT_MARKER_PREFIX    = '[kunaki-permanent] ';
+
+	/** The same, for an order that was also flagged META_NEEDS_SHIPPING. */
+	const PERMANENT_NEEDS_SHIPPING_MARKER_PREFIX = '[kunaki-permanent-needs-shipping] ';
+
 	const SUBMIT_ACTION = 'kunaki_wc_submit_order';
 	const ACTION_GROUP  = 'kunaki-woocommerce';
 
@@ -101,6 +113,50 @@ class Kunaki_Order_Fulfillment {
 
 		// Hook only: passed a group as well, this would only cancel jobs with no args.
 		as_unschedule_all_actions( self::SUBMIT_ACTION );
+	}
+
+	/**
+	 * Record an order that was paid while the plugin was inactive.
+	 *
+	 * Nothing is sent from here. A recent order that has a Kunaki shipping
+	 * choice becomes a retryable failure, which the retry cron sends. Anything
+	 * else is held as a permanent failure until someone clicks Retry: an order
+	 * that waited too long may have been fulfilled by hand, and an order with
+	 * no Kunaki shipping choice needs someone to accept the cheapest option.
+	 *
+	 * @param WC_Order $order           WooCommerce order with no Kunaki record.
+	 * @param bool     $waited_too_long Whether it was paid too long ago to send without a person.
+	 * @return string 'sent' if it was handed to the retry cron, 'held' if it waits for a click.
+	 */
+	public function record_missed_order( $order, $waited_too_long ) {
+		if ( '' === $this->get_shipping_description( $order ) ) {
+			// The message says what Retry will do; the flag records that it has.
+			$order->update_meta_data( self::META_NEEDS_SHIPPING, 'yes' );
+			$this->record_failure(
+				$order,
+				__( 'This order was paid while the Kunaki plugin was inactive and has no Kunaki shipping option, so it was not sent automatically. If it has not been fulfilled another way, retry it to send it with the cheapest Kunaki shipping option for its address.', 'kunaki-woocommerce' ),
+				'',
+				true
+			);
+			return 'held';
+		}
+
+		if ( $waited_too_long ) {
+			$this->record_failure(
+				$order,
+				__( 'This order was paid while the Kunaki plugin was inactive and had waited more than a day, so it was not sent automatically. If it has not been fulfilled another way, retry it to send it to Kunaki.', 'kunaki-woocommerce' ),
+				'',
+				true
+			);
+			return 'held';
+		}
+
+		$this->record_failure(
+			$order,
+			__( 'This order was paid while the Kunaki plugin was inactive. It will be sent to Kunaki automatically.', 'kunaki-woocommerce' ),
+			'kunaki_plugin_deactivated'
+		);
+		return 'sent';
 	}
 
 	/**
@@ -222,40 +278,25 @@ class Kunaki_Order_Fulfillment {
 		}
 
 		// Collect Kunaki products from the order.
-		$kunaki_products = array();
-		$has_non_kunaki  = false;
-
-		foreach ( $order->get_items() as $item ) {
-			$kunaki_id = Kunaki_Product_Meta::get_kunaki_id_for_item( $item->get_product_id(), $item->get_variation_id() );
-
-			if ( empty( $kunaki_id ) ) {
-				$has_non_kunaki = true;
-				continue;
-			}
-
-			if ( isset( $kunaki_products[ $kunaki_id ] ) ) {
-				$kunaki_products[ $kunaki_id ]['quantity'] += $item->get_quantity();
-			} else {
-				$kunaki_products[ $kunaki_id ] = array(
-					'product_id' => $kunaki_id,
-					'quantity'   => $item->get_quantity(),
-				);
-			}
-		}
+		list( $kunaki_products, $has_non_kunaki ) = $this->get_kunaki_products( $order );
 
 		if ( empty( $kunaki_products ) ) {
 			Kunaki_Logger::debug( 'No Kunaki products found, skipping.', array( 'order_id' => $order_id ) );
 			return;
 		}
 
-		// Get the shipping description selected at checkout.
+		// The shipping option selected at checkout, or the one an admin accepted
+		// by clicking Retry. Nothing here ever chooses one.
 		$shipping_description = $this->get_shipping_description( $order );
 
 		if ( empty( $shipping_description ) ) {
 			Kunaki_Logger::error( 'No Kunaki shipping description found.', array( 'order_id' => $order_id ) );
+			// The message says what Retry will do, and the flag records that it
+			// has: prepare_for_retry() only chooses shipping for a flagged order.
+			$order->update_meta_data( self::META_NEEDS_SHIPPING, 'yes' );
 			$this->record_failure(
 				$order,
-				__( 'No matching Kunaki shipping method found on this order.', 'kunaki-woocommerce' ),
+				__( 'No matching Kunaki shipping method found on this order. Retry it to send it with the cheapest Kunaki shipping option for its address.', 'kunaki-woocommerce' ),
 				'',
 				true
 			);
@@ -420,11 +461,21 @@ class Kunaki_Order_Fulfillment {
 		} catch ( \Throwable $e ) {
 			$saved = false;
 			// Durable marker so retry_failed_orders() can still find this order.
+			// The prefix keeps a permanent failure permanent when it is restored;
+			// without it the order would come back as retryable and be resent.
+			// It also carries the "Retry will choose shipping" flag, which was
+			// set on the order just before this and lost with the failed save.
+			$marker_prefix = '';
+			if ( $permanent ) {
+				$marker_prefix = 'yes' === $order->get_meta( self::META_NEEDS_SHIPPING )
+					? self::PERMANENT_NEEDS_SHIPPING_MARKER_PREFIX
+					: self::PERMANENT_MARKER_PREFIX;
+			}
 			global $wpdb;
 			$wpdb->query( $wpdb->prepare(
 				"INSERT IGNORE INTO {$wpdb->options} (option_name, option_value, autoload) VALUES (%s, %s, 'no')",
 				'_kunaki_failed_' . $order->get_id(),
-				$error_message
+				$marker_prefix . $error_message
 			) );
 			Kunaki_Logger::error( 'Failed to persist failure meta. Wrote durable failure marker.', array(
 				'order_id' => $order->get_id(),
@@ -493,8 +544,29 @@ class Kunaki_Order_Fulfillment {
 			return new \WP_Error( 'invalid_status', __( 'Order must be in processing status to retry.', 'kunaki-woocommerce' ) );
 		}
 
+		$declined = 'DECLINED' === $order->get_meta( self::META_KUNAKI_STATUS );
+		if ( ! $declined && 'yes' === $order->get_meta( self::META_KUNAKI_SUBMITTED ) ) {
+			return new \WP_Error( 'already_submitted', __( 'Order already submitted to Kunaki.', 'kunaki-woocommerce' ) );
+		}
+
+		// An order with no Kunaki shipping choice, whose stored message has said
+		// what Retry will do: this click accepts the cheapest option. It is looked
+		// up before anything on the order changes, so a failed lookup leaves the
+		// order and its failure record exactly as they were.
+		$chosen = null;
+		if ( 'yes' === $order->get_meta( self::META_NEEDS_SHIPPING ) && '' === $this->get_shipping_description( $order, false ) ) {
+			list( $kunaki_products ) = $this->get_kunaki_products( $order );
+			if ( ! empty( $kunaki_products ) ) {
+				$chosen = $this->choose_cheapest_shipping( $order, $kunaki_products );
+				if ( is_wp_error( $chosen ) ) {
+					return $chosen;
+				}
+				$order->update_meta_data( self::META_CHOSEN_SHIPPING, $chosen['description'] );
+			}
+		}
+
 		$declined_order_id = '';
-		if ( 'DECLINED' === $order->get_meta( self::META_KUNAKI_STATUS ) ) {
+		if ( $declined ) {
 			// Kunaki declined the previous submission. The admin has moved the
 			// order back to processing and explicitly asked to retry, so clear
 			// the old Kunaki order and submit a new one.
@@ -512,8 +584,6 @@ class Kunaki_Order_Fulfillment {
 			) as $key ) {
 				$order->delete_meta_data( $key );
 			}
-		} elseif ( 'yes' === $order->get_meta( self::META_KUNAKI_SUBMITTED ) ) {
-			return new \WP_Error( 'already_submitted', __( 'Order already submitted to Kunaki.', 'kunaki-woocommerce' ) );
 		}
 
 		// Reset retry budget so the order gets a fresh start and doesn't
@@ -542,6 +612,23 @@ class Kunaki_Order_Fulfillment {
 			}
 		}
 
+		if ( null !== $chosen ) {
+			try {
+				$order->add_order_note(
+					sprintf(
+						/* translators: 1: shipping option name, 2: delivery time, 3: price */
+						__( 'No Kunaki shipping option was chosen for this order at checkout. Sending it with the cheapest Kunaki option for its address: %1$s (%2$s), Kunaki price %3$s.', 'kunaki-woocommerce' ),
+						$chosen['description'],
+						$chosen['delivery_time'],
+						number_format( (float) $chosen['price'], 2, '.', '' )
+					),
+					false
+				);
+			} catch ( \Throwable $_ ) {
+				// Best effort — the choice itself is saved on the order.
+			}
+		}
+
 		$this->handle_order_processing( $order_id, $order );
 
 		// Re-fetch to check result.
@@ -550,9 +637,10 @@ class Kunaki_Order_Fulfillment {
 			return true;
 		}
 
+		// A permanent failure keeps its message under LAST_ERROR, not ERROR.
 		return new \WP_Error(
 			'retry_failed',
-			$order ? $order->get_meta( self::META_FULFILLMENT_ERROR ) : __( 'Retry failed.', 'kunaki-woocommerce' )
+			$order ? self::get_failure_message( $order ) : __( 'Retry failed.', 'kunaki-woocommerce' )
 		);
 	}
 
@@ -581,10 +669,29 @@ class Kunaki_Order_Fulfillment {
 				continue;
 			}
 
-			$order->update_meta_data( self::META_FULFILLMENT_ERROR, $row->option_value );
-			$order->update_meta_data( self::META_FULFILLMENT_FAILED, gmdate( 'c' ) );
-			$attempts = (int) $order->get_meta( self::META_FULFILLMENT_ATTEMPTS );
-			$order->update_meta_data( self::META_FULFILLMENT_ATTEMPTS, max( $attempts, 1 ) );
+			$message        = (string) $row->option_value;
+			$needs_shipping = 0 === strpos( $message, self::PERMANENT_NEEDS_SHIPPING_MARKER_PREFIX );
+			$permanent      = $needs_shipping || 0 === strpos( $message, self::PERMANENT_MARKER_PREFIX );
+
+			if ( $permanent ) {
+				// Restore it as it was recorded: waiting for a person. Restored as
+				// a retryable failure, the retry cron would send it.
+				$message = substr( $message, strlen( $needs_shipping ? self::PERMANENT_NEEDS_SHIPPING_MARKER_PREFIX : self::PERMANENT_MARKER_PREFIX ) );
+				$order->update_meta_data( self::META_FULFILLMENT_EXHAUSTED, 'yes' );
+				$order->update_meta_data( self::META_FULFILLMENT_LAST_ERROR, $message );
+				$order->delete_meta_data( self::META_FULFILLMENT_ERROR );
+				$order->update_meta_data( self::META_FULFILLMENT_FAILED, gmdate( 'c' ) );
+				if ( $needs_shipping ) {
+					// The message says Retry will choose shipping. Without the
+					// flag, the first Retry would only repeat that promise.
+					$order->update_meta_data( self::META_NEEDS_SHIPPING, 'yes' );
+				}
+			} else {
+				$order->update_meta_data( self::META_FULFILLMENT_ERROR, $message );
+				$order->update_meta_data( self::META_FULFILLMENT_FAILED, gmdate( 'c' ) );
+				$attempts = (int) $order->get_meta( self::META_FULFILLMENT_ATTEMPTS );
+				$order->update_meta_data( self::META_FULFILLMENT_ATTEMPTS, max( $attempts, 1 ) );
+			}
 			try {
 				$order->save_meta_data();
 			} catch ( \Throwable $_ ) {
@@ -592,7 +699,12 @@ class Kunaki_Order_Fulfillment {
 				continue;
 			}
 			$wpdb->delete( $wpdb->options, array( 'option_name' => $row->option_name ) );
-			Kunaki_Logger::info( 'Recovered orphaned failure marker.', array( 'order_id' => $order_id ) );
+			Kunaki_Logger::info( 'Recovered orphaned failure marker.', array( 'order_id' => $order_id, 'permanent' => $permanent ) );
+
+			// record_failure() held the alert back because the save had failed.
+			if ( $permanent ) {
+				self::notify_needs_attention( $order_id, 'permanent_failure', $message );
+			}
 		}
 	}
 
@@ -707,10 +819,15 @@ class Kunaki_Order_Fulfillment {
 	/**
 	 * Extract the Kunaki shipping description from the WooCommerce order.
 	 *
-	 * @param WC_Order $order WooCommerce order.
+	 * The option the customer chose at checkout wins. An order without one
+	 * (placed while the plugin was inactive, or created by hand) can carry a
+	 * choice an admin accepted by clicking Retry.
+	 *
+	 * @param WC_Order $order          WooCommerce order.
+	 * @param bool     $include_chosen Whether a choice stored at Retry counts.
 	 * @return string Shipping description or empty string.
 	 */
-	private function get_shipping_description( $order ) {
+	private function get_shipping_description( $order, $include_chosen = true ) {
 		foreach ( $order->get_shipping_methods() as $shipping_item ) {
 			if ( 'kunaki_shipping' === $shipping_item->get_method_id() ) {
 				$description = $shipping_item->get_meta( 'kunaki_shipping_description' );
@@ -720,7 +837,95 @@ class Kunaki_Order_Fulfillment {
 			}
 		}
 
-		return '';
+		return $include_chosen ? (string) $order->get_meta( self::META_CHOSEN_SHIPPING ) : '';
+	}
+
+	/**
+	 * Collect the Kunaki products on an order, with quantities summed per Kunaki ID.
+	 *
+	 * @param WC_Order $order WooCommerce order.
+	 * @return array The products keyed by Kunaki ID, then whether the order has other items too.
+	 */
+	private function get_kunaki_products( $order ) {
+		$kunaki_products = array();
+		$has_non_kunaki  = false;
+
+		foreach ( $order->get_items() as $item ) {
+			$kunaki_id = Kunaki_Product_Meta::get_kunaki_id_for_item( $item->get_product_id(), $item->get_variation_id() );
+
+			if ( empty( $kunaki_id ) ) {
+				$has_non_kunaki = true;
+				continue;
+			}
+
+			if ( isset( $kunaki_products[ $kunaki_id ] ) ) {
+				$kunaki_products[ $kunaki_id ]['quantity'] += $item->get_quantity();
+			} else {
+				$kunaki_products[ $kunaki_id ] = array(
+					'product_id' => $kunaki_id,
+					'quantity'   => $item->get_quantity(),
+				);
+			}
+		}
+
+		return array( $kunaki_products, $has_non_kunaki );
+	}
+
+	/**
+	 * Ask Kunaki for the shipping options for an order and pick the cheapest.
+	 *
+	 * Only prepare_for_retry() calls this: choosing shipping needs a person's
+	 * click, because the order is manufactured and billed with whatever is sent.
+	 *
+	 * @param WC_Order $order           WooCommerce order.
+	 * @param array    $kunaki_products Products from get_kunaki_products().
+	 * @return array|WP_Error The option (description, delivery_time, price), or why none could be chosen.
+	 */
+	private function choose_cheapest_shipping( $order, array $kunaki_products ) {
+		$country_code = (string) $order->get_shipping_country();
+		if ( ! Kunaki_API_Client::is_supported_country( $country_code ) ) {
+			return new \WP_Error(
+				'kunaki_no_shipping_options',
+				__( "Kunaki does not ship to this order's country, so it can't be sent to Kunaki.", 'kunaki-woocommerce' )
+			);
+		}
+
+		$country = Kunaki_API_Client::get_country_name( $country_code );
+		if ( '' === $country ) {
+			$country = $country_code;
+		}
+
+		// Kunaki only accepts state/province for US and CA.
+		$state = in_array( $country_code, array( 'US', 'CA' ), true )
+			? (string) $order->get_shipping_state()
+			: '';
+
+		$api     = new Kunaki_API_Client();
+		$options = $api->get_shipping_options( $country, $state, (string) $order->get_shipping_postcode(), array_values( $kunaki_products ) );
+
+		if ( is_wp_error( $options ) ) {
+			return $options;
+		}
+
+		$cheapest = null;
+		foreach ( $options as $option ) {
+			if ( '' === (string) $option['description'] ) {
+				continue;
+			}
+			// Strictly cheaper, so the first of two equal prices is kept.
+			if ( null === $cheapest || $option['price'] < $cheapest['price'] ) {
+				$cheapest = $option;
+			}
+		}
+
+		if ( null === $cheapest ) {
+			return new \WP_Error(
+				'kunaki_no_shipping_options',
+				__( "Kunaki returned no shipping options for this order's address. Check the address, then retry.", 'kunaki-woocommerce' )
+			);
+		}
+
+		return $cheapest;
 	}
 
 	/**

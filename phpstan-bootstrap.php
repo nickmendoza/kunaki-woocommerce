@@ -114,6 +114,7 @@ function esc_attr__( string $text, string $domain = 'default' ): string { return
 function esc_url( string $url ): string { return $url; }
 function esc_attr( string $text ): string { return $text; }
 function __( string $text, string $domain = 'default' ): string { return $text; }
+function _n( string $single, string $plural, int $number, string $domain = 'default' ): string { return 1 === $number ? $single : $plural; }
 function human_time_diff( int $from, int $to = 0 ): string { return ''; }
 /** @return string|false */
 function wp_date( string $format, ?int $timestamp = null, ?\DateTimeZone $timezone = null ) { return date( $format, $timestamp ?? time() ); }

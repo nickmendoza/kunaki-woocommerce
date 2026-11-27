@@ -12,7 +12,10 @@ add_filter( 'pre_http_request', function ( $pre, $args, $url ) {
 	$log  = get_option( 'mock_kunaki_log', array() ); $log[] = $body; update_option( 'mock_kunaki_log', $log, false );
 	if ( 'down' === get_option( 'mock_kunaki_mode', 'ok' ) ) { return new WP_Error( 'http_request_failed', 'mock outage' ); }
 	if ( 0 === strpos( $body, '<ShippingOptions' ) ) {
-		$r = '<Response><ErrorCode>0</ErrorCode><ErrorText>success</ErrorText><Option><Description>USPS First Class Mail</Description><DeliveryTime>2-5 business days</DeliveryTime><Price>6.29</Price></Option></Response>';
+		// A dearer option listed first, only when a scenario asks for it: the
+		// checkout checks expect exactly one rate.
+		$dearer = get_option( 'mock_kunaki_two_rates' ) ? '<Option><Description>UPS Ground</Description><DeliveryTime>1-5 business days</DeliveryTime><Price>9.80</Price></Option>' : '';
+		$r = '<Response><ErrorCode>0</ErrorCode><ErrorText>success</ErrorText>' . $dearer . '<Option><Description>USPS First Class Mail</Description><DeliveryTime>2-5 business days</DeliveryTime><Price>6.29</Price></Option></Response>';
 	} elseif ( 0 === strpos( $body, '<Order>' ) ) {
 		$r = '<Response><ErrorCode>0</ErrorCode><ErrorText>success</ErrorText><OrderId>KUN' . count( $log ) . '</OrderId></Response>';
 	} else {

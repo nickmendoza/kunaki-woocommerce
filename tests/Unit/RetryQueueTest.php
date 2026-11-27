@@ -10,8 +10,40 @@ use WP_Error;
 
 class RetryQueueTest extends KunakiTestCase {
 
+	/** Kunaki's answer to a rate lookup, with the dearer option listed first. */
+	const TWO_SHIPPING_OPTIONS = '<Response><ErrorCode>0</ErrorCode><ErrorText>success</ErrorText>'
+		. '<Option><Description>UPS Ground</Description><DeliveryTime>1-5 business days</DeliveryTime><Price>9.80</Price></Option>'
+		. '<Option><Description>USPS First Class Mail</Description><DeliveryTime>2-5 business days</DeliveryTime><Price>6.29</Price></Option>'
+		. '</Response>';
+
+	/** What the scan, or a failed submission, leaves on an order with no Kunaki shipping choice. */
+	const HELD_WITHOUT_SHIPPING = array(
+		'_kunaki_fulfillment_exhausted'  => 'yes',
+		'_kunaki_fulfillment_last_error' => 'This order has no Kunaki shipping option. Retry it to send it with the cheapest Kunaki shipping option for its address.',
+		'_kunaki_fulfillment_failed_at'  => '2026-01-15T10:00:00+00:00',
+		'_kunaki_needs_shipping'         => 'yes',
+	);
+
 	/** @var Kunaki_Order_Fulfillment */
 	private $fulfillment;
+
+	/** @var array<string, mixed> Meta of the order built by create_retry_order(), including what a Retry writes. */
+	public $meta = array();
+
+	/** @var string[] Bodies of the requests sent to Kunaki. */
+	public $requests = array();
+
+	/** @var string|WP_Error What Kunaki answers to a shipping-options request. */
+	public $shipping_response = '';
+
+	/** @var string[] Order notes added. */
+	public $notes = array();
+
+	/** @var int How many times the order was saved. */
+	public $saves = 0;
+
+	/** @var string[] Options deleted. */
+	public $deleted_options = array();
 
 	protected function set_up() {
 		parent::set_up();
@@ -20,6 +52,19 @@ class RetryQueueTest extends KunakiTestCase {
 		Functions\when( 'wc_get_logger' )->justReturn(
 			Mockery::mock( 'WC_Logger' )->shouldIgnoreMissing()
 		);
+		// render_page() clears the catch-up notice.
+		$this->deleted_options = array();
+		$test                  = $this;
+		Functions\when( 'delete_option' )->alias( function ( $key ) use ( $test ) {
+			$test->deleted_options[] = $key;
+			return true;
+		} );
+
+		$this->meta              = array();
+		$this->requests          = array();
+		$this->notes             = array();
+		$this->saves             = 0;
+		$this->shipping_response = self::TWO_SHIPPING_OPTIONS;
 	}
 
 	protected function tear_down() {
@@ -34,6 +79,7 @@ class RetryQueueTest extends KunakiTestCase {
 		Functions\expect( 'get_option' )->zeroOrMoreTimes()->andReturn( 'no' );
 
 		$order->shouldReceive( 'get_shipping_methods' )->andReturn( array() );
+		$order->shouldReceive( 'get_meta' )->with( '_kunaki_chosen_shipping' )->andReturn( '' );
 		$order->shouldReceive( 'get_meta' )->with( '_kunaki_fulfillment_attempts' )->andReturn( '' );
 
 		$error_captured = null;
@@ -49,6 +95,7 @@ class RetryQueueTest extends KunakiTestCase {
 		$order->shouldReceive( 'update_meta_data' )
 			->with( '_kunaki_fulfillment_exhausted', 'yes' )->once();
 		$order->shouldNotReceive( 'update_meta_data' )->with( '_kunaki_fulfillment_attempts', Mockery::any() );
+		$order->shouldReceive( 'update_meta_data' )->with( '_kunaki_needs_shipping', 'yes' )->once();
 		$order->shouldReceive( 'save_meta_data' )->once();
 		$order->shouldReceive( 'add_order_note' )->once();
 
@@ -142,6 +189,7 @@ class RetryQueueTest extends KunakiTestCase {
 		$order->shouldReceive( 'get_meta' )->with( '_kunaki_order_status' )->andReturn( '' );
 		$order->shouldReceive( 'get_meta' )->with( '_kunaki_submitted' )->andReturn( '' );
 		$order->shouldReceive( 'get_meta' )->with( '_kunaki_fulfillment_attempts' )->andReturn( '' );
+		$order->shouldReceive( 'get_meta' )->with( '_kunaki_needs_shipping' )->andReturn( '' );
 		$order->shouldReceive( 'get_items' )->andReturn( array() );
 		$order->shouldReceive( 'update_meta_data' )->withAnyArgs()->zeroOrMoreTimes();
 		$order->shouldReceive( 'delete_meta_data' )->withAnyArgs()->zeroOrMoreTimes();
@@ -169,6 +217,7 @@ class RetryQueueTest extends KunakiTestCase {
 		$order->shouldReceive( 'get_meta' )->with( '_kunaki_order_status' )->andReturn( '' );
 		$order->shouldReceive( 'get_meta' )->with( '_kunaki_submitted' )->andReturn( '' );
 		$order->shouldReceive( 'get_meta' )->with( '_kunaki_fulfillment_attempts' )->andReturn( '' );
+		$order->shouldReceive( 'get_meta' )->with( '_kunaki_needs_shipping' )->andReturn( '' );
 		$order->shouldReceive( 'get_meta' )->with( '_kunaki_fulfillment_error' )->andReturn( 'Some error' );
 		$order->shouldReceive( 'get_items' )->andReturn( array() );
 		$order->shouldReceive( 'delete_meta_data' )->withAnyArgs()->zeroOrMoreTimes();
@@ -197,6 +246,7 @@ class RetryQueueTest extends KunakiTestCase {
 		$order->shouldReceive( 'get_meta' )->with( '_kunaki_order_status' )->andReturn( '' );
 		$order->shouldReceive( 'get_meta' )->with( '_kunaki_submitted' )->andReturn( '' );
 		$order->shouldReceive( 'get_meta' )->with( '_kunaki_fulfillment_attempts' )->andReturn( '3' );
+		$order->shouldReceive( 'get_meta' )->with( '_kunaki_needs_shipping' )->andReturn( '' );
 		$order->shouldReceive( 'get_meta' )->with( '_kunaki_fulfillment_error' )->andReturn( 'API down' );
 		$order->shouldReceive( 'get_items' )->andReturn( array() );
 		$order->shouldReceive( 'delete_meta_data' )->andReturnUsing( function ( $key ) use ( &$deleted_meta ) {
@@ -243,6 +293,8 @@ class RetryQueueTest extends KunakiTestCase {
 		$order->shouldReceive( 'get_meta' )->with( '_kunaki_fulfillment_attempts' )->andReturn( '' );
 		$order->shouldReceive( 'get_items' )->andReturn( array( $item ) );
 		$order->shouldReceive( 'get_shipping_methods' )->andReturn( array() );
+		$order->shouldReceive( 'get_meta' )->with( '_kunaki_chosen_shipping' )->andReturn( '' );
+		$order->shouldReceive( 'get_meta' )->with( '_kunaki_needs_shipping' )->andReturn( 'yes' );
 		$order->shouldReceive( 'update_meta_data' )->withAnyArgs()->zeroOrMoreTimes();
 		$order->shouldReceive( 'delete_meta_data' )->withAnyArgs()->zeroOrMoreTimes();
 		$order->shouldReceive( 'save_meta_data' )->once()->andThrow( new \RuntimeException( 'DB down' ) );
@@ -339,6 +391,7 @@ class RetryQueueTest extends KunakiTestCase {
 		$order->shouldReceive( 'get_meta' )->with( '_kunaki_order_status' )->andReturn( '' );
 		$order->shouldReceive( 'get_meta' )->with( '_kunaki_submitted' )->andReturn( '', 'yes' );
 		$order->shouldReceive( 'get_meta' )->with( '_kunaki_fulfillment_attempts' )->andReturn( '' );
+		$order->shouldReceive( 'get_meta' )->with( '_kunaki_needs_shipping' )->andReturn( '' );
 		$order->shouldReceive( 'get_items' )->andReturn( array() );
 		$order->shouldReceive( 'update_meta_data' )->withAnyArgs()->zeroOrMoreTimes();
 		$order->shouldReceive( 'delete_meta_data' )->withAnyArgs()->zeroOrMoreTimes();
@@ -480,6 +533,7 @@ class RetryQueueTest extends KunakiTestCase {
 		// Submitted flag is cleared by the reset; the re-fetched order reports the new submission.
 		$order->shouldReceive( 'get_meta' )->with( '_kunaki_submitted' )->andReturn( '' );
 		$order->shouldReceive( 'get_meta' )->with( '_kunaki_fulfillment_attempts' )->andReturn( '' );
+		$order->shouldReceive( 'get_meta' )->with( '_kunaki_needs_shipping' )->andReturn( '' );
 		$order->shouldReceive( 'get_items' )->andReturn( array() );
 		$order->shouldReceive( 'delete_meta_data' )->andReturnUsing( function ( $key ) use ( &$deleted_meta ) {
 			$deleted_meta[] = $key;
@@ -518,7 +572,300 @@ class RetryQueueTest extends KunakiTestCase {
 		$this->assertEquals( 'invalid_status', $result->get_error_code() );
 	}
 
+	public function test_render_page_clears_the_catch_up_notice() {
+		$retry_queue = new Kunaki_Retry_Queue();
+		Functions\expect( 'wc_get_orders' )->times( 3 )->andReturn( array() );
+
+		ob_start();
+		$retry_queue->render_page();
+		ob_end_clean();
+
+		// The notice links here, so opening this page answers it.
+		$this->assertContains( 'kunaki_wc_catch_up_notice', $this->deleted_options );
+	}
+
+	// --- Retry on an order with no Kunaki shipping choice ---
+
+	public function test_retry_sends_a_flagged_order_with_the_cheapest_kunaki_shipping() {
+		$this->create_retry_order( self::HELD_WITHOUT_SHIPPING );
+
+		$result = $this->fulfillment->prepare_for_retry( 100 );
+
+		$this->assertTrue( $result );
+		$this->assertCount( 2, $this->requests );
+
+		// First Kunaki is asked what it offers for this address and these discs.
+		$this->assertStringStartsWith( '<ShippingOptions>', $this->requests[0] );
+		$this->assertStringContainsString( '<Country>United States</Country>', $this->requests[0] );
+		$this->assertStringContainsString( '<State_Province>CA</State_Province>', $this->requests[0] );
+		$this->assertStringContainsString( '<PostalCode>90210</PostalCode>', $this->requests[0] );
+		$this->assertStringContainsString( '<ProductId>PXZZ111111</ProductId><Quantity>1</Quantity>', $this->requests[0] );
+
+		// Then the order goes out with the cheaper option, although it was listed second.
+		$this->assertStringStartsWith( '<Order>', $this->requests[1] );
+		$this->assertStringContainsString( '<ShippingDescription>USPS First Class Mail</ShippingDescription>', $this->requests[1] );
+		$this->assertStringNotContainsString( 'UPS Ground', $this->requests[1] );
+
+		$this->assertSame( 'USPS First Class Mail', $this->meta['_kunaki_chosen_shipping'] );
+		$this->assertSame( 'yes', $this->meta['_kunaki_submitted'] );
+
+		// The note says what was used, how long it takes and what Kunaki charges.
+		$notes = implode( "\n", $this->notes );
+		$this->assertStringContainsString( 'Sending it with the cheapest Kunaki option for its address: USPS First Class Mail (2-5 business days), Kunaki price 6.29.', $notes );
+	}
+
+	public function test_retry_keeps_the_first_of_two_equally_cheap_options() {
+		$this->create_retry_order( self::HELD_WITHOUT_SHIPPING );
+		$this->shipping_response = '<Response><ErrorCode>0</ErrorCode><ErrorText>success</ErrorText>'
+			. '<Option><Description>Listed First</Description><DeliveryTime>3 days</DeliveryTime><Price>6.29</Price></Option>'
+			. '<Option><Description>Listed Second</Description><DeliveryTime>2 days</DeliveryTime><Price>6.29</Price></Option>'
+			. '</Response>';
+
+		$this->assertTrue( $this->fulfillment->prepare_for_retry( 100 ) );
+
+		$this->assertSame( 'Listed First', $this->meta['_kunaki_chosen_shipping'] );
+	}
+
+	public function test_retry_looks_the_options_up_again_when_a_choice_is_already_stored() {
+		// An earlier Retry chose shipping, then the submission failed. Prices or
+		// the address may have changed since, so this click asks again.
+		$this->create_retry_order( self::HELD_WITHOUT_SHIPPING + array( '_kunaki_chosen_shipping' => 'UPS Ground' ) );
+
+		$this->assertTrue( $this->fulfillment->prepare_for_retry( 100 ) );
+
+		$this->assertStringStartsWith( '<ShippingOptions>', $this->requests[0] );
+		$this->assertSame( 'USPS First Class Mail', $this->meta['_kunaki_chosen_shipping'] );
+		$this->assertStringContainsString( '<ShippingDescription>USPS First Class Mail</ShippingDescription>', $this->requests[1] );
+	}
+
+	/**
+	 * @dataProvider failed_lookups
+	 */
+	public function test_retry_leaves_the_order_untouched_when_no_shipping_can_be_chosen( $shipping_response, $country, $expected_code, $expected_requests ) {
+		$this->create_retry_order( self::HELD_WITHOUT_SHIPPING, false, $country );
+		$this->shipping_response = $shipping_response;
+		$before                  = $this->meta;
+
+		$result = $this->fulfillment->prepare_for_retry( 100 );
+
+		$this->assertInstanceOf( WP_Error::class, $result );
+		$this->assertSame( $expected_code, $result->get_error_code() );
+		$this->assertNotSame( '', $result->get_error_message() );
+
+		// The order keeps its failure record, so it stays on the Failures page.
+		// Had the retry budget been reset first, it would now have no record at all.
+		$this->assertSame( $before, $this->meta );
+		$this->assertSame( 0, $this->saves );
+		$this->assertSame( array(), $this->notes );
+
+		// Nothing was sent.
+		$this->assertCount( $expected_requests, $this->requests );
+		foreach ( $this->requests as $request ) {
+			$this->assertStringStartsNotWith( '<Order>', $request );
+		}
+	}
+
+	public function failed_lookups() {
+		return array(
+			'Kunaki unreachable'  => array( new WP_Error( 'http_request_failed', 'Could not resolve host: kunaki.com' ), 'US', 'http_request_failed', 1 ),
+			'no options offered'  => array( '<Response><ErrorCode>0</ErrorCode><ErrorText>success</ErrorText></Response>', 'US', 'kunaki_no_shipping_options', 1 ),
+			'only nameless options' => array( '<Response><ErrorCode>0</ErrorCode><ErrorText>success</ErrorText><Option><Description></Description><DeliveryTime>2 days</DeliveryTime><Price>1.00</Price></Option></Response>', 'US', 'kunaki_no_shipping_options', 1 ),
+			// Kunaki would answer with no options, so it isn't asked.
+			'unsupported country' => array( self::TWO_SHIPPING_OPTIONS, 'BR', 'kunaki_no_shipping_options', 0 ),
+		);
+	}
+
+	public function test_failed_lookup_on_a_declined_order_leaves_the_old_kunaki_order_in_place() {
+		// Sent once with a chosen option, then declined by Kunaki.
+		$this->create_retry_order( array(
+			'_kunaki_order_status'    => 'DECLINED',
+			'_kunaki_order_id'        => 'KUNOLD',
+			'_kunaki_submitted'       => 'yes',
+			'_kunaki_needs_shipping'  => 'yes',
+			'_kunaki_chosen_shipping' => 'USPS First Class Mail',
+		) );
+		$this->shipping_response = new WP_Error( 'http_request_failed', 'Could not resolve host: kunaki.com' );
+		$before                  = $this->meta;
+
+		$result = $this->fulfillment->prepare_for_retry( 100 );
+
+		$this->assertInstanceOf( WP_Error::class, $result );
+		$this->assertSame( $before, $this->meta, 'Nothing about the declined order may change, not even in memory.' );
+		$this->assertSame( 0, $this->saves );
+	}
+
+	public function test_first_retry_on_an_order_that_failed_before_this_version_only_explains() {
+		// What 1.4.0 left on an order with no Kunaki shipping line. Its message
+		// never said Retry would choose shipping, so this click must not.
+		$this->create_retry_order( array(
+			'_kunaki_fulfillment_exhausted'  => 'yes',
+			'_kunaki_fulfillment_last_error' => 'No matching Kunaki shipping method found on this order.',
+			'_kunaki_fulfillment_failed_at'  => '2026-01-15T10:00:00+00:00',
+		) );
+
+		$result = $this->fulfillment->prepare_for_retry( 100 );
+
+		$this->assertInstanceOf( WP_Error::class, $result );
+		$this->assertSame( 'retry_failed', $result->get_error_code() );
+		// The admin is told what the next click will do. (This used to be blank:
+		// a permanent failure keeps its message under LAST_ERROR.)
+		$this->assertStringContainsString( 'cheapest', $result->get_error_message() );
+
+		// Nothing was asked of Kunaki and nothing was sent.
+		$this->assertSame( array(), $this->requests );
+		$this->assertArrayNotHasKey( '_kunaki_chosen_shipping', $this->meta );
+
+		// The order is held again, now with the new message and the flag.
+		$this->assertSame( 'yes', $this->meta['_kunaki_fulfillment_exhausted'] );
+		$this->assertStringContainsString( 'cheapest', $this->meta['_kunaki_fulfillment_last_error'] );
+		$this->assertSame( 'yes', $this->meta['_kunaki_needs_shipping'] );
+
+		// So the second click sends it.
+		$this->assertTrue( $this->fulfillment->prepare_for_retry( 100 ) );
+		$this->assertStringContainsString( '<ShippingDescription>USPS First Class Mail</ShippingDescription>', end( $this->requests ) );
+	}
+
+	/**
+	 * @dataProvider flag_states
+	 */
+	public function test_retry_never_looks_up_shipping_for_an_order_that_has_a_kunaki_shipping_line( $flag ) {
+		$meta = array(
+			'_kunaki_fulfillment_exhausted'  => 'yes',
+			'_kunaki_fulfillment_last_error' => 'Connection timed out',
+		);
+		if ( '' !== $flag ) {
+			$meta['_kunaki_needs_shipping'] = $flag;
+		}
+		$this->create_retry_order( $meta, true );
+
+		$this->assertTrue( $this->fulfillment->prepare_for_retry( 100 ) );
+
+		// One request: the order itself, with what the customer chose at checkout.
+		$this->assertCount( 1, $this->requests );
+		$this->assertStringStartsWith( '<Order>', $this->requests[0] );
+		$this->assertStringContainsString( '<ShippingDescription>USPS Priority</ShippingDescription>', $this->requests[0] );
+		$this->assertArrayNotHasKey( '_kunaki_chosen_shipping', $this->meta );
+	}
+
+	public function flag_states() {
+		return array(
+			'not flagged' => array( '' ),
+			'flagged'     => array( 'yes' ),
+		);
+	}
+
+	public function test_retry_lookup_sends_no_state_outside_the_us_and_canada() {
+		// Kunaki only accepts a state or province for US and CA addresses.
+		$this->create_retry_order( self::HELD_WITHOUT_SHIPPING, false, 'GB' );
+
+		$this->assertTrue( $this->fulfillment->prepare_for_retry( 100 ) );
+
+		$this->assertStringContainsString( '<Country>United Kingdom</Country>', $this->requests[0] );
+		$this->assertStringContainsString( '<State_Province></State_Province>', $this->requests[0] );
+	}
+
+	public function test_retry_makes_no_lookup_for_an_order_with_no_discs() {
+		$this->create_retry_order( self::HELD_WITHOUT_SHIPPING );
+		// The product is no longer linked to a Kunaki disc.
+		Functions\when( 'get_post_meta' )->justReturn( '' );
+
+		$result = $this->fulfillment->prepare_for_retry( 100 );
+
+		// There is nothing to send, so nothing to ask Kunaki about.
+		$this->assertInstanceOf( WP_Error::class, $result );
+		$this->assertSame( array(), $this->requests );
+		$this->assertArrayNotHasKey( '_kunaki_chosen_shipping', $this->meta );
+	}
+
+	public function test_retry_on_an_already_submitted_order_makes_no_lookup() {
+		$this->create_retry_order( array(
+			'_kunaki_submitted'      => 'yes',
+			'_kunaki_needs_shipping' => 'yes',
+		) );
+
+		$result = $this->fulfillment->prepare_for_retry( 100 );
+
+		$this->assertInstanceOf( WP_Error::class, $result );
+		$this->assertSame( 'already_submitted', $result->get_error_code() );
+		$this->assertSame( array(), $this->requests );
+	}
+
 	// --- Helpers ---
+
+	/**
+	 * A Processing disc order that keeps its meta in $this->meta, with Kunaki's
+	 * HTTP endpoint faked, so a test can see what a Retry wrote, saved and sent.
+	 *
+	 * @param array  $meta         The order's meta before the Retry.
+	 * @param bool   $kunaki_line  Whether the order has a Kunaki shipping line from checkout.
+	 * @param string $country_code Shipping country.
+	 */
+	private function create_retry_order( array $meta, $kunaki_line = false, $country_code = 'US' ) {
+		$test       = $this;
+		$this->meta = $meta;
+
+		$item = Mockery::mock( 'WC_Order_Item_Product' );
+		$item->shouldReceive( 'get_product_id' )->andReturn( 42 );
+		$item->shouldReceive( 'get_variation_id' )->andReturn( 0 );
+		$item->shouldReceive( 'get_quantity' )->andReturn( 1 );
+
+		$order = Mockery::mock( 'WC_Order' );
+		$order->shouldReceive( 'get_id' )->andReturn( 100 );
+		$order->shouldReceive( 'get_status' )->andReturn( 'processing' );
+		$order->shouldReceive( 'get_items' )->andReturn( array( $item ) );
+		$order->shouldReceive( 'get_meta' )->andReturnUsing( function ( $key ) use ( $test ) {
+			return isset( $test->meta[ $key ] ) ? $test->meta[ $key ] : '';
+		} );
+		$order->shouldReceive( 'update_meta_data' )->andReturnUsing( function ( $key, $value ) use ( $test ) {
+			$test->meta[ $key ] = $value;
+		} );
+		$order->shouldReceive( 'delete_meta_data' )->andReturnUsing( function ( $key ) use ( $test ) {
+			unset( $test->meta[ $key ] );
+		} );
+		$order->shouldReceive( 'save' )->andReturnUsing( function () use ( $test ) {
+			$test->saves++;
+		} );
+		$order->shouldReceive( 'save_meta_data' )->andReturnUsing( function () use ( $test ) {
+			$test->saves++;
+		} );
+		$order->shouldReceive( 'add_order_note' )->andReturnUsing( function ( $note ) use ( $test ) {
+			$test->notes[] = $note;
+		} );
+
+		if ( $kunaki_line ) {
+			$this->setup_shipping_methods_on_order( $order );
+		} else {
+			// What the customer picked while the plugin was inactive.
+			$other = Mockery::mock( 'WC_Order_Item_Shipping' );
+			$other->shouldReceive( 'get_method_id' )->andReturn( 'flat_rate' );
+			$order->shouldReceive( 'get_shipping_methods' )->andReturn( array( $other ) );
+		}
+		$this->setup_address_on_order( $order, $country_code );
+
+		Functions\when( 'wc_get_order' )->justReturn( $order );
+		Functions\when( 'get_post_meta' )->justReturn( 'PXZZ111111' );
+		Functions\when( 'get_option' )->justReturn( 'no' );
+		Functions\when( 'update_option' )->justReturn( true );
+		Functions\when( 'wp_cache_delete' )->justReturn( true );
+		$this->mock_wpdb_lock( true );
+
+		Functions\when( 'wp_remote_post' )->alias( function ( $url, $args ) use ( $test ) {
+			$body             = (string) $args['body'];
+			$test->requests[] = $body;
+			if ( 0 === strpos( $body, '<ShippingOptions' ) ) {
+				return $test->shipping_response instanceof WP_Error
+					? $test->shipping_response
+					: array( 'body' => $test->shipping_response );
+			}
+			return array( 'body' => '<Response><ErrorCode>0</ErrorCode><ErrorText>success</ErrorText><OrderId>KUN777</OrderId></Response>' );
+		} );
+		Functions\when( 'wp_remote_retrieve_response_code' )->justReturn( 200 );
+		Functions\when( 'wp_remote_retrieve_body' )->alias( function ( $response ) {
+			return $response['body'];
+		} );
+
+		return $order;
+	}
 
 	private function create_listed_order( $id, $status, $meta ) {
 		$meta += array(
