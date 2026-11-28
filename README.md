@@ -201,7 +201,7 @@ Failed orders and outages show up in WordPress admin, but nobody sees them there
 - **Kunaki's API goes down** (the circuit breaker trips), and again **when it recovers**.
 - **The saved Kunaki password can't be read**, usually because the WordPress security salts changed. No orders are sent until it's entered again. They wait without using up retries, so none of the alerts above would fire.
 
-Each order alert names the order, says what went wrong, and links to it. Alerts are sent in the background through Action Scheduler, so checkout never waits on email or Slack.
+Each order alert names the order, says what went wrong, and links to it. Alerts are sent in the background through Action Scheduler, so checkout never waits on email or Slack. If an alert can't be queued, it's sent straight away instead of being lost.
 
 An unstable API doesn't flood you. There is one outage alert per outage, however often the circuit trips and re-trips. The recovery alert waits 15 minutes and is only sent if the API is still up then. If an outage lasts more than a day, you get a reminder. If an outage alert can't be delivered, it's sent again at the next failed check. If an order or password alert can't be delivered, it's sent again an hour later, up to three times. An alert that is still queued when someone deals with the problem isn't sent: the order was retried, cancelled or refunded, or the password was saved again.
 
