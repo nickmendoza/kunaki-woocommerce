@@ -33,7 +33,7 @@ This plugin addresses these concerns through atomic locking, idempotent submissi
 - **Structured Logging** -- JSON-formatted log entries with contextual fields (order ID, error details) for machine-parseable log aggregation.
 - **WP-CLI Support** -- `wp kunaki sync` command for on-demand bulk status sync with `--dry-run` and `--limit` options.
 - **Predictive Delivery Estimates** -- Displays estimated delivery date ranges at checkout based on historical manufacturing times and parsed transit durations.
-- **Email and Slack Alerts** -- Optional alerts when an order needs you (it failed every retry, can't be sent until something is fixed, or Kunaki declined it), when Kunaki's API goes down and comes back, and when the saved Kunaki password can't be read. Off by default.
+- **Email and Slack Alerts** -- Optional alerts when an order needs you (it failed every retry, can't be sent until something is fixed, or Kunaki declined it), when orders paid while the plugin was inactive are waiting for you, when Kunaki's API goes down and comes back, and when the saved Kunaki password can't be read. Off by default.
 - **Dashboard Widget** -- At-a-glance Kunaki order summary on the WordPress dashboard: fulfilling, action needed, and retrying counts with circuit breaker status and average manufacturing time.
 - **Credential Encryption** -- Passwords encrypted at rest with AES-256-GCM.
 
@@ -192,7 +192,7 @@ While the plugin is inactive nothing listens for an order reaching Processing, s
 | Has a Kunaki shipping choice and was paid 24 hours ago or more | Held under "Action needed" until you click Retry, in case you already fulfilled it by hand |
 | Has no Kunaki shipping choice (placed while the plugin was inactive) | Always held. Retry sends it with the cheapest Kunaki option for its address (see [Automatic Retry](#automatic-retry)) |
 
-When orders are held, a notice in wp-admin says how many and links to the Failures page. With alerts on, each held order also sends one alert.
+When orders are held, a notice in wp-admin says how many and links to the Failures page. With alerts on, you also get one alert for the orders a scan run holds, however many there are. It gives the same count and the same link.
 
 The scan never calls Kunaki. It writes the same failure record as any other unsent order, so submission still goes through `handle_order_processing` with its lock and duplicate checks, and running the scan twice changes nothing.
 
@@ -225,6 +225,7 @@ Failed orders and outages show up in WordPress admin, but nobody sees them there
 - **An order runs out of retries.** It still wasn't accepted after the configured number of attempts.
 - **An order fails in a way retrying won't fix**, such as having no Kunaki shipping method. It needs a person straight away.
 - **Kunaki declines an order.** The order is moved to on-hold. Resubmitting it creates a new Kunaki order, which is billed separately.
+- **Orders paid while the plugin was inactive are waiting for you.** One alert covers every order a catch-up scan run holds, so a long break doesn't send one per order. It says how many are waiting and links to the Failures page. It isn't sent if someone has opened that page first, and if it can't be delivered it's sent again an hour later, up to three times.
 - **Kunaki's API goes down** (the circuit breaker trips), and again **when it recovers**.
 - **The saved Kunaki password can't be read**, usually because the WordPress security salts changed. No orders are sent until it's entered again. They wait without using up retries, so none of the alerts above would fire.
 
@@ -232,7 +233,7 @@ Each order alert names the order, says what went wrong, and links to it. Alerts 
 
 An unstable API doesn't flood you. There is one outage alert per outage, however often the circuit trips and re-trips. The recovery alert waits 15 minutes and is only sent if the API is still up then. If an outage lasts more than a day, you get a reminder. If an outage alert can't be delivered, it's sent again at the next failed check. If an order or password alert can't be delivered, it's sent again an hour later, up to three times. An alert that is still queued when someone deals with the problem isn't sent: the order was retried, cancelled or refunded, or the password was saved again.
 
-For other integrations, the plugin fires public actions after each change is saved: `kunaki_wc_order_needs_attention( $order_id, $reason, $message )`, where `$reason` is `retries_exhausted`, `permanent_failure` or `declined`, plus `kunaki_wc_circuit_breaker_opened`, `kunaki_wc_circuit_breaker_closed` and `kunaki_wc_password_decrypt_failed`. An exception thrown by a listener is caught and logged, so it can't interrupt fulfillment.
+For other integrations, the plugin fires public actions after each change is saved: `kunaki_wc_order_needs_attention( $order_id, $reason, $message )`, where `$reason` is `retries_exhausted`, `permanent_failure` or `declined`, plus `kunaki_wc_circuit_breaker_opened`, `kunaki_wc_circuit_breaker_closed`, `kunaki_wc_password_decrypt_failed` and `kunaki_wc_catch_up_orders_held( $count )`. The last fires once for each catch-up scan run that held orders; an order held that way doesn't fire `kunaki_wc_order_needs_attention`. An exception thrown by a listener is caught and logged, so it can't interrupt fulfillment.
 
 ### Email Duplication Prevention
 
@@ -262,7 +263,7 @@ The test suite runs entirely outside WordPress. No WordPress installation, no da
 
 This isolation strategy means tests execute in seconds, run in CI without infrastructure, and validate plugin logic without conflating it with WordPress behavior.
 
-516 unit tests cover:
+529 unit tests cover:
 
 | Area | What's Validated |
 |------|-----------------|
@@ -273,8 +274,8 @@ This isolation strategy means tests execute in seconds, run in CI without infras
 | Product Meta | 10-character alphanumeric validation, capability checks, admin column rendering, safe handling of absent POST fields |
 | Logger | Debug gating based on settings, log level routing, structured JSON context, invalid UTF-8 fallback |
 | Retry Queue | AJAX handler permission and input validation, `prepare_for_retry` guard clauses, admin page hook registration, choosing the cheapest Kunaki shipping at Retry for an order that has none, and leaving the order untouched when that lookup fails |
-| Catch-Up Scan | Recording the inactive window, the paid-date query and its 30-day cap, the 24-hour rule measured when the scan runs, holding orders with no Kunaki shipping choice, every reason an order is left alone, batching, the lock, a window that changes mid-scan, and the admin notice |
-| Alerts | Master and channel switches, background queueing, one alert per outage however the API flaps, delayed recovery alert, resending an order or password alert that wasn't delivered, dropping an alert for an order that was cancelled or refunded, the unreadable-password alert, the message for each order case, error text capping, admin email fallback, Slack URL allowlist, and that each event only fires after its change is saved |
+| Catch-Up Scan | Recording the inactive window, the paid-date query and its 30-day cap, the 24-hour rule measured when the scan runs, holding orders with no Kunaki shipping choice, every reason an order is left alone, batching, the lock, a window that changes mid-scan, the admin notice, one report per run for the orders it holds, and that the activation and deactivation hooks record the window |
+| Alerts | Master and channel switches, background queueing, one alert per outage however the API flaps, delayed recovery alert, resending an order or password alert that wasn't delivered, dropping an alert for an order that was cancelled or refunded, the unreadable-password alert, one alert for all the orders a catch-up scan holds, the message for each order case, error text capping, admin email fallback, Slack URL allowlist, and that each event only fires after its change is saved |
 | Circuit Breaker | State transitions (closed/open/half_open), threshold and cooldown configuration, error classification (infrastructure vs. business logic), probe recovery, admin state reporting |
 | CLI Command | Dry-run listing, limit enforcement, sync dispatch, empty-queue handling |
 | Delivery Estimator | Transit day parsing, business-to-calendar conversion, percentile statistics, transient caching, date range formatting, end-to-end estimate generation |

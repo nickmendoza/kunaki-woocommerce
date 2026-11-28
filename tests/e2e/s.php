@@ -297,13 +297,21 @@ case 'catchup2':
  t('catch-up: held orders are on the Failures page', !array_diff([$c['b'],$c['e'],$c['f']],$listed()), $listed());
  t('catch-up: the notice counts the 3 held orders', 3===(int)get_option('kunaki_wc_catch_up_notice'), get_option('kunaki_wc_catch_up_notice'));
  t('catch-up: the scan is finished', false===get_option('kunaki_wc_catch_up'), get_option('kunaki_wc_catch_up'));
- t('catch-up: each held order raises one alert', 3===count($pending()), count($pending()));
- foreach($pending() as $q) ActionScheduler::store()->cancel_action($q); update_option('kunaki_wc_alerts_enabled','no');
+ // One alert for the three held orders, not one each. No mail server here, so the mail is captured, and so is a Slack post if the alerts case left Slack on.
+ $GLOBALS['mails']=[]; add_filter('pre_wp_mail',function($r,$a){ if('ops@example.com'===($a['to']??'')) $GLOBALS['mails'][]=$a; return true; },10,2);
+ add_filter('pre_http_request',function($r,$args,$url){ return false===strpos($url,'slack') ? $r : ['headers'=>[],'body'=>'ok','response'=>['code'=>200,'message'=>'OK'],'cookies'=>[]]; },5,3);
+ $q=$pending(); $qa=$q ? ActionScheduler::store()->fetch_action(reset($q))->get_args() : [];
+ t('catch-up: the held orders raise one alert between them, not one each', 1===count($q) && 'catch_up_orders_held'===($qa[0]??''), [count($q),$qa]);
+ foreach($q as $x) ActionScheduler::runner()->process_action($x,'stage');
+ $mail=$GLOBALS['mails'][0]??['subject'=>'','message'=>''];
+ t('catch-up: that alert says how many orders are waiting and links to the Failures page', 1===count($GLOBALS['mails']) && false!==strpos($mail['subject'],'3 orders are waiting to be sent to Kunaki') && false!==strpos($mail['message'],'3 disc orders were paid') && false!==strpos($mail['message'],'page=kunaki-failed-orders') && !$pending(), $GLOBALS['mails']);
  $snap=function() use($c,$m){ $s=[]; foreach(['b','e','f'] as $k) foreach(['_kunaki_submitted','_kunaki_fulfillment_exhausted','_kunaki_fulfillment_last_error','_kunaki_fulfillment_failed_at','_kunaki_fulfillment_error','_kunaki_chosen_shipping'] as $key) $s[]=$m($c[$k],$key); return $s; };
  // Replay the whole window, as a scan that was interrupted and started again would.
  $s1=$snap(); $n1=count($log()); update_option('kunaki_wc_catch_up',['from'=>time()-60*DAY_IN_SECONDS,'to'=>time(),'cursor'=>0,'sent'=>0,'held'=>0],false); do_action('kunaki_wc_retry_failed_orders');
  t('catch-up: scanning the same window again changes nothing', $s1===$snap() && $n1===count($log()) && 3===(int)get_option('kunaki_wc_catch_up_notice') && false===get_option('kunaki_wc_catch_up') && $untouched() && !$kmeta($c['c']) && !$kmeta($c['d']), [$n1,count($log()),get_option('kunaki_wc_catch_up_notice'),get_option('kunaki_wc_catch_up')]);
- t('catch-up: the second scan raises no alert', !$pending(), count($pending()));
+ // Alerts are still on here, so this would catch a second alert for orders that were already reported.
+ t('catch-up: the second scan raises no alert', !$pending() && 1===count($GLOBALS['mails']), [count($pending()),count($GLOBALS['mails'])]);
+ update_option('kunaki_wc_alerts_enabled','no');
  // Done with the three orders that were only there to be skipped.
  foreach(as_get_scheduled_actions(['hook'=>'kunaki_wc_submit_order','status'=>'pending','per_page'=>-1],'ids') as $q) ActionScheduler::store()->cancel_action($q);
  $wpdb->delete($wpdb->options,['option_name'=>'_kunaki_lock_'.$c['i']]); $wpdb->delete($wpdb->options,['option_name'=>'_kunaki_submitted_'.$c['j']]);

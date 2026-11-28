@@ -209,6 +209,7 @@ class CatchUpTest extends KunakiTestCase {
 		$this->add_order( 100, array( 'paid' => time() - 23 * HOUR_IN_SECONDS ) );
 
 		Actions\expectDone( 'kunaki_wc_order_needs_attention' )->never();
+		Actions\expectDone( 'kunaki_wc_catch_up_orders_held' )->never();
 
 		( new Kunaki_Catch_Up() )->run();
 
@@ -232,8 +233,9 @@ class CatchUpTest extends KunakiTestCase {
 		$this->pending_window();
 		$this->add_order( 100, array( 'paid' => time() - $seconds_ago ) );
 
-		Actions\expectDone( 'kunaki_wc_order_needs_attention' )
-			->once()->with( 100, 'permanent_failure', Mockery::pattern( '/more than a day/' ) );
+		// Reported with the rest of the run, not on its own.
+		Actions\expectDone( 'kunaki_wc_order_needs_attention' )->never();
+		Actions\expectDone( 'kunaki_wc_catch_up_orders_held' )->once()->with( 1 );
 
 		( new Kunaki_Catch_Up() )->run();
 
@@ -270,8 +272,8 @@ class CatchUpTest extends KunakiTestCase {
 		// Placed while the plugin was inactive: the customer picked another shipping method.
 		$this->add_order( 100, array( 'paid' => time() - HOUR_IN_SECONDS, 'kunaki_shipping' => false ) );
 
-		Actions\expectDone( 'kunaki_wc_order_needs_attention' )
-			->once()->with( 100, 'permanent_failure', Mockery::pattern( '/cheapest/' ) );
+		Actions\expectDone( 'kunaki_wc_order_needs_attention' )->never();
+		Actions\expectDone( 'kunaki_wc_catch_up_orders_held' )->once()->with( 1 );
 
 		( new Kunaki_Catch_Up() )->run();
 
@@ -310,6 +312,42 @@ class CatchUpTest extends KunakiTestCase {
 		( new Kunaki_Catch_Up() )->run();
 
 		$this->assertSame( 6, $this->options[ Kunaki_Catch_Up::NOTICE_OPTION ] );
+	}
+
+	public function test_the_orders_a_run_holds_are_reported_together() {
+		$this->pending_window();
+		$this->add_order( 100, array( 'paid' => time() - 2 * DAY_IN_SECONDS ) );
+		$this->add_order( 101, array( 'paid' => time() - HOUR_IN_SECONDS ) );
+		$this->add_order( 102, array( 'paid' => time() - HOUR_IN_SECONDS, 'kunaki_shipping' => false ) );
+		$this->add_order( 103, array( 'paid' => time() - 3 * DAY_IN_SECONDS ) );
+
+		// After a long break there can be many. One alert each would flood
+		// the admin, and nothing is wrong with any of them.
+		Actions\expectDone( 'kunaki_wc_order_needs_attention' )->never();
+		// Three held. Order 101 is recent and is sent automatically.
+		Actions\expectDone( 'kunaki_wc_catch_up_orders_held' )->once()->with( 3 );
+
+		( new Kunaki_Catch_Up() )->run();
+
+		$this->assertSame( 3, $this->options[ Kunaki_Catch_Up::NOTICE_OPTION ] );
+	}
+
+	public function test_a_listener_that_throws_does_not_stop_the_scan_finishing() {
+		$this->pending_window();
+		$this->add_order( 100, array( 'paid' => time() - 2 * DAY_IN_SECONDS ) );
+
+		Actions\expectDone( 'kunaki_wc_catch_up_orders_held' )
+			->once()->with( 1 )
+			->whenHappen( function () {
+				throw new \RuntimeException( 'listener blew up' );
+			} );
+
+		( new Kunaki_Catch_Up() )->run();
+
+		// Left pending, the scan would run again on every tick.
+		$this->assertArrayNotHasKey( Kunaki_Catch_Up::OPTION, $this->options );
+		$this->assertStringContainsString( 'listener blew up', implode( "\n", $this->logs ) );
+		$this->assertStringContainsString( 'Catch-up scan finished', implode( "\n", $this->logs ) );
 	}
 
 	public function test_an_order_that_cannot_be_checked_is_tried_again_on_the_next_tick() {
@@ -438,6 +476,9 @@ class CatchUpTest extends KunakiTestCase {
 		$this->add_order( 2, array( 'paid' => time() - 2 * DAY_IN_SECONDS ), false );
 		$this->add_order( $last, array( 'paid' => time() - 2 * DAY_IN_SECONDS ), false );
 
+		// Each run reports what it held: one order in the first, one in the second.
+		Actions\expectDone( 'kunaki_wc_catch_up_orders_held' )->twice()->with( 1 );
+
 		$catch_up = new Kunaki_Catch_Up();
 		$catch_up->run();
 
@@ -480,6 +521,9 @@ class CatchUpTest extends KunakiTestCase {
 				$test->options[ Kunaki_Catch_Up::OPTION ] = $changed_to;
 			}
 		};
+
+		// The order in hand is held whatever happened to the window, so it is still reported.
+		Actions\expectDone( 'kunaki_wc_catch_up_orders_held' )->once()->with( 1 );
 
 		( new Kunaki_Catch_Up() )->run();
 
@@ -569,6 +613,9 @@ class CatchUpTest extends KunakiTestCase {
 	public function test_running_the_scan_again_changes_nothing() {
 		$this->pending_window();
 		$this->add_order( 100, array( 'paid' => time() - 2 * DAY_IN_SECONDS ) );
+
+		// The replay holds nothing new, so it reports nothing.
+		Actions\expectDone( 'kunaki_wc_catch_up_orders_held' )->once()->with( 1 );
 
 		$catch_up = new Kunaki_Catch_Up();
 		$catch_up->run();

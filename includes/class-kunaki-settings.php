@@ -195,7 +195,7 @@ class Kunaki_Settings extends WC_Settings_Page {
 			array(
 				'title' => __( 'Alerts', 'kunaki-woocommerce' ),
 				'type'  => 'title',
-				'desc'  => __( 'Get an email or Slack message when an order needs you (it failed every retry, can\'t be sent until something is fixed, or Kunaki declined it), when Kunaki\'s API goes down and comes back, and when the saved Kunaki password can\'t be read.', 'kunaki-woocommerce' ),
+				'desc'  => __( 'Get an email or Slack message when an order needs you (it failed every retry, can\'t be sent until something is fixed, or Kunaki declined it), when orders paid while the plugin was inactive are waiting for you, when Kunaki\'s API goes down and comes back, and when the saved Kunaki password can\'t be read.', 'kunaki-woocommerce' ),
 				'id'    => 'kunaki_wc_alerts_settings',
 			),
 			array(

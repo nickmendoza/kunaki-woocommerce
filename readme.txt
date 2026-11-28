@@ -23,7 +23,7 @@ Kunaki WooCommerce connects your WooCommerce store to [Kunaki's](https://kunaki.
 * **Mixed Cart Handling** — Handles orders with both Kunaki and non-Kunaki products, splitting them into separate shipments with independent shipping method selection.
 * **Retry Queue** — Failed submissions are retried automatically with backoff. An admin page shows failed orders with error details and one-click retry.
 * **API Circuit Breaker** — Detects sustained API outages and pauses requests to preserve retry budgets. Automatically recovers when the API comes back.
-* **Email and Slack Alerts** — Optional alerts when an order needs you (it failed every retry, can't be sent until something is fixed, or Kunaki declined it), when Kunaki's API goes down and comes back, and when the saved Kunaki password can't be read.
+* **Email and Slack Alerts** — Optional alerts when an order needs you (it failed every retry, can't be sent until something is fixed, or Kunaki declined it), when orders paid while the plugin was inactive are waiting for you, when Kunaki's API goes down and comes back, and when the saved Kunaki password can't be read.
 * **Catch-Up After Deactivation** — Orders paid while the plugin was inactive are found when you activate it again. Recent ones are sent. Older ones, and ones with no Kunaki shipping choice, wait under WooCommerce > Kunaki Failures for one Retry click.
 * **Dashboard Widget** — At-a-glance order summary on the WordPress dashboard: fulfilling, action needed, and retrying counts.
 * **Credential Encryption** — Your Kunaki password is encrypted at rest with AES-256-GCM.
@@ -84,11 +84,11 @@ The built-in circuit breaker detects sustained failures and pauses all API calls
 
 = What happens to orders paid while the plugin was deactivated? =
 
-When you activate the plugin again, it looks for disc orders paid while it was off, going back at most 30 days. An order with a Kunaki shipping choice that was paid less than 24 hours ago is sent automatically. An older one waits under **WooCommerce > Kunaki Failures** until you click Retry, in case you already fulfilled it another way. An order with no Kunaki shipping choice (placed while the plugin was off) also waits. Clicking Retry sends it with the cheapest Kunaki shipping option for its address and records that choice in an order note. A notice in wp-admin tells you how many orders are waiting.
+When you activate the plugin again, it looks for disc orders paid while it was off, going back at most 30 days. An order with a Kunaki shipping choice that was paid less than 24 hours ago is sent automatically. An older one waits under **WooCommerce > Kunaki Failures** until you click Retry, in case you already fulfilled it another way. An order with no Kunaki shipping choice (placed while the plugin was off) also waits. Clicking Retry sends it with the cheapest Kunaki shipping option for its address and records that choice in an order note. A notice in wp-admin tells you how many orders are waiting. If alerts are on, one alert tells you too.
 
 = Can I be told when an order fails? =
 
-Yes. Under **WooCommerce > Settings > Kunaki > Alerts**, turn on alerts and choose email, Slack, or both. You'll get one message per order that needs you, one when Kunaki's API goes down and when it recovers, and one if the saved Kunaki password can't be read (for example after your site's security salts change). Alerts are off by default.
+Yes. Under **WooCommerce > Settings > Kunaki > Alerts**, turn on alerts and choose email, Slack, or both. You'll get one message per order that needs you, one for all the orders found waiting after the plugin was inactive, one when Kunaki's API goes down and when it recovers, and one if the saved Kunaki password can't be read (for example after your site's security salts change). Alerts are off by default.
 
 = Is my password stored securely? =
 

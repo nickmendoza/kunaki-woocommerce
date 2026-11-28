@@ -1843,8 +1843,8 @@ class OrderFulfillmentTest extends KunakiTestCase {
 		$order->shouldReceive( 'save_meta_data' )->once();
 		$order->shouldReceive( 'add_order_note' )->once();
 
-		Actions\expectDone( 'kunaki_wc_order_needs_attention' )
-			->once()->with( 100, 'permanent_failure', Mockery::pattern( '/more than a day/' ) );
+		// No alert of its own: the scan raises one for all the orders it holds.
+		Actions\expectDone( 'kunaki_wc_order_needs_attention' )->never();
 		Functions\expect( 'wp_remote_post' )->never();
 
 		$this->assertSame( 'held', $this->fulfillment->record_missed_order( $order, true ) );
@@ -1869,8 +1869,7 @@ class OrderFulfillmentTest extends KunakiTestCase {
 		$order->shouldReceive( 'save_meta_data' )->once();
 		$order->shouldReceive( 'add_order_note' )->once();
 
-		Actions\expectDone( 'kunaki_wc_order_needs_attention' )
-			->once()->with( 100, 'permanent_failure', Mockery::pattern( '/cheapest/' ) );
+		Actions\expectDone( 'kunaki_wc_order_needs_attention' )->never();
 		Functions\expect( 'wp_remote_post' )->never();
 
 		$this->assertSame( 'held', $this->fulfillment->record_missed_order( $order, $waited_too_long ) );
@@ -1923,9 +1922,56 @@ class OrderFulfillmentTest extends KunakiTestCase {
 
 		$this->assertSame( 'held', $this->fulfillment->record_missed_order( $order, true ) );
 
+		// Also that the scan has reported it, so restoring it raises no alert.
 		$this->assertStringStartsWith(
-			Kunaki_Order_Fulfillment::PERMANENT_MARKER_PREFIX . 'This order was paid while the Kunaki plugin was inactive',
+			Kunaki_Order_Fulfillment::PERMANENT_MARKER_PREFIX . Kunaki_Order_Fulfillment::NO_ALERT_MARKER_PREFIX . 'This order was paid while the Kunaki plugin was inactive',
 			$rows->rows['_kunaki_failed_100']
+		);
+	}
+
+	/**
+	 * @dataProvider markers_for_orders_the_scan_held
+	 */
+	public function test_recover_marker_for_an_order_the_scan_held_raises_no_alert( $prefix, $flagged ) {
+		$order = Mockery::mock( 'WC_Order' );
+		$order->shouldReceive( 'get_id' )->andReturn( 100 );
+		$order->shouldReceive( 'update_meta_data' )->with( '_kunaki_fulfillment_exhausted', 'yes' )->once();
+		// Neither prefix is part of the message the admin reads.
+		$order->shouldReceive( 'update_meta_data' )->with( '_kunaki_fulfillment_last_error', 'Held for review' )->once();
+		$order->shouldReceive( 'update_meta_data' )->with( '_kunaki_fulfillment_failed_at', Mockery::type( 'string' ) )->once();
+		$order->shouldReceive( 'update_meta_data' )->with( '_kunaki_needs_shipping', 'yes' )->times( $flagged ? 1 : 0 );
+		$order->shouldReceive( 'delete_meta_data' )->with( '_kunaki_fulfillment_error' )->once();
+		$order->shouldReceive( 'save_meta_data' )->once();
+
+		$marker = (object) array(
+			'option_name'  => '_kunaki_failed_100',
+			'option_value' => $prefix . Kunaki_Order_Fulfillment::NO_ALERT_MARKER_PREFIX . 'Held for review',
+		);
+
+		$wpdb = Mockery::mock( 'wpdb' );
+		$wpdb->options = 'wp_options';
+		$wpdb->shouldReceive( 'prepare' )->andReturnUsing( function () { return 'prepared_query'; } );
+		$wpdb->shouldReceive( 'esc_like' )->andReturnUsing( function ( $text ) { return $text; } );
+		$wpdb->shouldReceive( 'get_results' )->once()->andReturn( array( $marker ) );
+		$wpdb->shouldReceive( 'delete' )
+			->with( 'wp_options', array( 'option_name' => '_kunaki_failed_100' ) )->once();
+		$GLOBALS['wpdb'] = $wpdb;
+
+		Functions\expect( 'wc_get_order' )->with( 100 )->andReturn( $order );
+		Functions\expect( 'wc_get_orders' )->once()->andReturn( array() );
+		Functions\expect( 'get_option' )->with( 'kunaki_wc_max_retries', 3 )->andReturn( '3' );
+		Functions\expect( 'get_option' )->zeroOrMoreTimes()->andReturn( 'no' );
+
+		// The scan's one alert already covers this order.
+		Actions\expectDone( 'kunaki_wc_order_needs_attention' )->never();
+
+		$this->fulfillment->retry_failed_orders();
+	}
+
+	public function markers_for_orders_the_scan_held() {
+		return array(
+			'held for its age'           => array( Kunaki_Order_Fulfillment::PERMANENT_MARKER_PREFIX, false ),
+			'held for a shipping choice' => array( Kunaki_Order_Fulfillment::PERMANENT_NEEDS_SHIPPING_MARKER_PREFIX, true ),
 		);
 	}
 
@@ -2115,13 +2161,16 @@ class OrderFulfillmentTest extends KunakiTestCase {
 		// the database is back.
 		$pending = array();
 		$save_ok = true;
-		Actions\expectDone( 'kunaki_wc_order_needs_attention' )->once()->with( 100, 'permanent_failure', Mockery::pattern( $message_part ) );
+		// The scan counted it among the orders it held, so it raises no alert of its own.
+		Actions\expectDone( 'kunaki_wc_order_needs_attention' )->never();
 
 		$this->fulfillment->retry_failed_orders();
 
 		// Restored as held, not as something the cron may send.
 		$this->assertSame( 'yes', $saved['_kunaki_fulfillment_exhausted'] );
 		$this->assertMatchesRegularExpression( $message_part, $saved['_kunaki_fulfillment_last_error'] );
+		// The marker's prefixes are not part of the message the admin reads.
+		$this->assertStringStartsWith( 'This order was paid', $saved['_kunaki_fulfillment_last_error'] );
 		$this->assertArrayNotHasKey( '_kunaki_fulfillment_error', $saved );
 		$this->assertArrayNotHasKey( '_kunaki_failed_100', $rows->rows );
 		// And with the flag its message relies on, so the first Retry does what it says.

@@ -26,6 +26,9 @@ class Kunaki_Order_Fulfillment {
 	/** The same, for an order that was also flagged META_NEEDS_SHIPPING. */
 	const PERMANENT_NEEDS_SHIPPING_MARKER_PREFIX = '[kunaki-permanent-needs-shipping] ';
 
+	/** Follows either prefix above when restoring the order must not raise an alert of its own. */
+	const NO_ALERT_MARKER_PREFIX = '[kunaki-no-alert] ';
+
 	const SUBMIT_ACTION = 'kunaki_wc_submit_order';
 	const ACTION_GROUP  = 'kunaki-woocommerce';
 
@@ -124,6 +127,9 @@ class Kunaki_Order_Fulfillment {
 	 * that waited too long may have been fulfilled by hand, and an order with
 	 * no Kunaki shipping choice needs someone to accept the cheapest option.
 	 *
+	 * A held order raises no alert of its own. After a long break there can be
+	 * many, so the scan that calls this raises one alert for all of them.
+	 *
 	 * @param WC_Order $order           WooCommerce order with no Kunaki record.
 	 * @param bool     $waited_too_long Whether it was paid too long ago to send without a person.
 	 * @return string 'sent' if it was handed to the retry cron, 'held' if it waits for a click.
@@ -136,7 +142,8 @@ class Kunaki_Order_Fulfillment {
 				$order,
 				__( 'This order was paid while the Kunaki plugin was inactive and has no Kunaki shipping option, so it was not sent automatically. If it has not been fulfilled another way, retry it to send it with the cheapest Kunaki shipping option for its address.', 'kunaki-woocommerce' ),
 				'',
-				true
+				true,
+				false
 			);
 			return 'held';
 		}
@@ -146,7 +153,8 @@ class Kunaki_Order_Fulfillment {
 				$order,
 				__( 'This order was paid while the Kunaki plugin was inactive and had waited more than a day, so it was not sent automatically. If it has not been fulfilled another way, retry it to send it to Kunaki.', 'kunaki-woocommerce' ),
 				'',
-				true
+				true,
+				false
 			);
 			return 'held';
 		}
@@ -436,8 +444,9 @@ class Kunaki_Order_Fulfillment {
 	 * @param string   $error_message Human-readable error description.
 	 * @param string   $error_code    WP_Error code (used to skip counting circuit-open rejections).
 	 * @param bool     $permanent     Whether the error is permanent (immediately mark exhausted, skip retry).
+	 * @param bool     $alert         Whether a permanent failure raises its own alert. False when the caller reports it another way.
 	 */
-	private function record_failure( $order, $error_message, $error_code = '', $permanent = false ) {
+	private function record_failure( $order, $error_message, $error_code = '', $permanent = false, $alert = true ) {
 		$skip_increment = $permanent || in_array( $error_code, array( 'kunaki_circuit_open', 'kunaki_credentials_invalid', 'kunaki_plugin_deactivated' ), true );
 
 		$attempts = (int) $order->get_meta( self::META_FULFILLMENT_ATTEMPTS );
@@ -470,6 +479,11 @@ class Kunaki_Order_Fulfillment {
 				$marker_prefix = 'yes' === $order->get_meta( self::META_NEEDS_SHIPPING )
 					? self::PERMANENT_NEEDS_SHIPPING_MARKER_PREFIX
 					: self::PERMANENT_MARKER_PREFIX;
+				if ( ! $alert ) {
+					// Already reported by the caller, so restoring it must not
+					// raise the alert that is held back below.
+					$marker_prefix .= self::NO_ALERT_MARKER_PREFIX;
+				}
 			}
 			global $wpdb;
 			$wpdb->query( $wpdb->prepare(
@@ -498,7 +512,7 @@ class Kunaki_Order_Fulfillment {
 
 		// Only once the exhausted state is saved. If it wasn't, the durable
 		// marker brings the order back, and its eventual exhaustion alerts then.
-		if ( $permanent && $saved ) {
+		if ( $permanent && $saved && $alert ) {
 			self::notify_needs_attention( $order->get_id(), 'permanent_failure', $error_message );
 		}
 	}
@@ -672,11 +686,17 @@ class Kunaki_Order_Fulfillment {
 			$message        = (string) $row->option_value;
 			$needs_shipping = 0 === strpos( $message, self::PERMANENT_NEEDS_SHIPPING_MARKER_PREFIX );
 			$permanent      = $needs_shipping || 0 === strpos( $message, self::PERMANENT_MARKER_PREFIX );
+			$alert          = true;
 
 			if ( $permanent ) {
 				// Restore it as it was recorded: waiting for a person. Restored as
 				// a retryable failure, the retry cron would send it.
 				$message = substr( $message, strlen( $needs_shipping ? self::PERMANENT_NEEDS_SHIPPING_MARKER_PREFIX : self::PERMANENT_MARKER_PREFIX ) );
+				if ( 0 === strpos( $message, self::NO_ALERT_MARKER_PREFIX ) ) {
+					// Held by the catch-up scan, which has reported it already.
+					$alert   = false;
+					$message = substr( $message, strlen( self::NO_ALERT_MARKER_PREFIX ) );
+				}
 				$order->update_meta_data( self::META_FULFILLMENT_EXHAUSTED, 'yes' );
 				$order->update_meta_data( self::META_FULFILLMENT_LAST_ERROR, $message );
 				$order->delete_meta_data( self::META_FULFILLMENT_ERROR );
@@ -702,7 +722,7 @@ class Kunaki_Order_Fulfillment {
 			Kunaki_Logger::info( 'Recovered orphaned failure marker.', array( 'order_id' => $order_id, 'permanent' => $permanent ) );
 
 			// record_failure() held the alert back because the save had failed.
-			if ( $permanent ) {
+			if ( $permanent && $alert ) {
 				self::notify_needs_attention( $order_id, 'permanent_failure', $message );
 			}
 		}

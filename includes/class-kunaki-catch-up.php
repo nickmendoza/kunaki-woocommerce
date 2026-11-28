@@ -200,6 +200,12 @@ class Kunaki_Catch_Up {
 			delete_transient( Kunaki_Dashboard_Widget::TRANSIENT_KEY );
 		}
 
+		// Before the checks below, which can end this run early: these orders
+		// are held whatever happens to the window.
+		if ( $held > 0 ) {
+			$this->notify_orders_held( $held );
+		}
+
 		// Read the option from the database, not this request's cached copy. If
 		// the plugin was deactivated or reactivated while this batch ran, the
 		// option now describes a different window and must be left alone.
@@ -249,6 +255,28 @@ class Kunaki_Catch_Up {
 			'sent' => $sent,
 			'held' => $held,
 		) );
+	}
+
+	/**
+	 * Tell listeners that this run held orders for a person.
+	 *
+	 * Once per run, not once per order: after a long break there can be many,
+	 * and each is listed on the Failures page. A listener that throws must not
+	 * get out, or this run's progress would not be saved.
+	 *
+	 * @param int $count How many orders this run held.
+	 */
+	private function notify_orders_held( $count ) {
+		try {
+			/**
+			 * Fires when a catch-up scan run has held orders for someone to review.
+			 *
+			 * @param int $count How many orders this run held.
+			 */
+			do_action( 'kunaki_wc_catch_up_orders_held', $count );
+		} catch ( \Throwable $e ) {
+			Kunaki_Logger::error( 'A listener on kunaki_wc_catch_up_orders_held threw.', array( 'error' => $e->getMessage() ) );
+		}
 	}
 
 	/**
@@ -378,6 +406,7 @@ class Kunaki_Catch_Up {
 	 * Tell the admin that the scan held orders for them.
 	 *
 	 * Alerts are off by default, so without this a held order could sit unseen.
+	 * The alert, when alerts are on, reports this same count.
 	 */
 	public function render_notice() {
 		if ( ! current_user_can( 'manage_woocommerce' ) ) {

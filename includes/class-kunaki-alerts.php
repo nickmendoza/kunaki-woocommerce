@@ -25,6 +25,7 @@ class Kunaki_Alerts {
 	const EVENT_CIRCUIT_CLOSED = 'circuit_closed';
 	const EVENT_ORDER          = 'order_needs_attention';
 	const EVENT_PASSWORD       = 'password_unreadable';
+	const EVENT_CATCH_UP       = 'catch_up_orders_held';
 
 	const REASON_RETRIES_EXHAUSTED = 'retries_exhausted';
 	const REASON_PERMANENT_FAILURE = 'permanent_failure';
@@ -42,9 +43,9 @@ class Kunaki_Alerts {
 	// Recovery is only reported once the API has stayed up this long.
 	const RECOVERY_DELAY = 15 * MINUTE_IN_SECONDS;
 
-	// An order or password alert that reached nobody is sent again this much
-	// later, at most this many times. Nothing else would bring it back: each is
-	// raised once.
+	// An order, password or catch-up alert that reached nobody is sent again this
+	// much later, at most this many times. Nothing else would bring it back: each
+	// is raised once.
 	const RESEND_DELAY = HOUR_IN_SECONDS;
 	const MAX_RESENDS  = 3;
 
@@ -63,6 +64,7 @@ class Kunaki_Alerts {
 		add_action( 'kunaki_wc_circuit_breaker_closed', array( $this, 'handle_circuit_closed' ), 10, 0 );
 		add_action( 'kunaki_wc_order_needs_attention', array( $this, 'handle_order_needs_attention' ), 10, 2 );
 		add_action( 'kunaki_wc_password_decrypt_failed', array( $this, 'handle_password_decrypt_failed' ), 10, 0 );
+		add_action( 'kunaki_wc_catch_up_orders_held', array( $this, 'handle_catch_up_orders_held' ), 10, 0 );
 		add_action( self::SEND_ACTION, array( $this, 'execute_send' ), 10, 4 );
 	}
 
@@ -152,6 +154,16 @@ class Kunaki_Alerts {
 	 */
 	public function handle_password_decrypt_failed() {
 		$this->dispatch( self::EVENT_PASSWORD );
+	}
+
+	/**
+	 * A catch-up scan run held orders that were paid while the plugin was
+	 * inactive. They get one alert between them, not one each: after a long
+	 * break there can be many, and nothing is wrong with any of them. Each is
+	 * only waiting for someone to click Retry.
+	 */
+	public function handle_catch_up_orders_held() {
+		$this->dispatch( self::EVENT_CATCH_UP );
 	}
 
 	/**
@@ -247,18 +259,18 @@ class Kunaki_Alerts {
 			Kunaki_Logger::error( 'Outage alert was not delivered. It will be sent again at the next failed check.' );
 		}
 
-		if ( ! $delivered && ( self::EVENT_ORDER === $event || self::EVENT_PASSWORD === $event ) ) {
+		if ( ! $delivered && in_array( $event, array( self::EVENT_ORDER, self::EVENT_PASSWORD, self::EVENT_CATCH_UP ), true ) ) {
 			$this->resend_later( (string) $event, (int) $order_id, (string) $reason, (int) $resends );
 		}
 	}
 
 	/**
-	 * Queue an order or password alert that reached nobody to be sent again later.
+	 * Queue an order, password or catch-up alert that reached nobody to be sent again later.
 	 *
 	 * The job checks again that the alert is still needed, so a problem someone
 	 * has dealt with in the meantime isn't alerted.
 	 *
-	 * @param string $event    EVENT_ORDER or EVENT_PASSWORD.
+	 * @param string $event    EVENT_ORDER, EVENT_PASSWORD or EVENT_CATCH_UP.
 	 * @param int    $order_id Order ID, for order alerts.
 	 * @param string $reason   One of the REASON_* constants, for order alerts.
 	 * @param int    $resends  How many times this alert has already been sent again.
@@ -323,6 +335,37 @@ class Kunaki_Alerts {
 						admin_url( 'admin.php?page=wc-settings&tab=kunaki' )
 					),
 					'fields'   => array(),
+					'severity' => self::SEVERITY_DANGER,
+				);
+
+			case self::EVENT_CATCH_UP:
+				// The count the wp-admin notice shows: orders held since the
+				// Failures page was last opened. Opened before this job ran,
+				// someone has seen them and there is nothing to report.
+				$count = (int) get_option( Kunaki_Catch_Up::NOTICE_OPTION, 0 );
+				if ( $count < 1 ) {
+					return null;
+				}
+				return array(
+					'title'    => sprintf(
+						/* translators: %d: number of orders */
+						_n( '%d order is waiting to be sent to Kunaki', '%d orders are waiting to be sent to Kunaki', $count, 'kunaki-woocommerce' ),
+						$count
+					),
+					'body'     => sprintf(
+						/* translators: 1: number of orders, 2: URL of the Kunaki Failures page */
+						_n(
+							"While the Kunaki plugin was inactive, %1\$d disc order was paid and was not sent to Kunaki automatically.\n\nNothing is wrong with it. It is listed with the reason it is waiting. If it has not been fulfilled another way, click Retry to send it: %2\$s",
+							"While the Kunaki plugin was inactive, %1\$d disc orders were paid and were not sent to Kunaki automatically.\n\nNothing is wrong with them. Each is listed with the reason it is waiting. If an order has not been fulfilled another way, click Retry to send it: %2\$s",
+							$count,
+							'kunaki-woocommerce'
+						),
+						$count,
+						admin_url( 'admin.php?page=kunaki-failed-orders' )
+					),
+					'fields'   => array(
+						array( 'title' => __( 'Orders waiting', 'kunaki-woocommerce' ), 'value' => (string) $count, 'short' => true ),
+					),
 					'severity' => self::SEVERITY_DANGER,
 				);
 		}
