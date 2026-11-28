@@ -34,7 +34,7 @@ class Kunaki_Alerts {
 	// written with INSERT IGNORE when the outage alert is queued, so only one
 	// concurrent request wins. It's deleted when the recovery alert is sent, when
 	// the API recovers while alerts are off, or straight away if the outage
-	// alert couldn't be queued or delivered, so the next failed check tries again. Its
+	// alert couldn't be delivered, so the next failed check tries again. Its
 	// value is when it was set; after a day it counts as stale.
 	const OUTAGE_FLAG       = 'kunaki_wc_alert_outage_open';
 	const OUTAGE_FLAG_STALE = DAY_IN_SECONDS;
@@ -100,14 +100,9 @@ class Kunaki_Alerts {
 			return;
 		}
 
-		try {
-			$this->dispatch( self::EVENT_CIRCUIT_OPENED );
-		} catch ( \Throwable $e ) {
-			// Nothing was queued, so the outage mustn't count as reported.
-			// Released, the next failed check alerts again.
-			$this->release_outage_flag();
-			Kunaki_Logger::error( 'Outage alert could not be queued. It will be sent again at the next failed check.', array( 'error' => $e->getMessage() ) );
-		}
+		// If this can't be queued it's sent now, and an alert that reaches
+		// nobody releases the flag, so the next failed check alerts again.
+		$this->dispatch( self::EVENT_CIRCUIT_OPENED );
 	}
 
 	public function handle_circuit_closed() {
@@ -125,7 +120,11 @@ class Kunaki_Alerts {
 
 		// Check again later, and only report recovery if the API is still up.
 		if ( function_exists( 'as_schedule_single_action' ) ) {
-			$queued = as_schedule_single_action( time() + self::RECOVERY_DELAY, self::SEND_ACTION, array( self::EVENT_CIRCUIT_CLOSED, 0, '' ), self::ACTION_GROUP );
+			try {
+				$queued = as_schedule_single_action( time() + self::RECOVERY_DELAY, self::SEND_ACTION, array( self::EVENT_CIRCUIT_CLOSED, 0, '' ), self::ACTION_GROUP );
+			} catch ( \Throwable $e ) {
+				$queued = $this->not_queued( $e );
+			}
 			if ( $queued ) {
 				return;
 			}
@@ -170,7 +169,11 @@ class Kunaki_Alerts {
 		$args = array( $event, (int) $order_id, (string) $reason );
 
 		if ( function_exists( 'as_enqueue_async_action' ) ) {
-			$queued = as_enqueue_async_action( self::SEND_ACTION, $args, self::ACTION_GROUP );
+			try {
+				$queued = as_enqueue_async_action( self::SEND_ACTION, $args, self::ACTION_GROUP );
+			} catch ( \Throwable $e ) {
+				$queued = $this->not_queued( $e );
+			}
 			if ( $queued ) {
 				return;
 			}
@@ -267,13 +270,33 @@ class Kunaki_Alerts {
 		$context = array( 'event' => $event, 'order_id' => $order_id );
 
 		if ( $resends < self::MAX_RESENDS && function_exists( 'as_schedule_single_action' ) ) {
-			$queued = as_schedule_single_action( time() + self::RESEND_DELAY, self::SEND_ACTION, array( $event, $order_id, $reason, $resends + 1 ), self::ACTION_GROUP );
+			try {
+				$queued = as_schedule_single_action( time() + self::RESEND_DELAY, self::SEND_ACTION, array( $event, $order_id, $reason, $resends + 1 ), self::ACTION_GROUP );
+			} catch ( \Throwable $e ) {
+				$queued = $this->not_queued( $e );
+			}
 			if ( $queued ) {
 				Kunaki_Logger::error( 'Alert was not delivered. It will be sent again later.', $context + array( 'resend' => $resends + 1 ) );
 				return;
 			}
 		}
 		Kunaki_Logger::error( 'Alert was not delivered, and will not be sent again.', $context );
+	}
+
+	/**
+	 * Action Scheduler threw while queueing a job. That counts as "not queued",
+	 * which every caller already handles: it sends the alert now, or logs that
+	 * it was dropped.
+	 *
+	 * Older Action Scheduler (3.4.0, for one) lets an error from its store
+	 * through as an exception. Newer versions (4.1.0) catch it and return 0.
+	 *
+	 * @param \Throwable $e What was thrown.
+	 * @return int 0, as Action Scheduler returns when it queues nothing.
+	 */
+	private function not_queued( \Throwable $e ) {
+		Kunaki_Logger::error( 'Action Scheduler threw while queueing an alert job.', array( 'error' => $e->getMessage() ) );
+		return 0;
 	}
 
 	/**

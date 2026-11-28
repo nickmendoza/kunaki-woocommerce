@@ -203,6 +203,27 @@ case 'alerts':
  t('email that throws does not stop Slack', 1===count($GLOBALS['mails']) && 1===count($GLOBALS['slack']) && !$pending(), [$subjects(),$GLOBALS['slack'],count($pending())]);
  $GLOBALS['mail_ok']=true;
 
+ // Queueing that throws. Older Action Scheduler (3.4.0, for one) lets an error from its store through instead of returning 0.
+ // The version here catches it, so a filter that runs outside that catch throws in its place. It only throws for alert jobs.
+ $GLOBALS['queue_throws']='';
+ foreach(['now'=>'pre_as_enqueue_async_action','later'=>'pre_as_schedule_single_action'] as $which=>$filter) add_filter($filter,function($pre,...$a) use($which){ if($which===$GLOBALS['queue_throws'] && in_array('kunaki_wc_send_alert',$a,true)) throw new RuntimeException('Error saving action'); return $pre; },10,7);
+ $failed=function(){ return count(as_get_scheduled_actions(['hook'=>'kunaki_wc_send_alert','status'=>'failed','per_page'=>-1],'ids')); };
+ // An order alert that can't be queued is sent during the request instead of being lost.
+ $reset(); $GLOBALS['queue_throws']='now'; $bad_order(); $GLOBALS['queue_throws']='';
+ t('order alert is sent at once when queueing it throws', 1===count($GLOBALS['mails']) && 1===count($GLOBALS['slack']) && !$pending(), [$subjects(),$GLOBALS['slack'],count($pending())]);
+ // An alert nobody received, whose resend then can't be queued: the send job finishes instead of failing.
+ $reset(); $GLOBALS['mail_ok']=false; update_option('kunaki_wc_alert_slack_enabled','no'); $before=$failed();
+ $bad_order(); $GLOBALS['queue_throws']='later'; $run_alerts(); $GLOBALS['queue_throws']='';
+ t('send job finishes when queueing the resend throws', 1===count($GLOBALS['mails']) && !$pending() && $before===$failed(), [$subjects(),count($pending()),$before,$failed()]);
+ $GLOBALS['mail_ok']=true; update_option('kunaki_wc_alert_slack_enabled','yes');
+ // A recovery whose 15-minute check can't be queued is reported at once, and the outage is forgotten.
+ $reset(); delete_option('kunaki_wc_circuit_breaker'); for($i=0;$i<$threshold;$i++) $cb->post_request(new WP_Error('http_request_failed','mock outage'));
+ $run_alerts(); update_option('kunaki_wc_circuit_breaker',wp_json_encode(['state'=>'half_open','failure_count'=>$threshold,'last_failure_at'=>time(),'opened_at'=>time()-999]),false);
+ $GLOBALS['queue_throws']='later'; $cb->post_request(simplexml_load_string('<R><ErrorCode>0</ErrorCode></R>')); $GLOBALS['queue_throws']='';
+ t('recovery is reported at once when queueing its check throws', 2===count($GLOBALS['mails']) && false!==strpos($GLOBALS['mails'][1]['subject']??'','recovered') && null===$flag() && !$pending(), [$subjects(),$flag(),count($pending())]);
+ foreach($pending() as $a) ActionScheduler::store()->cancel_action($a);
+ delete_option('kunaki_wc_circuit_breaker'); delete_option('kunaki_wc_alert_outage_open');
+
  // The saved password can't be decrypted, as after a change of salts: one alert, and orders wait for it to be entered again.
  $reset(); global $wpdb; $wpdb->update($wpdb->options,['option_value'=>base64_encode(random_bytes(48))],['option_name'=>'kunaki_wc_password']); wp_cache_flush();
  new Kunaki_API_Client(); // Any use of the API reads the password, a shopper's shipping rates included.

@@ -33,8 +33,11 @@ class AlertsTest extends KunakiTestCase {
 	/** @var bool Whether the Slack request throws, as a filter on it might. */
 	private $slack_throws = false;
 
-	/** @var bool Whether queueing a job throws. */
+	/** @var bool Whether queueing a job to run now throws, as older Action Scheduler does when its store fails. */
 	private $enqueue_throws = false;
+
+	/** @var bool Whether queueing a job for later throws. */
+	private $schedule_throws = false;
 
 	/** @var array Queued Action Scheduler jobs: [ 'hook', 'args', 'group', 'when' ]. */
 	private $jobs = array();
@@ -62,6 +65,7 @@ class AlertsTest extends KunakiTestCase {
 		$this->slack_error     = false;
 		$this->slack_throws    = false;
 		$this->enqueue_throws  = false;
+		$this->schedule_throws = false;
 		$this->jobs            = array();
 		$this->enqueue_return  = 123;
 		$this->schedule_return = 456;
@@ -947,20 +951,155 @@ class AlertsTest extends KunakiTestCase {
 		);
 	}
 
-	public function test_outage_alert_that_throws_while_being_queued_does_not_count_as_sent() {
+	/**
+	 * @dataProvider channels_that_throw
+	 */
+	public function test_password_alert_whose_send_throws_is_sent_again_later( $channel ) {
+		$this->use_only_a_channel_that_throws( $channel );
+		$this->options['kunaki_wc_decrypt_failed'] = 'yes';
+
+		( new Kunaki_Alerts() )->handle_password_decrypt_failed();
+		$this->run_jobs();
+
+		$this->assertCount( 1, $this->jobs, 'Nothing else would bring this alert back.' );
+		$this->assertSame( array( 'password_unreadable', 0, '', 1 ), $this->jobs[0]['args'] );
+	}
+
+	/**
+	 * @dataProvider channels_that_throw
+	 */
+	public function test_recovery_alert_whose_send_throws_still_forgets_the_outage( $channel ) {
+		$this->enable_alerts();
+		$alerts = new Kunaki_Alerts();
+		$alerts->handle_circuit_opened();
+		$this->run_jobs();
+		$this->assertArrayHasKey( Kunaki_Alerts::OUTAGE_FLAG, $this->rows, 'The outage alert was delivered.' );
+
+		$this->use_only_a_channel_that_throws( $channel );
+		$this->set_circuit( 'closed' );
+		$alerts->handle_circuit_closed();
+		$this->run_jobs();
+
+		$this->assertArrayNotHasKey( Kunaki_Alerts::OUTAGE_FLAG, $this->rows, 'Left set, the flag would silence the next outage.' );
+		$this->assertSame( array(), $this->jobs, 'A recovery alert is not sent again.' );
+		$this->assertTrue( $this->logged( 'blew up' ), 'The log is the only place the lost recovery alert shows.' );
+	}
+
+	// ── Queueing that throws ───────────────────────────────────────────
+	//
+	// Older Action Scheduler lets an error from its store through as an
+	// exception. Newer versions catch it and return 0. Either way the alert
+	// must be handled as "not queued".
+
+	public function test_order_alert_that_throws_while_being_queued_is_sent_at_once() {
+		$this->enable_alerts();
+		$this->add_order( 42 );
+		$this->enqueue_throws = true;
+
+		( new Kunaki_Alerts() )->handle_order_needs_attention( 42, Kunaki_Alerts::REASON_PERMANENT_FAILURE );
+
+		$this->assertCount( 1, $this->mails, 'Sent now, because nothing was queued to send it later.' );
+		$this->assertStringContainsString( '#1042', $this->mails[0]['subject'] );
+		$this->assertSame( array(), $this->jobs );
+		$this->assertTrue( $this->logged( 'Error saving action' ), 'The log says why it was not queued.' );
+	}
+
+	public function test_password_alert_that_throws_while_being_queued_is_sent_at_once() {
+		$this->enable_alerts();
+		$this->options['kunaki_wc_decrypt_failed'] = 'yes';
+		$this->enqueue_throws                      = true;
+
+		( new Kunaki_Alerts() )->handle_password_decrypt_failed();
+
+		$this->assertCount( 1, $this->mails, 'Sent now, because nothing was queued to send it later.' );
+		$this->assertSame( "[Test Store] Kunaki password can't be read", $this->mails[0]['subject'] );
+		$this->assertSame( array(), $this->jobs );
+	}
+
+	public function test_outage_alert_that_throws_while_being_queued_is_sent_at_once() {
 		$this->enable_alerts();
 		$this->enqueue_throws = true;
 		$alerts               = new Kunaki_Alerts();
 
 		$alerts->handle_circuit_opened();
 
-		$this->assertSame( array(), $this->rows, 'Nothing was queued, so the outage must not count as reported.' );
+		$this->assertCount( 1, $this->mails, 'Sent now, because nothing was queued to send it later.' );
+		$this->assertSame( '[Test Store] Kunaki API outage detected', $this->mails[0]['subject'] );
+		$this->assertArrayHasKey( Kunaki_Alerts::OUTAGE_FLAG, $this->rows, 'It was delivered, so the outage counts as reported.' );
+
+		$alerts->handle_circuit_opened();          // The next failed recovery check.
+
+		$this->assertCount( 1, $this->mails, 'Still one alert per outage.' );
+	}
+
+	public function test_outage_alert_that_can_be_neither_queued_nor_delivered_does_not_count_as_sent() {
+		$this->enable_alerts();
+		$this->enqueue_throws = true;
+		$this->mail_return    = false;
+		$alerts               = new Kunaki_Alerts();
+
+		$alerts->handle_circuit_opened();
+
+		$this->assertCount( 1, $this->mails, 'It was tried.' );
+		$this->assertSame( array(), $this->rows, 'Nobody was told, so the outage must not count as reported.' );
 
 		$this->enqueue_throws = false;
+		$this->mail_return    = true;
 		$alerts->handle_circuit_opened();          // The next failed recovery check.
 		$this->run_jobs();
 
-		$this->assertCount( 1, $this->mails );
+		$this->assertCount( 2, $this->mails, 'So the next failed check alerts again.' );
+		$this->assertArrayHasKey( Kunaki_Alerts::OUTAGE_FLAG, $this->rows );
+	}
+
+	public function test_recovery_is_reported_at_once_when_queueing_the_check_throws() {
+		$this->enable_alerts();
+		$alerts = new Kunaki_Alerts();
+		$alerts->handle_circuit_opened();
+		$this->run_jobs();
+
+		$this->schedule_throws = true;
+		$this->set_circuit( 'closed' );
+		$alerts->handle_circuit_closed();
+
+		$this->assertCount( 2, $this->mails, 'Reported now, because nothing would report it later.' );
+		$this->assertSame( '[Test Store] Kunaki API recovered', $this->mails[1]['subject'] );
+		$this->assertArrayNotHasKey( Kunaki_Alerts::OUTAGE_FLAG, $this->rows, 'Left set, the flag would silence the next outage.' );
+
+		$this->schedule_throws = false;
+		$this->set_circuit( 'open' );
+		$alerts->handle_circuit_opened();          // A new outage alerts again.
+		$this->run_jobs();
+		$this->assertCount( 3, $this->mails );
+	}
+
+	public function test_undelivered_order_alert_whose_resend_throws_while_being_queued_is_logged_as_dropped() {
+		$this->enable_alerts();
+		$this->add_order( 42 );
+		$this->mail_return     = false;
+		$this->schedule_throws = true;
+
+		( new Kunaki_Alerts() )->execute_send( Kunaki_Alerts::EVENT_ORDER, 42, Kunaki_Alerts::REASON_DECLINED );
+
+		$this->assertSame( array(), $this->jobs );
+		$this->assertTrue( $this->logged( 'will not be sent again' ), 'The log is the only place a dropped alert shows.' );
+		$this->assertFalse( $this->logged( 'will be sent again later' ) );
+		$this->assertTrue( $this->logged( 'Error saving action' ), 'The log says why it was not queued.' );
+	}
+
+	public function test_order_alert_is_logged_as_dropped_when_nothing_can_be_queued_or_delivered() {
+		// Action Scheduler's store is down and so is mail: the worst case.
+		$this->enable_alerts();
+		$this->add_order( 42 );
+		$this->enqueue_throws  = true;
+		$this->schedule_throws = true;
+		$this->mail_return     = false;
+
+		( new Kunaki_Alerts() )->handle_order_needs_attention( 42, Kunaki_Alerts::REASON_RETRIES_EXHAUSTED );
+
+		$this->assertCount( 1, $this->mails, 'It was tried.' );
+		$this->assertSame( array(), $this->jobs );
+		$this->assertTrue( $this->logged( 'will not be sent again' ) );
 	}
 
 	// ── Helpers ────────────────────────────────────────────────────────
@@ -1080,6 +1219,9 @@ class AlertsTest extends KunakiTestCase {
 			return $test->enqueue_return;
 		} );
 		Functions\when( 'as_schedule_single_action' )->alias( function ( $when, $hook, $args, $group ) use ( $test ) {
+			if ( $test->schedule_throws ) {
+				throw new \RuntimeException( 'Error saving action' );
+			}
 			if ( $test->schedule_return ) {
 				$test->jobs[] = array( 'hook' => $hook, 'args' => $args, 'group' => $group, 'when' => $when );
 			}
