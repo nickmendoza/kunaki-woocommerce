@@ -1,9 +1,10 @@
 <?php
 // Runs inside WP-CLI in the disposable container. Args via env SCEN.
 function t($n,$ok,$x=''){ echo ($ok?'PASS':'FAIL')." [".(\Automattic\WooCommerce\Utilities\OrderUtil::custom_orders_table_usage_is_enabled()?'hpos':'legacy')."] $n".($ok?'':"  -- ".print_r($x,true))."\n"; }
-function mk($pid,$vid=0,$status=null){ $o=wc_create_order(); $p=wc_get_product($vid?:$pid); $o->add_product($p,1);
+// $kunaki_line=false builds what an order placed with the plugin inactive looks like: another shipping method, no Kunaki choice.
+function mk($pid,$vid=0,$status=null,$kunaki_line=true){ $o=wc_create_order(); $p=wc_get_product($vid?:$pid); $o->add_product($p,1);
  $o->set_shipping_first_name('A');$o->set_shipping_last_name('B');$o->set_shipping_address_1('1 St');$o->set_shipping_city('NYC');$o->set_shipping_state('NY');$o->set_shipping_postcode('10001');$o->set_shipping_country('US');
- $s=new WC_Order_Item_Shipping(); $s->set_method_id('kunaki_shipping'); $s->set_method_title('USPS'); $s->add_meta_data('kunaki_shipping_description','USPS First Class Mail'); $o->add_item($s); $o->save(); if($status){$o->set_status($status);$o->save();} return $o->get_id(); }
+ $s=new WC_Order_Item_Shipping(); if($kunaki_line){ $s->set_method_id('kunaki_shipping'); $s->set_method_title('USPS'); $s->add_meta_data('kunaki_shipping_description','USPS First Class Mail'); } else { $s->set_method_id('flat_rate'); $s->set_method_title('Flat rate'); } $o->add_item($s); $o->save(); if($status){$o->set_status($status);$o->save();} return $o->get_id(); }
 function run_queue(){ $n=0; foreach(as_get_scheduled_actions(['hook'=>'kunaki_wc_submit_order','group'=>'kunaki-woocommerce','status'=>'pending','per_page'=>-1],'ids') as $id){ ActionScheduler::runner()->process_action($id,'stage'); $n++; } return $n; }
 function log_has($s){ foreach(get_option('mock_kunaki_log',[]) as $b) if(strpos($b,$s)!==false) return true; return false; }
 $ids=get_option('stage_ids');
@@ -243,6 +244,102 @@ case 'listener':
  $a=$spent(); $b=$spent(); $threw='';
  try { do_action('kunaki_wc_retry_failed_orders'); } catch(Throwable $e){ $threw=$e->getMessage(); }
  t('retry run finishes when an order listener throws', ''===$threw && 'yes'===wc_get_order($a)->get_meta('_kunaki_fulfillment_exhausted') && 'yes'===wc_get_order($b)->get_meta('_kunaki_fulfillment_exhausted'), [$threw,wc_get_order($a)->get_meta('_kunaki_fulfillment_exhausted'),wc_get_order($b)->get_meta('_kunaki_fulfillment_exhausted')]);
+ break;
+case 'catchup1':
+ // The plugin is deactivated while this runs, so no plugin class may be used here.
+ t('catch-up: the plugin is inactive while these orders are paid', !class_exists('Kunaki_Order_Fulfillment'));
+ foreach(wc_get_orders(['status'=>['processing'],'limit'=>-1,'return'=>'ids']) as $x) wc_get_order($x)->update_status('cancelled');
+ update_option('mock_kunaki_mode','ok'); delete_option('kunaki_wc_circuit_breaker'); delete_option('mock_kunaki_two_rates'); delete_option('kunaki_wc_catch_up_notice');
+ // Backdate the start of the gap so the older orders below fall inside it.
+ update_option('kunaki_wc_catch_up',['from'=>time()-60*DAY_IN_SECONDS],false);
+ $paid=function($id,$ago){ $o=wc_get_order($id); $o->set_date_paid(time()-$ago); $o->save(); return $id; };
+ $c=[];
+ $c['a']=mk($ids['disc'],0,'processing');                               // paid now, Kunaki shipping from checkout
+ $c['b']=$paid(mk($ids['disc'],0,'processing'),3*DAY_IN_SECONDS);       // paid 3 days ago
+ $c['c']=$paid(mk($ids['disc'],0,'processing'),40*DAY_IN_SECONDS);      // older than the scan looks
+ $c['d']=mk($ids['album'],$ids['var']['Sticker'],'processing');         // no discs
+ $c['e']=mk($ids['disc'],0,'processing',false);                         // paid now, placed while inactive: no Kunaki shipping
+ $c['f']=mk($ids['disc'],0,'processing',false);
+ // Paid now with Kunaki shipping, so the scan would send these. catchup2 gives each a reason to be left alone.
+ $c['h']=mk($ids['disc'],0,'processing'); $c['i']=mk($ids['disc'],0,'processing'); $c['j']=mk($ids['disc'],0,'processing');
+ // What 1.4.0 left on an order with no Kunaki shipping line: failed for good, never told what Retry would do.
+ $c['g']=mk($ids['disc'],0,'processing',false); $o=wc_get_order($c['g']); $o->update_meta_data('_kunaki_fulfillment_exhausted','yes'); $o->update_meta_data('_kunaki_fulfillment_last_error','No matching Kunaki shipping method found on this order.'); $o->save();
+ update_option('stage_catchup',$c,false); delete_option('mock_kunaki_log');
+ $a=wc_get_order($c['a']);
+ t('catch-up: an order paid while inactive gets a paid date', (bool)$a->get_date_paid());
+ t('catch-up: an order paid while inactive has no Kunaki record and nothing queued', ''===(string)$a->get_meta('_kunaki_submitted') && ''===(string)$a->get_meta('_kunaki_fulfillment_error') && !as_next_scheduled_action('kunaki_wc_submit_order',['order_id'=>$c['a']],'kunaki-woocommerce'), $a->get_meta_data());
+ break;
+case 'catchup2':
+ $c=get_option('stage_catchup'); $f=new Kunaki_Order_Fulfillment();
+ $m=function($id,$k){ return (string)wc_get_order($id)->get_meta($k); };
+ $kmeta=function($id){ return array_values(array_filter(array_map(fn($d)=>$d->key,wc_get_order($id)->get_meta_data()),fn($k)=>0===strpos($k,'_kunaki'))); };
+ $pending=function(){ return as_get_scheduled_actions(['hook'=>'kunaki_wc_send_alert','status'=>'pending','per_page'=>-1],'ids'); };
+ $log=function(){ return get_option('mock_kunaki_log',[]); };
+ $listed=function(){ return array_map(fn($o)=>$o->get_id(),(new Kunaki_Retry_Queue())->get_failed_orders()); };
+ // The alerts case leaves alerts off. Turn email alerts on so the alert for a held order is exercised.
+ update_option('kunaki_wc_alert_email_address','ops@example.com'); update_option('kunaki_wc_alert_email_enabled','yes'); update_option('kunaki_wc_alerts_enabled','yes');
+ // Three orders the scan must leave alone, for reasons unit tests can only fake: a submission queued in
+ // Action Scheduler, a held submission lock, and a durable "submitted" marker.
+ global $wpdb; $row=function($name,$value) use($wpdb){ $wpdb->query($wpdb->prepare("INSERT IGNORE INTO {$wpdb->options} (option_name, option_value, autoload) VALUES (%s, %s, 'no')",$name,$value)); };
+ as_enqueue_async_action('kunaki_wc_submit_order',['order_id'=>$c['h']],'kunaki-woocommerce'); $row('_kunaki_lock_'.$c['i'],(string)(time()+300)); $row('_kunaki_submitted_'.$c['j'],'KUNHAND');
+ $untouched=function() use($c,$kmeta){ return !$kmeta($c['h']) && !$kmeta($c['i']) && !$kmeta($c['j']); };
+ do_action('kunaki_wc_retry_failed_orders');
+ t('catch-up: recent order with Kunaki shipping is sent automatically', 'yes'===$m($c['a'],'_kunaki_submitted') && log_has('<Order>'), $kmeta($c['a']));
+ $an=implode("\n",array_map(fn($n)=>$n->content,wc_get_order_notes(['order_id'=>$c['a']])));
+ t('catch-up: that order went through the scan, then the retry cron', false!==strpos($an,'It will be sent to Kunaki automatically') && false!==strpos($an,'Order submitted to Kunaki successfully'), $an);
+ t('catch-up: orders with a queued submission, a lock or a durable marker are left alone', $untouched(), [$kmeta($c['h']),$kmeta($c['i']),$kmeta($c['j'])]);
+ t('catch-up: order paid 3 days ago is held, not sent', ''===$m($c['b'],'_kunaki_submitted') && 'yes'===$m($c['b'],'_kunaki_fulfillment_exhausted') && false!==strpos($m($c['b'],'_kunaki_fulfillment_last_error'),'more than a day'), $kmeta($c['b']));
+ foreach(['e','f'] as $k) t("catch-up: recent order ($k) with no Kunaki shipping is held, not sent", ''===$m($c[$k],'_kunaki_submitted') && 'yes'===$m($c[$k],'_kunaki_fulfillment_exhausted') && 'yes'===$m($c[$k],'_kunaki_needs_shipping') && false!==strpos($m($c[$k],'_kunaki_fulfillment_last_error'),'cheapest'), $kmeta($c[$k]));
+ t('catch-up: only the one order was sent, and Kunaki was never asked for rates', 1===count($log()) && !log_has('<ShippingOptions'), $log());
+ t('catch-up: order paid 40 days ago is outside the window', !$kmeta($c['c']), $kmeta($c['c']));
+ t('catch-up: order with no discs is ignored', !$kmeta($c['d']), $kmeta($c['d']));
+ t('catch-up: order that already had a record is left alone', 'No matching Kunaki shipping method found on this order.'===$m($c['g'],'_kunaki_fulfillment_last_error') && ''===$m($c['g'],'_kunaki_needs_shipping'), $kmeta($c['g']));
+ t('catch-up: held orders are on the Failures page', !array_diff([$c['b'],$c['e'],$c['f']],$listed()), $listed());
+ t('catch-up: the notice counts the 3 held orders', 3===(int)get_option('kunaki_wc_catch_up_notice'), get_option('kunaki_wc_catch_up_notice'));
+ t('catch-up: the scan is finished', false===get_option('kunaki_wc_catch_up'), get_option('kunaki_wc_catch_up'));
+ // One alert for the three held orders, not one each. No mail server here, so the mail is captured, and so is a Slack post if the alerts case left Slack on.
+ $GLOBALS['mails']=[]; add_filter('pre_wp_mail',function($r,$a){ if('ops@example.com'===($a['to']??'')) $GLOBALS['mails'][]=$a; return true; },10,2);
+ add_filter('pre_http_request',function($r,$args,$url){ return false===strpos($url,'slack') ? $r : ['headers'=>[],'body'=>'ok','response'=>['code'=>200,'message'=>'OK'],'cookies'=>[]]; },5,3);
+ $q=$pending(); $qa=$q ? ActionScheduler::store()->fetch_action(reset($q))->get_args() : [];
+ t('catch-up: the held orders raise one alert between them, not one each', 1===count($q) && 'catch_up_orders_held'===($qa[0]??''), [count($q),$qa]);
+ foreach($q as $x) ActionScheduler::runner()->process_action($x,'stage');
+ $mail=$GLOBALS['mails'][0]??['subject'=>'','message'=>''];
+ t('catch-up: that alert says how many orders are waiting and links to the Failures page', 1===count($GLOBALS['mails']) && false!==strpos($mail['subject'],'3 orders are waiting to be sent to Kunaki') && false!==strpos($mail['message'],'3 disc orders were paid') && false!==strpos($mail['message'],'page=kunaki-failed-orders') && !$pending(), $GLOBALS['mails']);
+ $snap=function() use($c,$m){ $s=[]; foreach(['b','e','f'] as $k) foreach(['_kunaki_submitted','_kunaki_fulfillment_exhausted','_kunaki_fulfillment_last_error','_kunaki_fulfillment_failed_at','_kunaki_fulfillment_error','_kunaki_chosen_shipping'] as $key) $s[]=$m($c[$k],$key); return $s; };
+ // Replay the whole window, as a scan that was interrupted and started again would.
+ $s1=$snap(); $n1=count($log()); update_option('kunaki_wc_catch_up',['from'=>time()-60*DAY_IN_SECONDS,'to'=>time(),'cursor'=>0,'sent'=>0,'held'=>0],false); do_action('kunaki_wc_retry_failed_orders');
+ t('catch-up: scanning the same window again changes nothing', $s1===$snap() && $n1===count($log()) && 3===(int)get_option('kunaki_wc_catch_up_notice') && false===get_option('kunaki_wc_catch_up') && $untouched() && !$kmeta($c['c']) && !$kmeta($c['d']), [$n1,count($log()),get_option('kunaki_wc_catch_up_notice'),get_option('kunaki_wc_catch_up')]);
+ // Alerts are still on here, so this would catch a second alert for orders that were already reported.
+ t('catch-up: the second scan raises no alert', !$pending() && 1===count($GLOBALS['mails']), [count($pending()),count($GLOBALS['mails'])]);
+ update_option('kunaki_wc_alerts_enabled','no');
+ // Done with the three orders that were only there to be skipped.
+ foreach(as_get_scheduled_actions(['hook'=>'kunaki_wc_submit_order','status'=>'pending','per_page'=>-1],'ids') as $q) ActionScheduler::store()->cancel_action($q);
+ $wpdb->delete($wpdb->options,['option_name'=>'_kunaki_lock_'.$c['i']]); $wpdb->delete($wpdb->options,['option_name'=>'_kunaki_submitted_'.$c['j']]);
+ foreach(['h','i','j'] as $k) wc_get_order($c[$k])->update_status('cancelled');
+ // Retry on the held order that has shipping from checkout.
+ delete_option('mock_kunaki_log'); $r=$f->prepare_for_retry($c['b']);
+ t('catch-up: Retry sends the order held for its age', true===$r && 'yes'===$m($c['b'],'_kunaki_submitted'), $r);
+ t('catch-up: Retry on an order with Kunaki shipping makes no rate lookup', 1===count($log()) && log_has('<Order>') && !log_has('<ShippingOptions'), $log());
+ // Retry while Kunaki can't be reached.
+ update_option('mock_kunaki_mode','down'); $was=[$m($c['f'],'_kunaki_fulfillment_exhausted'),$m($c['f'],'_kunaki_fulfillment_last_error'),$m($c['f'],'_kunaki_fulfillment_failed_at')]; $r=$f->prepare_for_retry($c['f']);
+ t('catch-up: Retry with Kunaki unreachable sends nothing and says why', is_wp_error($r) && ''!==$r->get_error_message() && ''===$m($c['f'],'_kunaki_submitted'), $r);
+ t('catch-up: that order keeps its record and stays on the Failures page', 'yes'===$was[0] && $was===[$m($c['f'],'_kunaki_fulfillment_exhausted'),$m($c['f'],'_kunaki_fulfillment_last_error'),$m($c['f'],'_kunaki_fulfillment_failed_at')] && ''===$m($c['f'],'_kunaki_chosen_shipping') && in_array($c['f'],$listed(),true), [$kmeta($c['f']),$listed()]);
+ update_option('mock_kunaki_mode','ok'); delete_option('kunaki_wc_circuit_breaker');
+ // Retry on an order with no Kunaki shipping: the dearer rate is listed first.
+ update_option('mock_kunaki_two_rates',1); delete_option('mock_kunaki_log'); $r=$f->prepare_for_retry($c['e']); $l=$log();
+ t('catch-up: Retry sends the order that had no Kunaki shipping', true===$r && 'yes'===$m($c['e'],'_kunaki_submitted'), $r);
+ t('catch-up: it asks Kunaki for rates, then orders', 2===count($l) && 0===strpos($l[0],'<ShippingOptions') && 0===strpos($l[1],'<Order>'), $l);
+ t('catch-up: the cheaper rate is used although it is listed second', isset($l[1]) && false!==strpos($l[1],'<ShippingDescription>USPS First Class Mail</ShippingDescription>') && false===strpos($l[1],'UPS Ground'), $l);
+ t('catch-up: the choice is stored on the order', 'USPS First Class Mail'===$m($c['e'],'_kunaki_chosen_shipping'), $kmeta($c['e']));
+ $notes=implode("\n",array_map(fn($n)=>$n->content,wc_get_order_notes(['order_id'=>$c['e']])));
+ t('catch-up: the order note names the option, its delivery time and its price', false!==strpos($notes,'Sending it with the cheapest Kunaki option for its address: USPS First Class Mail (2-5 business days), Kunaki price 6.29.'), $notes);
+ // Retry on the failure from before this version: its message never said Retry would choose shipping.
+ delete_option('mock_kunaki_log'); $r=$f->prepare_for_retry($c['g']);
+ t('catch-up: first Retry on an older failure sends nothing and explains', is_wp_error($r) && false!==strpos($r->get_error_message(),'cheapest') && !$log() && ''===$m($c['g'],'_kunaki_submitted') && 'yes'===$m($c['g'],'_kunaki_needs_shipping'), [$r,$log()]);
+ $r=$f->prepare_for_retry($c['g']); t('catch-up: second Retry sends it', true===$r && 'yes'===$m($c['g'],'_kunaki_submitted'), $r);
+ $r=$f->prepare_for_retry($c['f']); t('catch-up: the order whose lookup failed is sent by a later Retry', true===$r && 'yes'===$m($c['f'],'_kunaki_submitted'), $r);
+ delete_option('mock_kunaki_two_rates');
+ t('catch-up: no alert jobs are left queued', !$pending(), count($pending()));
  break;
 case 'alerts2':
  t('deactivation cancels queued alerts', !as_get_scheduled_actions(['hook'=>'kunaki_wc_send_alert','status'=>'pending','per_page'=>-1],'ids'));

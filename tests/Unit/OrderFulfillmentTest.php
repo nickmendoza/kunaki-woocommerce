@@ -179,9 +179,14 @@ class OrderFulfillmentTest extends KunakiTestCase {
 		Functions\expect( 'get_option' )->zeroOrMoreTimes()->andReturn( 'no' );
 
 		$order->shouldReceive( 'get_shipping_methods' )->andReturn( array() );
+		$order->shouldReceive( 'get_meta' )->with( '_kunaki_chosen_shipping' )->andReturn( '' );
 		$order->shouldReceive( 'get_meta' )->with( '_kunaki_fulfillment_attempts' )->andReturn( '' );
 		// Permanent: message goes to LAST_ERROR so the order stays out of the retry query.
-		$order->shouldReceive( 'update_meta_data' )->with( '_kunaki_fulfillment_last_error', Mockery::pattern( '/No matching Kunaki shipping/' ) )->once();
+		// It says what Retry will do, and the flag records that it has been said.
+		$order->shouldReceive( 'update_meta_data' )->with( '_kunaki_fulfillment_last_error', Mockery::pattern( '/No matching Kunaki shipping.*cheapest/' ) )->once();
+		$order->shouldReceive( 'update_meta_data' )->with( '_kunaki_needs_shipping', 'yes' )->once();
+		// Nothing automatic asks Kunaki for shipping options, or anything else.
+		Functions\expect( 'wp_remote_post' )->never();
 		$order->shouldNotReceive( 'update_meta_data' )->with( '_kunaki_fulfillment_error', Mockery::any() );
 		$order->shouldReceive( 'delete_meta_data' )->with( '_kunaki_fulfillment_error' )->once();
 		$order->shouldReceive( 'update_meta_data' )->with( '_kunaki_fulfillment_failed_at', Mockery::type( 'string' ) )->once();
@@ -1639,6 +1644,7 @@ class OrderFulfillmentTest extends KunakiTestCase {
 		Functions\expect( 'get_option' )->zeroOrMoreTimes()->andReturn( 'no' );
 
 		$order->shouldReceive( 'get_shipping_methods' )->andReturn( array() );
+		$order->shouldReceive( 'get_meta' )->with( '_kunaki_chosen_shipping' )->andReturn( '' );
 		$order->shouldReceive( 'get_meta' )->with( '_kunaki_fulfillment_attempts' )->andReturn( '' );
 		$order->shouldReceive( 'update_meta_data' )
 			->with( '_kunaki_fulfillment_exhausted', 'yes' )->once();
@@ -1673,7 +1679,10 @@ class OrderFulfillmentTest extends KunakiTestCase {
 		Functions\expect( 'get_option' )->zeroOrMoreTimes()->andReturn( 'no' );
 
 		$order->shouldReceive( 'get_shipping_methods' )->andReturn( array() );
+		$order->shouldReceive( 'get_meta' )->with( '_kunaki_chosen_shipping' )->andReturn( '' );
 		$order->shouldReceive( 'get_meta' )->with( '_kunaki_fulfillment_attempts' )->andReturn( '' );
+		// Set on the order just before the save that fails; read to write the marker.
+		$order->shouldReceive( 'get_meta' )->with( '_kunaki_needs_shipping' )->andReturn( 'yes' );
 		$order->shouldReceive( 'update_meta_data' )->withAnyArgs()->zeroOrMoreTimes();
 		$order->shouldReceive( 'delete_meta_data' )->withAnyArgs()->zeroOrMoreTimes();
 		$order->shouldReceive( 'save_meta_data' )->once()->andThrow( new \RuntimeException( 'DB down' ) );
@@ -1751,6 +1760,7 @@ class OrderFulfillmentTest extends KunakiTestCase {
 		$order->shouldReceive( 'get_status' )->andReturn( 'processing' );
 		$order->shouldReceive( 'get_meta' )->with( '_kunaki_order_status' )->andReturn( '' );
 		$order->shouldReceive( 'get_meta' )->with( '_kunaki_submitted' )->andReturn( '' );
+		$order->shouldReceive( 'get_meta' )->with( '_kunaki_needs_shipping' )->andReturn( '' );
 		$order->shouldReceive( 'delete_meta_data' )->times( 3 );
 		$order->shouldReceive( 'save' )->andThrow( new \Exception( 'DB error' ) );
 
@@ -1760,6 +1770,485 @@ class OrderFulfillmentTest extends KunakiTestCase {
 
 		$this->assertInstanceOf( WP_Error::class, $result );
 		$this->assertSame( 'save_failed', $result->get_error_code() );
+	}
+
+	// --- Shipping chosen at Retry ---
+
+	public function test_stored_shipping_choice_is_used_when_the_order_has_no_kunaki_shipping_line() {
+		// An admin clicked Retry earlier and accepted this option. The submission
+		// then failed for a temporary reason, and the retry cron is sending it now.
+		$order = $this->create_submittable_order();
+		Functions\expect( 'get_post_meta' )->with( 42, '_kunaki_product_id', true )->andReturn( 'PXZZ111111' );
+		$this->setup_address_on_order( $order );
+		$order->shouldReceive( 'get_shipping_methods' )->andReturn( array() );
+		$order->shouldReceive( 'get_meta' )->with( '_kunaki_chosen_shipping' )->andReturn( 'USPS First Class Mail' );
+
+		$sent = '';
+		// Once: the order itself. Nothing automatic asks Kunaki for shipping options.
+		Functions\expect( 'wp_remote_post' )->once()->andReturnUsing( function ( $url, $args ) use ( &$sent ) {
+			$sent = $args['body'];
+			return array( 'body' => '<Response><ErrorCode>0</ErrorCode><OrderId>KUN999</OrderId></Response>' );
+		} );
+		Functions\expect( 'wp_remote_retrieve_response_code' )->andReturn( 200 );
+		Functions\expect( 'wp_remote_retrieve_body' )->andReturn(
+			'<Response><ErrorCode>0</ErrorCode><OrderId>KUN999</OrderId></Response>'
+		);
+		Functions\expect( 'get_option' )->zeroOrMoreTimes()->andReturn( 'no' );
+
+		$order->shouldReceive( 'update_meta_data' )->with( '_kunaki_submitted', 'yes' )->once();
+		$order->shouldReceive( 'update_meta_data' )->withAnyArgs()->zeroOrMoreTimes();
+		$order->shouldReceive( 'delete_meta_data' )->withAnyArgs()->zeroOrMoreTimes();
+		$order->shouldReceive( 'save' )->once();
+		$order->shouldReceive( 'add_order_note' )->zeroOrMoreTimes();
+
+		$this->fulfillment->handle_order_processing( 100, $order );
+
+		$this->assertStringStartsWith( '<Order>', $sent );
+		$this->assertStringContainsString( '<ShippingDescription>USPS First Class Mail</ShippingDescription>', $sent );
+	}
+
+	// --- Orders paid while the plugin was inactive ---
+
+	public function test_missed_order_that_is_recent_and_has_kunaki_shipping_is_handed_to_the_retry_cron() {
+		$order = $this->create_missed_order( true );
+		$order->shouldReceive( 'get_meta' )->with( Kunaki_Order_Fulfillment::META_FULFILLMENT_ATTEMPTS )->andReturn( '' );
+		$order->shouldReceive( 'update_meta_data' )->with( Kunaki_Order_Fulfillment::META_FULFILLMENT_FAILED, Mockery::type( 'string' ) )->once();
+		$order->shouldReceive( 'update_meta_data' )->with( Kunaki_Order_Fulfillment::META_FULFILLMENT_ERROR, Mockery::pattern( '/inactive.*sent to Kunaki automatically/' ) )->once();
+		// The plugin being off isn't Kunaki's fault, so it must not use up a retry attempt.
+		$order->shouldNotReceive( 'update_meta_data' )->with( Kunaki_Order_Fulfillment::META_FULFILLMENT_ATTEMPTS, Mockery::any() );
+		$order->shouldNotReceive( 'update_meta_data' )->with( Kunaki_Order_Fulfillment::META_FULFILLMENT_EXHAUSTED, Mockery::any() );
+		$order->shouldNotReceive( 'update_meta_data' )->with( Kunaki_Order_Fulfillment::META_NEEDS_SHIPPING, Mockery::any() );
+		$order->shouldReceive( 'save_meta_data' )->once();
+		$order->shouldReceive( 'add_order_note' )->once();
+
+		Actions\expectDone( 'kunaki_wc_order_needs_attention' )->never();
+		// Recording the order sends nothing; the retry cron does that.
+		Functions\expect( 'wp_remote_post' )->never();
+
+		$this->assertSame( 'sent', $this->fulfillment->record_missed_order( $order, false ) );
+	}
+
+	public function test_missed_order_that_waited_too_long_is_held_for_a_click() {
+		$order = $this->create_missed_order( true );
+		$order->shouldReceive( 'get_meta' )->with( Kunaki_Order_Fulfillment::META_FULFILLMENT_ATTEMPTS )->andReturn( '' );
+		$order->shouldReceive( 'update_meta_data' )->with( Kunaki_Order_Fulfillment::META_FULFILLMENT_FAILED, Mockery::type( 'string' ) )->once();
+		$order->shouldReceive( 'update_meta_data' )->with( Kunaki_Order_Fulfillment::META_FULFILLMENT_EXHAUSTED, 'yes' )->once();
+		$order->shouldReceive( 'update_meta_data' )->with( Kunaki_Order_Fulfillment::META_FULFILLMENT_LAST_ERROR, Mockery::pattern( '/more than a day.*retry it to send it to Kunaki/' ) )->once();
+		// Kept out of the retry cron's query, so it is never sent without a click.
+		$order->shouldNotReceive( 'update_meta_data' )->with( Kunaki_Order_Fulfillment::META_FULFILLMENT_ERROR, Mockery::any() );
+		$order->shouldNotReceive( 'update_meta_data' )->with( Kunaki_Order_Fulfillment::META_FULFILLMENT_ATTEMPTS, Mockery::any() );
+		// It has shipping from checkout, so Retry has nothing to choose.
+		$order->shouldNotReceive( 'update_meta_data' )->with( Kunaki_Order_Fulfillment::META_NEEDS_SHIPPING, Mockery::any() );
+		$order->shouldReceive( 'delete_meta_data' )->with( Kunaki_Order_Fulfillment::META_FULFILLMENT_ERROR )->once();
+		$order->shouldReceive( 'save_meta_data' )->once();
+		$order->shouldReceive( 'add_order_note' )->once();
+
+		// No alert of its own: the scan raises one for all the orders it holds.
+		Actions\expectDone( 'kunaki_wc_order_needs_attention' )->never();
+		Functions\expect( 'wp_remote_post' )->never();
+
+		$this->assertSame( 'held', $this->fulfillment->record_missed_order( $order, true ) );
+	}
+
+	/**
+	 * @dataProvider waited_too_long_or_not
+	 */
+	public function test_missed_order_without_kunaki_shipping_is_always_held( $waited_too_long ) {
+		// Placed while the plugin was inactive: the customer picked another shipping method.
+		$order = $this->create_missed_order( false );
+		$order->shouldReceive( 'get_meta' )->with( Kunaki_Order_Fulfillment::META_FULFILLMENT_ATTEMPTS )->andReturn( '' );
+		// The message says what Retry will do, and the flag records that it has.
+		$order->shouldReceive( 'update_meta_data' )->with( Kunaki_Order_Fulfillment::META_NEEDS_SHIPPING, 'yes' )->once();
+		$order->shouldReceive( 'update_meta_data' )->with( Kunaki_Order_Fulfillment::META_FULFILLMENT_LAST_ERROR, Mockery::pattern( '/no Kunaki shipping option.*cheapest Kunaki shipping option/' ) )->once();
+		$order->shouldReceive( 'update_meta_data' )->with( Kunaki_Order_Fulfillment::META_FULFILLMENT_FAILED, Mockery::type( 'string' ) )->once();
+		$order->shouldReceive( 'update_meta_data' )->with( Kunaki_Order_Fulfillment::META_FULFILLMENT_EXHAUSTED, 'yes' )->once();
+		$order->shouldNotReceive( 'update_meta_data' )->with( Kunaki_Order_Fulfillment::META_FULFILLMENT_ERROR, Mockery::any() );
+		// Nothing is chosen here: that needs a click.
+		$order->shouldNotReceive( 'update_meta_data' )->with( Kunaki_Order_Fulfillment::META_CHOSEN_SHIPPING, Mockery::any() );
+		$order->shouldReceive( 'delete_meta_data' )->with( Kunaki_Order_Fulfillment::META_FULFILLMENT_ERROR )->once();
+		$order->shouldReceive( 'save_meta_data' )->once();
+		$order->shouldReceive( 'add_order_note' )->once();
+
+		Actions\expectDone( 'kunaki_wc_order_needs_attention' )->never();
+		Functions\expect( 'wp_remote_post' )->never();
+
+		$this->assertSame( 'held', $this->fulfillment->record_missed_order( $order, $waited_too_long ) );
+	}
+
+	public function waited_too_long_or_not() {
+		return array(
+			'paid an hour ago' => array( false ),
+			'paid days ago'    => array( true ),
+		);
+	}
+
+	// --- A permanent failure stays permanent when its save fails ---
+
+	public function test_marker_for_an_order_with_no_shipping_choice_also_carries_the_flag() {
+		$order = $this->create_submittable_order();
+		Functions\expect( 'get_post_meta' )->with( 42, '_kunaki_product_id', true )->andReturn( 'PXZZ111111' );
+		Functions\expect( 'get_option' )->zeroOrMoreTimes()->andReturn( 'no' );
+		$order->shouldReceive( 'get_shipping_methods' )->andReturn( array() );
+		$order->shouldReceive( 'get_meta' )->with( '_kunaki_chosen_shipping' )->andReturn( '' );
+		$order->shouldReceive( 'get_meta' )->with( '_kunaki_fulfillment_attempts' )->andReturn( '' );
+		// Set on the order in memory just before the save that fails.
+		$order->shouldReceive( 'update_meta_data' )->with( '_kunaki_needs_shipping', 'yes' )->once();
+		$order->shouldReceive( 'get_meta' )->with( '_kunaki_needs_shipping' )->andReturn( 'yes' );
+		$order->shouldReceive( 'update_meta_data' )->withAnyArgs()->zeroOrMoreTimes();
+		$order->shouldReceive( 'delete_meta_data' )->withAnyArgs()->zeroOrMoreTimes();
+		$order->shouldReceive( 'save_meta_data' )->once()->andThrow( new \RuntimeException( 'DB down' ) );
+		$order->shouldReceive( 'add_order_note' )->zeroOrMoreTimes();
+		$rows = $this->mock_wpdb_with_rows();
+
+		$this->fulfillment->handle_order_processing( 100, $order );
+
+		$this->assertArrayHasKey( '_kunaki_failed_100', $rows->rows );
+		$this->assertStringStartsWith(
+			Kunaki_Order_Fulfillment::PERMANENT_NEEDS_SHIPPING_MARKER_PREFIX . 'No matching Kunaki shipping',
+			$rows->rows['_kunaki_failed_100']
+		);
+	}
+
+	public function test_marker_for_a_permanent_failure_records_that_it_was_permanent() {
+		// Held for its age. It has shipping from checkout, so Retry has nothing to choose.
+		$order = $this->create_missed_order( true );
+		$order->shouldReceive( 'get_meta' )->with( Kunaki_Order_Fulfillment::META_FULFILLMENT_ATTEMPTS )->andReturn( '' );
+		$order->shouldReceive( 'get_meta' )->with( Kunaki_Order_Fulfillment::META_NEEDS_SHIPPING )->andReturn( '' );
+		$order->shouldReceive( 'update_meta_data' )->withAnyArgs()->zeroOrMoreTimes();
+		$order->shouldReceive( 'delete_meta_data' )->withAnyArgs()->zeroOrMoreTimes();
+		$order->shouldReceive( 'save_meta_data' )->once()->andThrow( new \RuntimeException( 'DB down' ) );
+		$order->shouldReceive( 'add_order_note' )->zeroOrMoreTimes();
+		$rows = $this->mock_wpdb_with_rows();
+
+		$this->assertSame( 'held', $this->fulfillment->record_missed_order( $order, true ) );
+
+		// Also that the scan has reported it, so restoring it raises no alert.
+		$this->assertStringStartsWith(
+			Kunaki_Order_Fulfillment::PERMANENT_MARKER_PREFIX . Kunaki_Order_Fulfillment::NO_ALERT_MARKER_PREFIX . 'This order was paid while the Kunaki plugin was inactive',
+			$rows->rows['_kunaki_failed_100']
+		);
+	}
+
+	/**
+	 * @dataProvider markers_for_orders_the_scan_held
+	 */
+	public function test_recover_marker_for_an_order_the_scan_held_raises_no_alert( $prefix, $flagged ) {
+		$order = Mockery::mock( 'WC_Order' );
+		$order->shouldReceive( 'get_id' )->andReturn( 100 );
+		$order->shouldReceive( 'update_meta_data' )->with( '_kunaki_fulfillment_exhausted', 'yes' )->once();
+		// Neither prefix is part of the message the admin reads.
+		$order->shouldReceive( 'update_meta_data' )->with( '_kunaki_fulfillment_last_error', 'Held for review' )->once();
+		$order->shouldReceive( 'update_meta_data' )->with( '_kunaki_fulfillment_failed_at', Mockery::type( 'string' ) )->once();
+		$order->shouldReceive( 'update_meta_data' )->with( '_kunaki_needs_shipping', 'yes' )->times( $flagged ? 1 : 0 );
+		$order->shouldReceive( 'delete_meta_data' )->with( '_kunaki_fulfillment_error' )->once();
+		$order->shouldReceive( 'save_meta_data' )->once();
+
+		$marker = (object) array(
+			'option_name'  => '_kunaki_failed_100',
+			'option_value' => $prefix . Kunaki_Order_Fulfillment::NO_ALERT_MARKER_PREFIX . 'Held for review',
+		);
+
+		$wpdb = Mockery::mock( 'wpdb' );
+		$wpdb->options = 'wp_options';
+		$wpdb->shouldReceive( 'prepare' )->andReturnUsing( function () { return 'prepared_query'; } );
+		$wpdb->shouldReceive( 'esc_like' )->andReturnUsing( function ( $text ) { return $text; } );
+		$wpdb->shouldReceive( 'get_results' )->once()->andReturn( array( $marker ) );
+		$wpdb->shouldReceive( 'delete' )
+			->with( 'wp_options', array( 'option_name' => '_kunaki_failed_100' ) )->once();
+		$GLOBALS['wpdb'] = $wpdb;
+
+		Functions\expect( 'wc_get_order' )->with( 100 )->andReturn( $order );
+		Functions\expect( 'wc_get_orders' )->once()->andReturn( array() );
+		Functions\expect( 'get_option' )->with( 'kunaki_wc_max_retries', 3 )->andReturn( '3' );
+		Functions\expect( 'get_option' )->zeroOrMoreTimes()->andReturn( 'no' );
+
+		// The scan's one alert already covers this order.
+		Actions\expectDone( 'kunaki_wc_order_needs_attention' )->never();
+
+		$this->fulfillment->retry_failed_orders();
+	}
+
+	public function markers_for_orders_the_scan_held() {
+		return array(
+			'held for its age'           => array( Kunaki_Order_Fulfillment::PERMANENT_MARKER_PREFIX, false ),
+			'held for a shipping choice' => array( Kunaki_Order_Fulfillment::PERMANENT_NEEDS_SHIPPING_MARKER_PREFIX, true ),
+		);
+	}
+
+	public function test_retryable_failure_marker_holds_the_bare_message() {
+		$order = $this->create_full_order_mock( 'PXZZ111111' );
+		Functions\expect( 'wp_remote_post' )->once()
+			->andReturn( new \WP_Error( 'timeout', 'Connection timed out' ) );
+		Functions\expect( 'get_option' )->zeroOrMoreTimes()->andReturn( 'no' );
+		$order->shouldReceive( 'get_meta' )->with( '_kunaki_fulfillment_attempts' )->andReturn( '' );
+		$order->shouldReceive( 'update_meta_data' )->withAnyArgs()->zeroOrMoreTimes();
+		$order->shouldReceive( 'save_meta_data' )->once()->andThrow( new \RuntimeException( 'DB down' ) );
+		$order->shouldReceive( 'add_order_note' )->zeroOrMoreTimes();
+		$rows = $this->mock_wpdb_with_rows();
+
+		$this->fulfillment->handle_order_processing( 100, $order );
+
+		// Unchanged from before, so markers written by older versions still mean the same.
+		$this->assertSame( 'Connection timed out', $rows->rows['_kunaki_failed_100'] );
+	}
+
+	public function test_recover_permanent_marker_restores_the_order_as_held() {
+		$order = Mockery::mock( 'WC_Order' );
+		$order->shouldReceive( 'get_id' )->andReturn( 100 );
+		$order->shouldReceive( 'update_meta_data' )->with( '_kunaki_fulfillment_exhausted', 'yes' )->once();
+		$order->shouldReceive( 'update_meta_data' )->with( '_kunaki_fulfillment_last_error', 'Held for review' )->once();
+		$order->shouldReceive( 'update_meta_data' )->with( '_kunaki_fulfillment_failed_at', Mockery::type( 'string' ) )->once();
+		$order->shouldReceive( 'delete_meta_data' )->with( '_kunaki_fulfillment_error' )->once();
+		// Restored as retryable, the retry cron would send an order that is waiting for a click.
+		$order->shouldNotReceive( 'update_meta_data' )->with( '_kunaki_fulfillment_error', Mockery::any() );
+		$order->shouldNotReceive( 'update_meta_data' )->with( '_kunaki_fulfillment_attempts', Mockery::any() );
+		// It had shipping from checkout: nothing for Retry to choose.
+		$order->shouldNotReceive( 'update_meta_data' )->with( '_kunaki_needs_shipping', Mockery::any() );
+		$order->shouldReceive( 'save_meta_data' )->once();
+
+		$marker = (object) array(
+			'option_name'  => '_kunaki_failed_100',
+			'option_value' => Kunaki_Order_Fulfillment::PERMANENT_MARKER_PREFIX . 'Held for review',
+		);
+
+		$wpdb = Mockery::mock( 'wpdb' );
+		$wpdb->options = 'wp_options';
+		$wpdb->shouldReceive( 'prepare' )->andReturnUsing( function () { return 'prepared_query'; } );
+		$wpdb->shouldReceive( 'esc_like' )->andReturnUsing( function ( $text ) { return $text; } );
+		$wpdb->shouldReceive( 'get_results' )->once()->andReturn( array( $marker ) );
+		$wpdb->shouldReceive( 'delete' )
+			->with( 'wp_options', array( 'option_name' => '_kunaki_failed_100' ) )->once();
+		$GLOBALS['wpdb'] = $wpdb;
+
+		Functions\expect( 'wc_get_order' )->with( 100 )->andReturn( $order );
+		Functions\expect( 'wc_get_orders' )->once()->andReturn( array() );
+		Functions\expect( 'get_option' )->with( 'kunaki_wc_max_retries', 3 )->andReturn( '3' );
+		Functions\expect( 'get_option' )->zeroOrMoreTimes()->andReturn( 'no' );
+
+		// The alert was held back when the save failed, so it is due now.
+		Actions\expectDone( 'kunaki_wc_order_needs_attention' )
+			->once()->with( 100, 'permanent_failure', 'Held for review' );
+
+		$this->fulfillment->retry_failed_orders();
+	}
+
+	public function test_recover_marker_that_carries_the_shipping_flag_restores_the_flag() {
+		$order = Mockery::mock( 'WC_Order' );
+		$order->shouldReceive( 'get_id' )->andReturn( 100 );
+		$order->shouldReceive( 'update_meta_data' )->with( '_kunaki_fulfillment_exhausted', 'yes' )->once();
+		// The prefix is not part of the message the admin reads.
+		$order->shouldReceive( 'update_meta_data' )->with( '_kunaki_fulfillment_last_error', 'Retry it to send it with the cheapest option' )->once();
+		$order->shouldReceive( 'update_meta_data' )->with( '_kunaki_fulfillment_failed_at', Mockery::type( 'string' ) )->once();
+		// Without this the first Retry would only repeat the message's promise.
+		$order->shouldReceive( 'update_meta_data' )->with( '_kunaki_needs_shipping', 'yes' )->once();
+		$order->shouldReceive( 'delete_meta_data' )->with( '_kunaki_fulfillment_error' )->once();
+		$order->shouldNotReceive( 'update_meta_data' )->with( '_kunaki_fulfillment_error', Mockery::any() );
+		$order->shouldReceive( 'save_meta_data' )->once();
+
+		$marker = (object) array(
+			'option_name'  => '_kunaki_failed_100',
+			'option_value' => Kunaki_Order_Fulfillment::PERMANENT_NEEDS_SHIPPING_MARKER_PREFIX . 'Retry it to send it with the cheapest option',
+		);
+
+		$wpdb = Mockery::mock( 'wpdb' );
+		$wpdb->options = 'wp_options';
+		$wpdb->shouldReceive( 'prepare' )->andReturnUsing( function () { return 'prepared_query'; } );
+		$wpdb->shouldReceive( 'esc_like' )->andReturnUsing( function ( $text ) { return $text; } );
+		$wpdb->shouldReceive( 'get_results' )->once()->andReturn( array( $marker ) );
+		$wpdb->shouldReceive( 'delete' )
+			->with( 'wp_options', array( 'option_name' => '_kunaki_failed_100' ) )->once();
+		$GLOBALS['wpdb'] = $wpdb;
+
+		Functions\expect( 'wc_get_order' )->with( 100 )->andReturn( $order );
+		Functions\expect( 'wc_get_orders' )->once()->andReturn( array() );
+		Functions\expect( 'get_option' )->with( 'kunaki_wc_max_retries', 3 )->andReturn( '3' );
+		Functions\expect( 'get_option' )->zeroOrMoreTimes()->andReturn( 'no' );
+
+		Actions\expectDone( 'kunaki_wc_order_needs_attention' )
+			->once()->with( 100, 'permanent_failure', 'Retry it to send it with the cheapest option' );
+
+		$this->fulfillment->retry_failed_orders();
+	}
+
+	public function test_recover_permanent_marker_save_throws_leaves_marker_and_does_not_alert() {
+		$order = Mockery::mock( 'WC_Order' );
+		$order->shouldReceive( 'get_id' )->andReturn( 100 );
+		$order->shouldReceive( 'update_meta_data' )->withAnyArgs()->zeroOrMoreTimes();
+		$order->shouldReceive( 'delete_meta_data' )->withAnyArgs()->zeroOrMoreTimes();
+		$order->shouldReceive( 'save_meta_data' )->once()->andThrow( new \RuntimeException( 'DB down' ) );
+
+		$marker = (object) array(
+			'option_name'  => '_kunaki_failed_100',
+			'option_value' => Kunaki_Order_Fulfillment::PERMANENT_MARKER_PREFIX . 'Held for review',
+		);
+
+		$wpdb = Mockery::mock( 'wpdb' );
+		$wpdb->options = 'wp_options';
+		$wpdb->shouldReceive( 'prepare' )->andReturnUsing( function () { return 'prepared_query'; } );
+		$wpdb->shouldReceive( 'esc_like' )->andReturnUsing( function ( $text ) { return $text; } );
+		$wpdb->shouldReceive( 'get_results' )->once()->andReturn( array( $marker ) );
+		// Left for the next run.
+		$wpdb->shouldNotReceive( 'delete' );
+		$GLOBALS['wpdb'] = $wpdb;
+
+		Functions\expect( 'wc_get_order' )->with( 100 )->andReturn( $order );
+		Functions\expect( 'wc_get_orders' )->once()->andReturn( array() );
+		Functions\expect( 'get_option' )->with( 'kunaki_wc_max_retries', 3 )->andReturn( '3' );
+		Functions\expect( 'get_option' )->zeroOrMoreTimes()->andReturn( 'no' );
+
+		Actions\expectDone( 'kunaki_wc_order_needs_attention' )->never();
+
+		$this->fulfillment->retry_failed_orders();
+	}
+
+	/**
+	 * @dataProvider held_orders
+	 */
+	public function test_held_order_whose_save_fails_is_restored_as_it_was_recorded( $kunaki_line, $message_part, $flagged ) {
+		// The order keeps its meta here, so the test follows it through a save
+		// that fails, the durable marker, and the retry cron restoring it.
+		$saved   = array();
+		$pending = array();
+		$save_ok = false;
+
+		$order = $this->create_missed_order( $kunaki_line, false );
+		// Like a real order: changes are visible on the object at once, and
+		// reach the database only when a save works.
+		$order->shouldReceive( 'get_meta' )->andReturnUsing( function ( $key ) use ( &$saved, &$pending ) {
+			if ( array_key_exists( $key, $pending ) ) {
+				return null === $pending[ $key ] ? '' : $pending[ $key ];
+			}
+			return isset( $saved[ $key ] ) ? $saved[ $key ] : '';
+		} );
+		$order->shouldReceive( 'update_meta_data' )->andReturnUsing( function ( $key, $value ) use ( &$pending ) {
+			$pending[ $key ] = $value;
+		} );
+		$order->shouldReceive( 'delete_meta_data' )->andReturnUsing( function ( $key ) use ( &$pending ) {
+			$pending[ $key ] = null;
+		} );
+		$order->shouldReceive( 'save_meta_data' )->andReturnUsing( function () use ( &$saved, &$pending, &$save_ok ) {
+			if ( ! $save_ok ) {
+				throw new \RuntimeException( 'DB down' );
+			}
+			foreach ( $pending as $key => $value ) {
+				if ( null === $value ) {
+					unset( $saved[ $key ] );
+				} else {
+					$saved[ $key ] = $value;
+				}
+			}
+			$pending = array();
+		} );
+		$order->shouldReceive( 'add_order_note' )->zeroOrMoreTimes();
+
+		$rows = $this->mock_wpdb_with_rows();
+		Functions\when( 'wc_get_order' )->justReturn( $order );
+		Functions\when( 'get_option' )->alias( function ( $key, $default = '' ) {
+			return 'kunaki_wc_max_retries' === $key ? 3 : $default;
+		} );
+		// The retry cron only loads orders that have a retryable error.
+		Functions\when( 'wc_get_orders' )->alias( function () use ( &$saved, $order ) {
+			return isset( $saved['_kunaki_fulfillment_error'] ) ? array( $order ) : array();
+		} );
+		Functions\expect( 'wp_remote_post' )->never();
+
+		// The scan holds the order, but its record can't be saved.
+		$this->assertSame( 'held', $this->fulfillment->record_missed_order( $order, true ) );
+		$this->assertSame( array(), $saved );
+		$this->assertArrayHasKey( '_kunaki_failed_100', $rows->rows );
+
+		// The retry cron runs in a later request: nothing unsaved survives, and
+		// the database is back.
+		$pending = array();
+		$save_ok = true;
+		// The scan counted it among the orders it held, so it raises no alert of its own.
+		Actions\expectDone( 'kunaki_wc_order_needs_attention' )->never();
+
+		$this->fulfillment->retry_failed_orders();
+
+		// Restored as held, not as something the cron may send.
+		$this->assertSame( 'yes', $saved['_kunaki_fulfillment_exhausted'] );
+		$this->assertMatchesRegularExpression( $message_part, $saved['_kunaki_fulfillment_last_error'] );
+		// The marker's prefixes are not part of the message the admin reads.
+		$this->assertStringStartsWith( 'This order was paid', $saved['_kunaki_fulfillment_last_error'] );
+		$this->assertArrayNotHasKey( '_kunaki_fulfillment_error', $saved );
+		$this->assertArrayNotHasKey( '_kunaki_failed_100', $rows->rows );
+		// And with the flag its message relies on, so the first Retry does what it says.
+		$this->assertSame( $flagged, isset( $saved['_kunaki_needs_shipping'] ) );
+	}
+
+	public function held_orders() {
+		return array(
+			'held for its age'           => array( true, '/more than a day/', false ),
+			'held for a shipping choice' => array( false, '/cheapest/', true ),
+		);
+	}
+
+	/**
+	 * An order with no Kunaki record, as the catch-up scan finds it.
+	 *
+	 * @param bool $kunaki_line Whether it has a Kunaki shipping line from checkout.
+	 * @param bool $stub_meta   Whether to answer the meta reads here (false when the test keeps its own meta).
+	 */
+	private function create_missed_order( $kunaki_line, $stub_meta = true ) {
+		$order = Mockery::mock( 'WC_Order' );
+		$order->shouldReceive( 'get_id' )->andReturn( 100 );
+		if ( $kunaki_line ) {
+			$this->setup_shipping_methods_on_order( $order );
+		} else {
+			$other = Mockery::mock( 'WC_Order_Item_Shipping' );
+			$other->shouldReceive( 'get_method_id' )->andReturn( 'flat_rate' );
+			$order->shouldReceive( 'get_shipping_methods' )->andReturn( array( $other ) );
+			if ( $stub_meta ) {
+				$order->shouldReceive( 'get_meta' )->with( Kunaki_Order_Fulfillment::META_CHOSEN_SHIPPING )->andReturn( '' );
+			}
+		}
+		return $order;
+	}
+
+	/**
+	 * A wpdb whose option rows are kept in memory, so a test can read the
+	 * durable markers the code writes with raw SQL.
+	 *
+	 * @return \stdClass Its `rows` property maps option names to values.
+	 */
+	private function mock_wpdb_with_rows() {
+		$state       = new \stdClass();
+		$state->rows = array();
+
+		$wpdb          = Mockery::mock( 'wpdb' );
+		$wpdb->options = 'wp_options';
+		$wpdb->shouldReceive( 'prepare' )->andReturnUsing( function ( $query, ...$args ) {
+			return array( 'query' => $query, 'args' => $args );
+		} );
+		$wpdb->shouldReceive( 'esc_like' )->andReturnUsing( function ( $text ) { return $text; } );
+		$wpdb->shouldReceive( 'get_var' )->andReturn( null );
+		$wpdb->shouldReceive( 'query' )->andReturnUsing( function ( $prepared ) use ( $state ) {
+			if ( 0 === strpos( $prepared['query'], 'INSERT IGNORE' ) ) {
+				if ( isset( $state->rows[ $prepared['args'][0] ] ) ) {
+					return 0;
+				}
+				$state->rows[ $prepared['args'][0] ] = $prepared['args'][1];
+			}
+			return 1;
+		} );
+		$wpdb->shouldReceive( 'get_results' )->andReturnUsing( function ( $prepared ) use ( $state ) {
+			$prefix = rtrim( $prepared['args'][0], '%' );
+			$found  = array();
+			foreach ( $state->rows as $name => $value ) {
+				if ( 0 === strpos( $name, $prefix ) ) {
+					$found[] = (object) array( 'option_name' => $name, 'option_value' => $value );
+				}
+			}
+			return $found;
+		} );
+		$wpdb->shouldReceive( 'delete' )->andReturnUsing( function ( $table, $where ) use ( $state ) {
+			unset( $state->rows[ $where['option_name'] ] );
+			return 1;
+		} );
+		$GLOBALS['wpdb'] = $wpdb;
+
+		return $state;
 	}
 
 	private function mock_wpdb_lock( $acquired = true ) {

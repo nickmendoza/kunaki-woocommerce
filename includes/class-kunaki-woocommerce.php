@@ -68,6 +68,10 @@ class Kunaki_WooCommerce {
 		$alerts = new Kunaki_Alerts();
 		$alerts->init();
 
+		// Orders paid while the plugin was inactive. The class is loaded by the main plugin file.
+		$catch_up = new Kunaki_Catch_Up();
+		$catch_up->init();
+
 		// Admin assets.
 		add_action( 'admin_enqueue_scripts', array( $this, 'enqueue_admin_assets' ) );
 

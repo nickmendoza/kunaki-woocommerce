@@ -21,6 +21,7 @@ delete_option( 'kunaki_wc_alert_email_address' );
 delete_option( 'kunaki_wc_alert_slack_enabled' );
 delete_option( 'kunaki_wc_alert_slack_webhook' );
 delete_option( 'kunaki_wc_alert_outage_open' );
+delete_option( 'kunaki_wc_catch_up_notice' );
 
 wp_clear_scheduled_hook( 'kunaki_wc_sync_order_status' );
 wp_clear_scheduled_hook( 'kunaki_wc_retry_failed_orders' );
@@ -63,6 +64,11 @@ delete_transient( 'kunaki_manufacturing_stats' );
 // Order history and product links are kept unless the store opted to remove them.
 // Without them, reinstalling couldn't track past orders or could resubmit them.
 if ( $kunaki_wc_delete_data ) {
+	// The record of when the plugin was last inactive. Kept by default for the
+	// same reason as the durable markers: after a delete and reinstall, orders
+	// paid in between are still picked up.
+	delete_option( 'kunaki_wc_catch_up' );
+
 	// Clean up order meta (postmeta and HPOS custom order tables).
 	$kunaki_wc_order_meta_keys = array(
 		'_kunaki_order_id',
@@ -73,6 +79,8 @@ if ( $kunaki_wc_delete_data ) {
 		'_kunaki_fulfillment_exhausted',
 		'_kunaki_fulfillment_last_error',
 		'_kunaki_address_hash',
+		'_kunaki_chosen_shipping',
+		'_kunaki_needs_shipping',
 		'_kunaki_all_items',
 		'_kunaki_order_status',
 		'_kunaki_tracking_type',

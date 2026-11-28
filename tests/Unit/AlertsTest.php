@@ -6,6 +6,7 @@ use Brain\Monkey\Actions;
 use Brain\Monkey\Functions;
 use Mockery;
 use Kunaki_Alerts;
+use Kunaki_Catch_Up;
 
 class AlertsTest extends KunakiTestCase {
 
@@ -722,6 +723,94 @@ class AlertsTest extends KunakiTestCase {
 		$this->assertSame( array(), $this->jobs );
 	}
 
+	// ── Orders held by the catch-up scan ───────────────────────────────
+
+	public function test_orders_held_by_the_catch_up_scan_send_one_email_between_them() {
+		$this->enable_alerts();
+		$this->options[ Kunaki_Catch_Up::NOTICE_OPTION ] = 3;
+
+		( new Kunaki_Alerts() )->handle_catch_up_orders_held();
+
+		$this->assertSame( array(), $this->mails, 'Nothing is sent inside the scan.' );
+		$this->assertCount( 1, $this->jobs );
+		$this->assertSame( array( 'catch_up_orders_held', 0, '' ), $this->jobs[0]['args'] );
+		$this->run_jobs();
+
+		$this->assertCount( 1, $this->mails );
+		$this->assertSame( '[Test Store] 3 orders are waiting to be sent to Kunaki', $this->mails[0]['subject'] );
+		$body = $this->mails[0]['body'];
+		$this->assertStringContainsString( '3 disc orders were paid and were not sent to Kunaki automatically', $body );
+		$this->assertStringContainsString( 'https://example.test/wp-admin/admin.php?page=kunaki-failed-orders', $body );
+		// Nothing has failed, so it must not read like the alert for an order that has.
+		$this->assertStringContainsString( 'Nothing is wrong with them', $body );
+		$this->assertStringNotContainsString( 'Fix the problem', $body );
+		$this->assertSame( array(), $this->jobs, 'Delivered, so nothing more is queued.' );
+	}
+
+	public function test_one_held_order_is_worded_for_one() {
+		$this->enable_alerts();
+		$this->options[ Kunaki_Catch_Up::NOTICE_OPTION ] = 1;
+
+		( new Kunaki_Alerts() )->execute_send( Kunaki_Alerts::EVENT_CATCH_UP );
+
+		$this->assertSame( '[Test Store] 1 order is waiting to be sent to Kunaki', $this->mails[0]['subject'] );
+		$this->assertStringContainsString( '1 disc order was paid and was not sent to Kunaki automatically', $this->mails[0]['body'] );
+	}
+
+	public function test_held_orders_are_posted_to_slack_with_the_count() {
+		$this->enable_slack();
+		$this->options[ Kunaki_Catch_Up::NOTICE_OPTION ] = 12;
+
+		( new Kunaki_Alerts() )->execute_send( Kunaki_Alerts::EVENT_CATCH_UP );
+
+		$payload = json_decode( $this->posts[0]['args']['body'], true );
+		$this->assertSame( '12 orders are waiting to be sent to Kunaki', $payload['text'] );
+		$this->assertSame( 'Orders waiting', $payload['attachments'][0]['fields'][0]['title'] );
+		$this->assertSame( '12', $payload['attachments'][0]['fields'][0]['value'] );
+	}
+
+	public function test_held_orders_someone_has_looked_at_are_not_alerted() {
+		$this->enable_alerts();
+		$this->options[ Kunaki_Catch_Up::NOTICE_OPTION ] = 3;
+		( new Kunaki_Alerts() )->handle_catch_up_orders_held();
+
+		// Opening the Failures page clears the count before the job runs.
+		unset( $this->options[ Kunaki_Catch_Up::NOTICE_OPTION ] );
+		$this->run_jobs();
+
+		$this->assertSame( array(), $this->mails );
+		$this->assertSame( array(), $this->jobs );
+	}
+
+	public function test_held_orders_are_not_alerted_when_alerts_are_off() {
+		$this->options[ Kunaki_Alerts::OPT_ENABLED ]     = 'no';
+		$this->options[ Kunaki_Catch_Up::NOTICE_OPTION ] = 3;
+
+		( new Kunaki_Alerts() )->handle_catch_up_orders_held();
+
+		$this->assertSame( array(), $this->jobs );
+		$this->assertSame( array(), $this->mails );
+	}
+
+	public function test_undelivered_held_orders_alert_is_sent_again_later() {
+		$this->enable_alerts();
+		$this->options[ Kunaki_Catch_Up::NOTICE_OPTION ] = 3;
+		$this->mail_return                               = false;
+
+		( new Kunaki_Alerts() )->handle_catch_up_orders_held();
+		$this->run_jobs();
+
+		$this->assertCount( 1, $this->jobs, 'Nothing else would bring this alert back.' );
+		$this->assertSame( array( 'catch_up_orders_held', 0, '', 1 ), $this->jobs[0]['args'] );
+		$this->assertGreaterThanOrEqual( time() + Kunaki_Alerts::RESEND_DELAY, $this->jobs[0]['when'] );
+
+		$this->mail_return = true;
+		$this->run_jobs();
+
+		$this->assertCount( 2, $this->mails, 'One failed attempt, then the alert.' );
+		$this->assertSame( array(), $this->jobs );
+	}
+
 	// ── Email ──────────────────────────────────────────────────────────
 
 	public function test_blank_alert_address_uses_admin_email() {
@@ -879,6 +968,7 @@ class AlertsTest extends KunakiTestCase {
 		$this->assertNotFalse( has_action( 'kunaki_wc_circuit_breaker_closed', array( $alerts, 'handle_circuit_closed' ) ) );
 		$this->assertNotFalse( has_action( 'kunaki_wc_order_needs_attention', array( $alerts, 'handle_order_needs_attention' ) ) );
 		$this->assertNotFalse( has_action( 'kunaki_wc_password_decrypt_failed', array( $alerts, 'handle_password_decrypt_failed' ) ) );
+		$this->assertNotFalse( has_action( 'kunaki_wc_catch_up_orders_held', array( $alerts, 'handle_catch_up_orders_held' ) ) );
 		$this->assertNotFalse( has_action( 'kunaki_wc_send_alert', array( $alerts, 'execute_send' ) ) );
 	}
 
@@ -1045,6 +1135,9 @@ class AlertsTest extends KunakiTestCase {
 		} );
 		Functions\when( 'admin_url' )->alias( function ( $path = '' ) {
 			return 'https://example.test/wp-admin/' . ltrim( $path, '/' );
+		} );
+		Functions\when( '_n' )->alias( function ( $single, $plural, $number ) {
+			return 1 === (int) $number ? $single : $plural;
 		} );
 		Functions\when( 'wp_parse_url' )->alias( function ( $url, $component = -1 ) {
 			return parse_url( $url, $component );

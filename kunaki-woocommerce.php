@@ -60,6 +60,10 @@ require_once __DIR__ . '/includes/encryption.php';
 // must work even when WooCommerce isn't active.
 require_once __DIR__ . '/includes/class-kunaki-alerts.php';
 
+// Loaded here too: the activation and deactivation hooks below call it, and
+// they run without WooCommerce or the plugin's other classes being set up.
+require_once __DIR__ . '/includes/class-kunaki-catch-up.php';
+
 // Only Slack webhook URLs can be saved. add_option() and update_option() both
 // run this filter, so WP-CLI and imports are checked too.
 add_filter( 'sanitize_option_kunaki_wc_alert_slack_webhook', array( 'Kunaki_Alerts', 'validate_webhook_option' ) );
@@ -212,10 +216,15 @@ register_activation_hook( __FILE__, function () {
 	if ( ! wp_next_scheduled( 'kunaki_wc_retry_failed_orders' ) ) {
 		wp_schedule_event( time() + 60, 'kunaki_sync_interval', 'kunaki_wc_retry_failed_orders' );
 	}
+	// Orders paid while the plugin was inactive are picked up by a scan on the
+	// retry cron scheduled above.
+	Kunaki_Catch_Up::mark_activated();
 } );
 
 // Deactivation: unschedule cron and reset circuit breaker.
 register_deactivation_hook( __FILE__, function () {
+	// First, so nothing below can stop the start of the gap being recorded.
+	Kunaki_Catch_Up::mark_deactivated();
 	if ( class_exists( 'Kunaki_Order_Fulfillment' ) ) {
 		( new Kunaki_Order_Fulfillment() )->park_queued_submissions();
 	}
